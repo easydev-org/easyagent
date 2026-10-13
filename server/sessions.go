@@ -17,9 +17,10 @@ func (s *Server) Health(context.Context, *agentv1.HealthRequest) (*agentv1.Healt
 // GetIdentity returns the caller's resolved identity.
 func (s *Server) GetIdentity(ctx context.Context, _ *agentv1.GetIdentityRequest) (*agentv1.GetIdentityResponse, error) {
 	t := tenantOf(ctx)
-	// The admin token pins an EMPTY tenant; report role=admin.
+	// The admin token pins an EMPTY tenant; report role=admin + its scope
+	// ("*" for the platform admin, a subtree root id for a delegated admin).
 	if t == "" {
-		return &agentv1.GetIdentityResponse{Tenant: "", TenantName: "", Role: "admin"}, nil
+		return &agentv1.GetIdentityResponse{Tenant: "", TenantName: "", Role: "admin", Scope: scopeOf(ctx)}, nil
 	}
 	name := t
 	if ten, ok, _ := s.db.GetTenant(t); ok && ten.Name != "" {

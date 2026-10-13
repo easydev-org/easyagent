@@ -76,22 +76,46 @@ func (s *Server) CreateTenant(ctx context.Context, req *agentv1.CreateTenantRequ
 	if !ok {
 		return nil, connect.NewError(connect.CodePermissionDenied, "admin token required")
 	}
-	var id string
+	// Resolve the subtree root this new tenant belongs to.
+	rootScope := ""
 	var parent *string
-	if scope == "*" {
-		// Platform admin: caller supplies the id; the tenant is a root.
-		if req.Id == "" {
+	if req.ParentId != "" {
+		// Creating a USER inside an existing domain: the parent must be within
+		// the caller's scope (a delegated admin: its own scope only).
+		if scope != "*" && req.ParentId != scope {
+			return nil, connect.NewError(connect.CodePermissionDenied, "cannot create outside your scope")
+		}
+		pt, ok, err := s.db.GetTenant(req.ParentId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error())
+		}
+		if !ok {
+			return nil, connect.NewError(connect.CodeNotFound, "parent tenant not found")
+		}
+		rootScope = pt.ScopeID
+		if rootScope == "" {
+			rootScope = pt.ID
+		}
+		parent = &req.ParentId
+	} else if scope != "*" {
+		// Delegated admin creating a root of... no: it creates a user under its
+		// own scope root.
+		rootScope = scope
+		parent = &scope
+	}
+	// The id: a platform admin may supply it; otherwise (a delegated admin, or
+	// an omitted id) it is SERVER-GENERATED under the subtree root.
+	id := req.Id
+	if scope != "*" && id != "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "a delegated admin does not supply the id")
+	}
+	if id == "" {
+		if rootScope == "" {
 			return nil, connect.NewError(connect.CodeInvalidArgument, "id is required")
 		}
-		id = req.Id
-	} else {
-		// Delegated admin: the id is SERVER-GENERATED under the scope root
-		// (`<scope>-<short-random>`), so two downstreams can each create a
-		// "proj" without a global-id collision. The caller supplies only a name.
-		parent = &scope
-		id = scope + "-" + shortID()
+		id = rootScope + "-" + shortID()
 	}
-	if err := s.db.CreateTenantScoped(id, req.Name, parent, scopeOrDefault(scope, id)); err != nil {
+	if err := s.db.CreateTenantScoped(id, req.Name, parent, rootScope); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	plaintext := mintToken()
@@ -212,6 +236,27 @@ func (s *Server) RevokeTenantToken(ctx context.Context, req *agentv1.RevokeTenan
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	return &agentv1.RevokeTenantTokenResponse{Ok: true}, nil
+}
+
+// SetTenantTokenLabel renames a tenant token (scope-checked).
+func (s *Server) SetTenantTokenLabel(ctx context.Context, req *agentv1.SetTenantTokenLabelRequest) (*agentv1.SetTenantTokenLabelResponse, error) {
+	tok, ok, err := s.db.TokenByID(req.TokenId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, "token not found")
+	}
+	if ok, err := s.scopeAllows(ctx, tok.TenantID); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, connect.NewError(connect.CodePermissionDenied, "tenant is outside your scope")
+	}
+	if err := s.db.RenameToken(req.TokenId, req.Label); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	tok, _, _ = s.db.TokenByID(req.TokenId)
+	return &agentv1.SetTenantTokenLabelResponse{Token: tokenToProto(*tok)}, nil
 }
 
 // RotateTenantToken revokes the old token and mints a new one.

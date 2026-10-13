@@ -140,6 +140,9 @@ const (
 	// AdminServiceRotateTenantTokenProcedure is the procedure name of the AdminService's
 	// RotateTenantToken RPC.
 	AdminServiceRotateTenantTokenProcedure = "/agent.v1.AdminService/RotateTenantToken"
+	// AdminServiceSetTenantTokenLabelProcedure is the procedure name of the AdminService's
+	// SetTenantTokenLabel RPC.
+	AdminServiceSetTenantTokenLabelProcedure = "/agent.v1.AdminService/SetTenantTokenLabel"
 	// AdminServiceCreateAdminTokenProcedure is the procedure name of the AdminService's
 	// CreateAdminToken RPC.
 	AdminServiceCreateAdminTokenProcedure = "/agent.v1.AdminService/CreateAdminToken"
@@ -1799,6 +1802,13 @@ var (
 			Procedure:  AdminServiceRotateTenantTokenProcedure,
 		}
 	})
+	adminServiceSetTenantTokenLabelSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AdminService").Methods().ByName("SetTenantTokenLabel"),
+			Procedure:  AdminServiceSetTenantTokenLabelProcedure,
+		}
+	})
 	adminServiceCreateAdminTokenSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -1832,6 +1842,7 @@ type AdminServiceClient interface {
 	ListTenantTokens(context.Context, *v1.ListTenantTokensRequest) (*v1.ListTenantTokensResponse, error)
 	RevokeTenantToken(context.Context, *v1.RevokeTenantTokenRequest) (*v1.RevokeTenantTokenResponse, error)
 	RotateTenantToken(context.Context, *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error)
+	SetTenantTokenLabel(context.Context, *v1.SetTenantTokenLabelRequest) (*v1.SetTenantTokenLabelResponse, error)
 	// Delegated administrators (re-delegation): a platform admin may create an
 	// admin token for ANY subtree; a delegated admin only within its OWN subtree.
 	CreateAdminToken(context.Context, *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error)
@@ -1855,6 +1866,7 @@ type AdminServiceHandler interface {
 	ListTenantTokens(context.Context, *v1.ListTenantTokensRequest) (*v1.ListTenantTokensResponse, error)
 	RevokeTenantToken(context.Context, *v1.RevokeTenantTokenRequest) (*v1.RevokeTenantTokenResponse, error)
 	RotateTenantToken(context.Context, *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error)
+	SetTenantTokenLabel(context.Context, *v1.SetTenantTokenLabelRequest) (*v1.SetTenantTokenLabelResponse, error)
 	// Delegated administrators (re-delegation): a platform admin may create an
 	// admin token for ANY subtree; a delegated admin only within its OWN subtree.
 	CreateAdminToken(context.Context, *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error)
@@ -1874,6 +1886,7 @@ func RegisterAdminServiceHandler(server *connect.Server, svc AdminServiceHandler
 		connect.Method{Spec: adminServiceListTenantTokensSpec(), Handler: adapter.listTenantTokens},
 		connect.Method{Spec: adminServiceRevokeTenantTokenSpec(), Handler: adapter.revokeTenantToken},
 		connect.Method{Spec: adminServiceRotateTenantTokenSpec(), Handler: adapter.rotateTenantToken},
+		connect.Method{Spec: adminServiceSetTenantTokenLabelSpec(), Handler: adapter.setTenantTokenLabel},
 		connect.Method{Spec: adminServiceCreateAdminTokenSpec(), Handler: adapter.createAdminToken},
 		connect.Method{Spec: adminServiceListAdminTokensSpec(), Handler: adapter.listAdminTokens},
 		connect.Method{Spec: adminServiceRevokeAdminTokenSpec(), Handler: adapter.revokeAdminToken},
@@ -1913,6 +1926,10 @@ func (UnimplementedAdminServiceHandler) RevokeTenantToken(context.Context, *v1.R
 
 func (UnimplementedAdminServiceHandler) RotateTenantToken(context.Context, *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AdminService.RotateTenantToken is not implemented")
+}
+
+func (UnimplementedAdminServiceHandler) SetTenantTokenLabel(context.Context, *v1.SetTenantTokenLabelRequest) (*v1.SetTenantTokenLabelResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AdminService.SetTenantTokenLabel is not implemented")
 }
 
 func (UnimplementedAdminServiceHandler) CreateAdminToken(context.Context, *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error) {
@@ -1990,6 +2007,14 @@ func (c *adminServiceClient) RevokeTenantToken(ctx context.Context, req *v1.Revo
 func (c *adminServiceClient) RotateTenantToken(ctx context.Context, req *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error) {
 	var res v1.RotateTenantTokenResponse
 	if err := c.client.CallUnary(ctx, adminServiceRotateTenantTokenSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) SetTenantTokenLabel(ctx context.Context, req *v1.SetTenantTokenLabelRequest) (*v1.SetTenantTokenLabelResponse, error) {
+	var res v1.SetTenantTokenLabelResponse
+	if err := c.client.CallUnary(ctx, adminServiceSetTenantTokenLabelSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -2111,6 +2136,18 @@ func (h adminServiceHandler) rotateTenantToken(ctx context.Context, _ connect.Sp
 		return err
 	}
 	res, err := h.svc.RotateTenantToken(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) setTenantTokenLabel(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetTenantTokenLabelRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SetTenantTokenLabel(ctx, &req)
 	if err != nil {
 		return err
 	}

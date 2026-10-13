@@ -310,6 +310,12 @@ func (d *DB) TokenByID(tokenID string) (*TenantToken, bool, error) {
 	return &t, true, nil
 }
 
+// RenameToken updates a token's display label.
+func (d *DB) RenameToken(tokenID, label string) error {
+	return d.g.Model(&TenantToken{}).Where("token_id = ?", tokenID).
+		Update("label", label).Error
+}
+
 // RevokeToken marks a token revoked.
 func (d *DB) RevokeToken(tokenID string) error {
 	return d.g.Model(&TenantToken{}).Where("token_id = ?", tokenID).
