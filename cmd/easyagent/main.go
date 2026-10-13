@@ -76,6 +76,7 @@ func run(cfgPath string) error {
 		CompactAtFraction:  cfg.Agent.CompactAtFraction,
 		ForceCompactTokens: cfg.Agent.ForceCompactTokens,
 		DeniedTools:        cfg.Agent.DisabledTools,
+		ExtensionAllowlist: extensionAllowlistResolver(db, cfg),
 	}
 	var runtimeBus *bus.Bus
 	var toolExec *bus.ToolExecutor
@@ -291,9 +292,15 @@ func seedPresets(p *agent.Presets, cfg *agent.Config, db *store.DB, c config.Con
 // Shared by boot seeding and the AdminService's CreateTenant (a runtime-created
 // tenant must be immediately usable).
 func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c config.Config, tenant string) {
-	// Host-injected immutable system presets (SYSTEM_PRESETS_FILE), mirroring
-	// the TS agent (e.g. admin/explorer presets from a deployment ConfigMap).
-	for _, row := range loadInjectedPresets(c.Seed.SystemPresetsFile, tenant) {
+	// Host-injected immutable system presets (SYSTEM_PRESETS_FILE). The preset
+	// SET is chosen by the tenant's DELEGATION SUBTREE ROOT (scope_id): a
+	// subtree carries its own system presets (tool whitelists), falling back to
+	// the `default` set. This is per-subadmin preset grouping.
+	scope := tenant
+	if t, ok, _ := db.GetTenant(tenant); ok && t.ScopeID != "" {
+		scope = t.ScopeID
+	}
+	for _, row := range loadInjectedPresets(c.Seed.SystemPresetsFile, scope) {
 		p.SeedSystem(tenant, row)
 	}
 	if len(p.List(tenant)) == 0 {
@@ -555,4 +562,23 @@ func replicaID(configured string) string {
 		return h
 	}
 	return "agent"
+}
+
+// extensionAllowlistResolver returns a resolver that maps a tenant to the extIds
+// its delegation subtree may use (nil = unrestricted). It reads
+// seed.extension_allowlist keyed by the tenant's scope_id (subtree root).
+func extensionAllowlistResolver(db *store.DB, c config.Config) func(tenant string) []string {
+	if len(c.Seed.ExtensionAllowlist) == 0 {
+		return nil
+	}
+	return func(tenant string) []string {
+		scope := tenant
+		if t, ok, _ := db.GetTenant(tenant); ok && t.ScopeID != "" {
+			scope = t.ScopeID
+		}
+		if allowed, ok := c.Seed.ExtensionAllowlist[scope]; ok {
+			return allowed // a present-but-empty list means "no extensions"
+		}
+		return nil // no entry = unrestricted
+	}
 }

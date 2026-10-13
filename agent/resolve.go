@@ -94,9 +94,36 @@ func Plan(ctx context.Context, deps RuntimeDeps, in PlanInput) (TurnPlan, error)
 	var tools []ToolDef
 	if deps.Registry != nil {
 		tools = FilterTools(deps.Registry.Tools(), whitelist, in.DeniedTools)
+		tools = filterByExtensionAllowlist(tools, deps, in.Tenant)
 		tools = filterBlockedByConfig(tools, deps.Config, in.Tenant)
 	}
 	return TurnPlan{System: system, Locale: locale, Tools: tools, MaxTurns: maxTurns}, nil
+}
+
+// filterByExtensionAllowlist drops tools whose extension server is not allowed
+// for the tenant's delegation subtree (P4). A scope with NO allowlist entry is
+// unrestricted; a nil resolver is unrestricted. This is the per-subadmin
+// "which extension servers may I use" gate.
+func filterByExtensionAllowlist(tools []ToolDef, deps RuntimeDeps, tenant string) []ToolDef {
+	if deps.ExtensionAllowlist == nil {
+		return tools
+	}
+	allowed := deps.ExtensionAllowlist(tenant) // nil = unrestricted
+	if allowed == nil {
+		return tools
+	}
+	ok := make(map[string]bool, len(allowed))
+	for _, e := range allowed {
+		ok[e] = true
+	}
+	out := make([]ToolDef, 0, len(tools))
+	for _, t := range tools {
+		// A tool with no ExtID (a built-in) is always allowed.
+		if t.ExtID == "" || ok[t.ExtID] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // filterBlockedByConfig drops tools whose declared required config is unset: the

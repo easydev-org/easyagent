@@ -111,6 +111,11 @@ type Seed struct {
 	Config []SeedConfigRow `yaml:"config"`
 	// ExtensionConfig are extension config rows, create-if-absent.
 	ExtensionConfig []SeedExtConfigRow `yaml:"extension_config"`
+	// ExtensionAllowlist restricts which extension servers a delegation subtree
+	// may use: scope_id -> allowed extIds. A tenant's subtree root picks its
+	// entry; a scope with NO entry is unrestricted. Enforced at turn time (the
+	// model is never offered tools from a non-allowed extension).
+	ExtensionAllowlist map[string][]string `yaml:"extension_allowlist"`
 }
 
 // SeedProvider mirrors one AGENT_PROVIDER_SEED entry.

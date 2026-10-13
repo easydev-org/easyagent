@@ -68,11 +68,17 @@ func (d *DB) Backend() Backend { return d.backend }
 // Migrate creates the INITIAL schema (create-if-absent). It is not a migration
 // path: there is no legacy schema to upgrade.
 func (d *DB) Migrate() error {
-	return d.g.AutoMigrate(
+	if err := d.g.AutoMigrate(
 		&Session{}, &Message{}, &Part{}, &Mailbox{},
 		&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
-		&BundledTodo{},
-	)
+		&BundledTodo{}, &AdminToken{},
+	); err != nil {
+		return err
+	}
+	// Backfill: every pre-existing tenant becomes its own subtree root
+	// (scope_id = id, parent_id = NULL). Idempotent.
+	return d.g.Model(&Tenant{}).Where("scope_id = ? OR scope_id IS NULL", "").
+		Update("scope_id", gorm.Expr("id")).Error
 }
 
 // nowStr is the canonical timestamp form (RFC3339, UTC) used by every column.

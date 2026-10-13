@@ -52,6 +52,10 @@ type RuntimeDeps struct {
 	Config  ConfigProvider
 	// DeniedTools is the host hard-denylist of qualified `<extId>-<name>` ids.
 	DeniedTools []string
+	// ExtensionAllowlist, when set, returns the extIds a tenant's delegation
+	// subtree may use (nil = unrestricted). Enforces the per-subadmin
+	// "which extension servers" whitelist at turn time.
+	ExtensionAllowlist func(tenant string) []string
 	// ToolTimeout bounds each tool call (0 = none).
 	ToolTimeout time.Duration
 	// CompactAtFraction overrides the proactive-compaction threshold (0 = 0.9).

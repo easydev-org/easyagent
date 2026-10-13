@@ -121,7 +121,16 @@ func (d *DB) DeleteProvider(tenant, providerID string) error {
 
 // CreateTenant inserts a tenant.
 func (d *DB) CreateTenant(id, name string) error {
-	t := Tenant{ID: id, Name: name, CreatedAt: nowStr(), UpdatedAt: nowStr()}
+	return d.CreateTenantScoped(id, name, nil, id)
+}
+
+// CreateTenantScoped inserts a tenant with a delegation parent + subtree root.
+// A root passes parentID=nil, scopeID=id.
+func (d *DB) CreateTenantScoped(id, name string, parentID *string, scopeID string) error {
+	if scopeID == "" {
+		scopeID = id
+	}
+	t := Tenant{ID: id, Name: name, ParentID: parentID, ScopeID: scopeID, CreatedAt: nowStr(), UpdatedAt: nowStr()}
 	return d.g.Create(&t).Error
 }
 
@@ -130,6 +139,89 @@ func (d *DB) ListTenants() ([]Tenant, error) {
 	var out []Tenant
 	err := d.g.Order("id").Find(&out).Error
 	return out, err
+}
+
+// ListTenantsInScope returns the tenants of one delegation subtree (the scope
+// root itself + everything under it).
+func (d *DB) ListTenantsInScope(scopeID string) ([]Tenant, error) {
+	var out []Tenant
+	err := d.g.Where("scope_id = ?", scopeID).Order("id").Find(&out).Error
+	return out, err
+}
+
+// TenantInScope reports whether tenant id belongs to the given scope.
+func (d *DB) TenantInScope(scopeID, id string) (bool, error) {
+	var n int64
+	err := d.g.Model(&Tenant{}).Where("id = ? AND scope_id = ?", id, scopeID).Count(&n).Error
+	return n > 0, err
+}
+
+// TenantExists reports whether a tenant id is taken.
+func (d *DB) TenantExists(id string) (bool, error) {
+	var n int64
+	err := d.g.Model(&Tenant{}).Where("id = ?", id).Count(&n).Error
+	return n > 0, err
+}
+
+// ---- Delegated admin tokens ----
+
+// CreateAdminToken stores a delegated-admin token (sha256 only) scoped to a
+// subtree root, returning its id.
+func (d *DB) CreateAdminToken(scopeTenant, sha, label string) (string, error) {
+	id := newID()
+	t := AdminToken{TokenID: id, ScopeTenant: scopeTenant, TokenSHA256: sha, Label: label, CreatedAt: nowStr()}
+	if err := d.g.Create(&t).Error; err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// AdminTokenBySHA returns (scopeTenant, token, ok) for an unrevoked admin token.
+func (d *DB) AdminTokenBySHA(sha string) (string, *AdminToken, bool, error) {
+	var tok AdminToken
+	err := d.g.Where("token_sha256 = ?", sha).First(&tok).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil, false, nil
+	}
+	if err != nil {
+		return "", nil, false, err
+	}
+	if tok.RevokedAt != nil && *tok.RevokedAt != "" {
+		return "", nil, false, nil
+	}
+	return tok.ScopeTenant, &tok, true, nil
+}
+
+// TouchAdminToken records last_used_at.
+func (d *DB) TouchAdminToken(tokenID string) error {
+	return d.g.Model(&AdminToken{}).Where("token_id = ?", tokenID).
+		Update("last_used_at", nowStr()).Error
+}
+
+// AdminTokenByID returns (token, true) or (nil, false).
+func (d *DB) AdminTokenByID(tokenID string) (*AdminToken, bool, error) {
+	var t AdminToken
+	err := d.g.Where("token_id = ?", tokenID).First(&t).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &t, true, nil
+}
+
+// ListAdminTokens returns the delegated admin tokens under a scope.
+func (d *DB) ListAdminTokens(scopeTenant string) ([]AdminToken, error) {
+	var out []AdminToken
+	err := d.g.Where("scope_tenant_id = ?", scopeTenant).Order("created_at").Find(&out).Error
+	return out, err
+}
+
+// RevokeAdminToken marks a delegated admin token revoked.
+func (d *DB) RevokeAdminToken(tokenID string) error {
+	return d.g.Model(&AdminToken{}).Where("token_id = ?", tokenID).
+		Update("revoked_at", nowStr()).Error
 }
 
 // GetTenant returns (tenant, true) or (nil, false).
@@ -203,6 +295,19 @@ func (d *DB) ListTokens(tenantID string) ([]TenantToken, error) {
 	var out []TenantToken
 	err := d.g.Where("tenant_id = ?", tenantID).Order("created_at").Find(&out).Error
 	return out, err
+}
+
+// TokenByID returns (token, true) or (nil, false).
+func (d *DB) TokenByID(tokenID string) (*TenantToken, bool, error) {
+	var t TenantToken
+	err := d.g.Where("token_id = ?", tokenID).First(&t).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &t, true, nil
 }
 
 // RevokeToken marks a token revoked.

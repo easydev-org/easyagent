@@ -628,6 +628,22 @@ message Tenant {
   bool disabled = 3;
   string created_at = 4;
   string updated_at = 5;
+  // Delegation: the parent tenant that created this one (empty = a platform
+  // root), and the subtree root this tenant belongs to (its own id if a root).
+  string parent_id = 6;
+  string scope_id = 7;
+}
+
+// AdminToken is a DELEGATED administrator credential, scoped to a subtree root.
+// The plaintext is returned ONLY at create time; the server stores just sha256.
+message AdminToken {
+  string token_id = 1;
+  // The subtree root this admin may manage.
+  string scope_tenant_id = 2;
+  string label = 3;
+  string created_at = 4;
+  string last_used_at = 5;
+  bool revoked = 6;
 }
 
 // TenantToken is a bearer credential minted for one tenant. The plaintext is
@@ -701,4 +717,29 @@ service AdminService {
   rpc ListTenantTokens(ListTenantTokensRequest) returns (ListTenantTokensResponse);
   rpc RevokeTenantToken(RevokeTenantTokenRequest) returns (RevokeTenantTokenResponse);
   rpc RotateTenantToken(RotateTenantTokenRequest) returns (RotateTenantTokenResponse);
+
+  // Delegated administrators (re-delegation): a platform admin may create an
+  // admin token for ANY subtree; a delegated admin only within its OWN subtree.
+  rpc CreateAdminToken(CreateAdminTokenRequest) returns (CreateAdminTokenResponse);
+  rpc ListAdminTokens(ListAdminTokensRequest) returns (ListAdminTokensResponse);
+  rpc RevokeAdminToken(RevokeAdminTokenRequest) returns (RevokeAdminTokenResponse);
 }
+
+message CreateAdminTokenRequest {
+  // The subtree root the new admin may manage. A delegated caller may only
+  // pass its own scope; the platform admin may pass any tenant.
+  string scope_tenant_id = 1;
+  string label = 2;
+}
+message CreateAdminTokenResponse {
+  AdminToken token = 1;
+  // The plaintext admin token (shown once).
+  string plaintext = 2;
+}
+message ListAdminTokensRequest {
+  // The subtree root to list. A delegated caller may only list its own scope.
+  string scope_tenant_id = 1;
+}
+message ListAdminTokensResponse { repeated AdminToken tokens = 1; }
+message RevokeAdminTokenRequest { string token_id = 1; }
+message RevokeAdminTokenResponse { bool ok = 1; }

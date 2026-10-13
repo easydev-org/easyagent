@@ -107,14 +107,35 @@ func (Provider) TableName() string { return "providers" }
 
 // Tenant is one isolation domain.
 type Tenant struct {
-	ID        string `gorm:"column:id;primaryKey;size:64"`
-	Name      string `gorm:"column:name"`
-	Disabled  bool   `gorm:"column:disabled"`
+	ID       string `gorm:"column:id;primaryKey;size:64"`
+	Name     string `gorm:"column:name"`
+	Disabled bool   `gorm:"column:disabled"`
+	// ParentID is the delegating parent tenant (NULL = a platform root).
+	ParentID *string `gorm:"column:parent_id;size:64;index"`
+	// ScopeID is the delegation-subtree root this tenant belongs to (self when
+	// the tenant is a root). Denormalized so listing a subtree is one indexed
+	// query with no recursive walk.
+	ScopeID   string `gorm:"column:scope_id;size:64;index"`
 	CreatedAt string `gorm:"column:created_at"`
 	UpdatedAt string `gorm:"column:updated_at"`
 }
 
 func (Tenant) TableName() string { return "tenants" }
+
+// AdminToken is a DELEGATED administrator credential. It carries a scope: the
+// subtree root it may administer. The static platform admin token is NOT stored
+// here (it is config); this table holds only delegated (sub)admins.
+type AdminToken struct {
+	TokenID     string  `gorm:"column:token_id;primaryKey;size:64"`
+	ScopeTenant string  `gorm:"column:scope_tenant_id;size:64;index"`
+	TokenSHA256 string  `gorm:"column:token_sha256;size:64;uniqueIndex"`
+	Label       string  `gorm:"column:label"`
+	CreatedAt   string  `gorm:"column:created_at"`
+	LastUsedAt  *string `gorm:"column:last_used_at"`
+	RevokedAt   *string `gorm:"column:revoked_at"`
+}
+
+func (AdminToken) TableName() string { return "admin_tokens" }
 
 // TenantToken is a bearer credential minted for one tenant. Only its sha256 is
 // stored (a DB compromise yields no usable credential).

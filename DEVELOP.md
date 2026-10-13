@@ -509,3 +509,24 @@ curl -fsSL -o /tmp/go.tgz \
   http://artifact.worker.svc.cluster.local/artifacts/netcache/go.dev/dl/go1.27.1.linux-amd64.tar.gz
 tar -C /usr/local -xzf /tmp/go.tgz && export PATH=/usr/local/go/bin:$PATH
 ```
+
+## Delegated administration
+
+One deployment serves multiple downstreams, each with its own **subtree
+administrator** that manages only its own subtree:
+
+- **`tenants.parent_id` / `scope_id`** place a tenant in a subtree (a root has
+  `scope_id = id`, `parent_id = NULL`; a child created by a delegated admin gets
+  `parent_id = scope`, `scope_id = scope`).
+- **`admin_tokens`** holds DELEGATED admin credentials, each scoped to a subtree
+  root. The static `auth.admin_token` is the unscoped platform admin.
+- **Auth** resolves a bearer to one of three identities: platform admin
+  (`scope="*"`), delegated admin (`scope=<root>`), or tenant.
+- **AdminService** narrows every RPC to the caller's scope: `listTenants` shows
+  only the subtree; a delegated `createTenant` gets a SERVER-GENERATED
+  `<scope>-<random>` id; update/delete/issue/revoke on a foreign tenant are
+  `PermissionDenied`. `createAdminToken` re-delegates within scope.
+- **Per-subtree presets**: `SYSTEM_PRESETS_FILE` `groups[<scope_id>]` supplies
+  the preset (tool whitelist) set for a subtree, falling back to `default`.
+- **Per-subtree extension allowlist**: `seed.extension_allowlist[<scope_id>]`
+  restricts which extension servers a subtree may use (enforced at turn time).

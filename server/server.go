@@ -161,12 +161,25 @@ func (s *Server) Register(server *connect.Server) {
 
 type tenantKey struct{}
 
+// scopeKey carries a delegated-admin scope: "*" for the static platform admin,
+// the subtree root id for a delegated admin, and "" for a plain tenant.
+type scopeKey struct{}
+
 // tenantOf returns the tenant resolved by the auth interceptor.
 func tenantOf(ctx context.Context) string {
 	if t, ok := ctx.Value(tenantKey{}).(string); ok {
 		return t
 	}
 	return s_defaultTenant
+}
+
+// scopeOf returns the caller's admin scope, or "" when the caller is not an
+// admin (a tenant, or auth=none).
+func scopeOf(ctx context.Context) string {
+	if s, ok := ctx.Value(scopeKey{}).(string); ok {
+		return s
+	}
+	return ""
 }
 
 // s_defaultTenant is set at construction so the free function can read it.
@@ -195,7 +208,19 @@ func (s *Server) AuthInterceptor() connect.ServerInterceptor {
 			// Admin token unlocks the AdminService (and nothing on AgentService
 			// requires admin).
 			if s.cfg.AdminToken != "" && constantTimeEqual(auth, s.cfg.AdminToken) {
-				return next(context.WithValue(ctx, tenantKey{}, ""), spec, stream)
+				// Static platform admin: unscoped ("*" = every subtree).
+				ctx = context.WithValue(ctx, tenantKey{}, "")
+				ctx = context.WithValue(ctx, scopeKey{}, "*")
+				return next(ctx, spec, stream)
+			}
+			// Delegated admin token: scoped to its subtree root.
+			if scope, atok, ok, err := s.db.AdminTokenBySHA(sha256Hex(auth)); err != nil {
+				return connect.NewError(connect.CodeInternal, err.Error())
+			} else if ok {
+				_ = s.db.TouchAdminToken(atok.TokenID)
+				ctx = context.WithValue(ctx, tenantKey{}, "")
+				ctx = context.WithValue(ctx, scopeKey{}, scope)
+				return next(ctx, spec, stream)
 			}
 			sha := sha256Hex(auth)
 			ten, tok, ok, err := s.db.TenantByTokenSHA(sha)

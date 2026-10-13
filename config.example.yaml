@@ -56,6 +56,10 @@ seed:                          # create-if-absent boot data; never clobbers a us
   providers: []                # [{tenant, provider_id, capability, api_type, base_url, api_key, models:[{id,name,context_limit,model_type}]}]
   config: []                   # [{tenant, key, value}]
   extension_config: []         # [{tenant, ext_id, name, value}]
+  # Per-delegation-subtree extension-server allowlist: scope_id -> allowed extIds.
+  # A subtree with NO entry is unrestricted; an empty list allows built-ins only.
+  extension_allowlist: {}
+    # downstreamA: [workspace, playwright]
 
 log:
   level: info                  # debug | info | warn | error

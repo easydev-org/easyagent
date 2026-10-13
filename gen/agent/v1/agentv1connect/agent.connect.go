@@ -140,6 +140,15 @@ const (
 	// AdminServiceRotateTenantTokenProcedure is the procedure name of the AdminService's
 	// RotateTenantToken RPC.
 	AdminServiceRotateTenantTokenProcedure = "/agent.v1.AdminService/RotateTenantToken"
+	// AdminServiceCreateAdminTokenProcedure is the procedure name of the AdminService's
+	// CreateAdminToken RPC.
+	AdminServiceCreateAdminTokenProcedure = "/agent.v1.AdminService/CreateAdminToken"
+	// AdminServiceListAdminTokensProcedure is the procedure name of the AdminService's ListAdminTokens
+	// RPC.
+	AdminServiceListAdminTokensProcedure = "/agent.v1.AdminService/ListAdminTokens"
+	// AdminServiceRevokeAdminTokenProcedure is the procedure name of the AdminService's
+	// RevokeAdminToken RPC.
+	AdminServiceRevokeAdminTokenProcedure = "/agent.v1.AdminService/RevokeAdminToken"
 )
 
 var (
@@ -1790,6 +1799,27 @@ var (
 			Procedure:  AdminServiceRotateTenantTokenProcedure,
 		}
 	})
+	adminServiceCreateAdminTokenSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AdminService").Methods().ByName("CreateAdminToken"),
+			Procedure:  AdminServiceCreateAdminTokenProcedure,
+		}
+	})
+	adminServiceListAdminTokensSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AdminService").Methods().ByName("ListAdminTokens"),
+			Procedure:  AdminServiceListAdminTokensProcedure,
+		}
+	})
+	adminServiceRevokeAdminTokenSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AdminService").Methods().ByName("RevokeAdminToken"),
+			Procedure:  AdminServiceRevokeAdminTokenProcedure,
+		}
+	})
 )
 
 // AdminServiceClient is a client for the agent.v1.AdminService service.
@@ -1802,6 +1832,11 @@ type AdminServiceClient interface {
 	ListTenantTokens(context.Context, *v1.ListTenantTokensRequest) (*v1.ListTenantTokensResponse, error)
 	RevokeTenantToken(context.Context, *v1.RevokeTenantTokenRequest) (*v1.RevokeTenantTokenResponse, error)
 	RotateTenantToken(context.Context, *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error)
+	// Delegated administrators (re-delegation): a platform admin may create an
+	// admin token for ANY subtree; a delegated admin only within its OWN subtree.
+	CreateAdminToken(context.Context, *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error)
+	ListAdminTokens(context.Context, *v1.ListAdminTokensRequest) (*v1.ListAdminTokensResponse, error)
+	RevokeAdminToken(context.Context, *v1.RevokeAdminTokenRequest) (*v1.RevokeAdminTokenResponse, error)
 }
 
 // NewAdminServiceClient constructs a client for the agent.v1.AdminService service. Multiple service
@@ -1820,6 +1855,11 @@ type AdminServiceHandler interface {
 	ListTenantTokens(context.Context, *v1.ListTenantTokensRequest) (*v1.ListTenantTokensResponse, error)
 	RevokeTenantToken(context.Context, *v1.RevokeTenantTokenRequest) (*v1.RevokeTenantTokenResponse, error)
 	RotateTenantToken(context.Context, *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error)
+	// Delegated administrators (re-delegation): a platform admin may create an
+	// admin token for ANY subtree; a delegated admin only within its OWN subtree.
+	CreateAdminToken(context.Context, *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error)
+	ListAdminTokens(context.Context, *v1.ListAdminTokensRequest) (*v1.ListAdminTokensResponse, error)
+	RevokeAdminToken(context.Context, *v1.RevokeAdminTokenRequest) (*v1.RevokeAdminTokenResponse, error)
 }
 
 // RegisterAdminServiceHandler registers svc as the agent.v1.AdminService implementation on server.
@@ -1834,6 +1874,9 @@ func RegisterAdminServiceHandler(server *connect.Server, svc AdminServiceHandler
 		connect.Method{Spec: adminServiceListTenantTokensSpec(), Handler: adapter.listTenantTokens},
 		connect.Method{Spec: adminServiceRevokeTenantTokenSpec(), Handler: adapter.revokeTenantToken},
 		connect.Method{Spec: adminServiceRotateTenantTokenSpec(), Handler: adapter.rotateTenantToken},
+		connect.Method{Spec: adminServiceCreateAdminTokenSpec(), Handler: adapter.createAdminToken},
+		connect.Method{Spec: adminServiceListAdminTokensSpec(), Handler: adapter.listAdminTokens},
+		connect.Method{Spec: adminServiceRevokeAdminTokenSpec(), Handler: adapter.revokeAdminToken},
 	)
 }
 
@@ -1870,6 +1913,18 @@ func (UnimplementedAdminServiceHandler) RevokeTenantToken(context.Context, *v1.R
 
 func (UnimplementedAdminServiceHandler) RotateTenantToken(context.Context, *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AdminService.RotateTenantToken is not implemented")
+}
+
+func (UnimplementedAdminServiceHandler) CreateAdminToken(context.Context, *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AdminService.CreateAdminToken is not implemented")
+}
+
+func (UnimplementedAdminServiceHandler) ListAdminTokens(context.Context, *v1.ListAdminTokensRequest) (*v1.ListAdminTokensResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AdminService.ListAdminTokens is not implemented")
+}
+
+func (UnimplementedAdminServiceHandler) RevokeAdminToken(context.Context, *v1.RevokeAdminTokenRequest) (*v1.RevokeAdminTokenResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AdminService.RevokeAdminToken is not implemented")
 }
 
 type adminServiceClient struct {
@@ -1935,6 +1990,30 @@ func (c *adminServiceClient) RevokeTenantToken(ctx context.Context, req *v1.Revo
 func (c *adminServiceClient) RotateTenantToken(ctx context.Context, req *v1.RotateTenantTokenRequest) (*v1.RotateTenantTokenResponse, error) {
 	var res v1.RotateTenantTokenResponse
 	if err := c.client.CallUnary(ctx, adminServiceRotateTenantTokenSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) CreateAdminToken(ctx context.Context, req *v1.CreateAdminTokenRequest) (*v1.CreateAdminTokenResponse, error) {
+	var res v1.CreateAdminTokenResponse
+	if err := c.client.CallUnary(ctx, adminServiceCreateAdminTokenSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) ListAdminTokens(ctx context.Context, req *v1.ListAdminTokensRequest) (*v1.ListAdminTokensResponse, error) {
+	var res v1.ListAdminTokensResponse
+	if err := c.client.CallUnary(ctx, adminServiceListAdminTokensSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *adminServiceClient) RevokeAdminToken(ctx context.Context, req *v1.RevokeAdminTokenRequest) (*v1.RevokeAdminTokenResponse, error) {
+	var res v1.RevokeAdminTokenResponse
+	if err := c.client.CallUnary(ctx, adminServiceRevokeAdminTokenSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -2032,6 +2111,42 @@ func (h adminServiceHandler) rotateTenantToken(ctx context.Context, _ connect.Sp
 		return err
 	}
 	res, err := h.svc.RotateTenantToken(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) createAdminToken(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateAdminTokenRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateAdminToken(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) listAdminTokens(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListAdminTokensRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListAdminTokens(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h adminServiceHandler) revokeAdminToken(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RevokeAdminTokenRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.RevokeAdminToken(ctx, &req)
 	if err != nil {
 		return err
 	}
