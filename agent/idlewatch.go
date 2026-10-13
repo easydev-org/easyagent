@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,7 +114,10 @@ func (w *IdleWatch) stuckOnToolResult(tip string) bool {
 			sawToolResult = true
 		case "text":
 			var d textPart
-			if json.Unmarshal([]byte(p.Data), &d) == nil && d.Text != "" {
+			// Trailing text means the model finished with a summary, not a
+			// dangling tool. Whitespace-only text counts as NO text (matches
+			// the reference: `content.trim() === ''`).
+			if json.Unmarshal([]byte(p.Data), &d) == nil && strings.TrimSpace(d.Text) != "" {
 				sawText = true
 			}
 		}
