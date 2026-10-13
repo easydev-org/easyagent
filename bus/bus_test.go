@@ -153,7 +153,7 @@ func TestLifecyclePublishConsume(t *testing.T) {
 	defer cancel()
 
 	// Verify our publish path lands on the right subject per kind.
-	sub, err := b.Transport().Subscribe(ctx, "abc.*.session.lifecycle.>", abcbus.SubscribeOpts{})
+	sub, err := b.Transport().Subscribe(ctx, "easybus.*.session.lifecycle.>", abcbus.SubscribeOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestLifecyclePublishConsume(t *testing.T) {
 		}
 		seen[env.Ch] = true
 	}
-	if !seen["abc.t1.session.lifecycle.created"] || !seen["abc.t1.session.lifecycle.deleted"] {
+	if !seen["easybus.t1.session.lifecycle.created"] || !seen["easybus.t1.session.lifecycle.deleted"] {
 		t.Errorf("lifecycle subjects = %v", seen)
 	}
 }

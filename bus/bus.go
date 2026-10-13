@@ -130,8 +130,8 @@ type Heartbeat struct {
 const HeartbeatTTL = 30 * time.Second
 
 // OwnerBucket is the per-instance heartbeat bucket (one key per live replica).
-// Mirrors the TS agent's `abc-session-owner`.
-const OwnerBucket = "abc-session-owner"
+// Mirrors the TS agent's `easybus-session-owner`.
+const OwnerBucket = "easybus-session-owner"
 
 // NewHeartbeat builds a heartbeat keyed by instanceID.
 func (b *Bus) NewHeartbeat(instanceID string) *Heartbeat {
@@ -388,7 +388,7 @@ func (b *Bus) PublishMailbox(ctx context.Context, tenant, session, typ string, p
 }
 
 // PublishLifecycle broadcasts a session lifecycle event (`created` / `forked` /
-// `renamed` / `deleted`) on `abc.<tenant>.session.lifecycle.<kind>`, so external
+// `renamed` / `deleted`) on `easybus.<tenant>.session.lifecycle.<kind>`, so external
 // services (repo/workspace extensions) can react. Best-effort: consumers must
 // tolerate a missed event and converge via their own reconciliation.
 func (b *Bus) PublishLifecycle(ctx context.Context, tenant, kind, session string, payload map[string]any) error {
@@ -408,7 +408,7 @@ func (b *Bus) PublishLifecycle(ctx context.Context, tenant, kind, session string
 // ---- Session events (durable, cross-replica) ----
 
 // PublishSessionEvent publishes one session event frame onto the durable
-// session-events stream (`abc.<tenant>.session.events.<token>`), so ANY replica
+// session-events stream (`easybus.<tenant>.session.events.<token>`), so ANY replica
 // (and any reconnecting watcher) receives it.
 func (b *Bus) PublishSessionEvent(ctx context.Context, tenant, session, id string, payload any) error {
 	return b.transport.InboxPublish(ctx, protocol.ChSessionEvents(tenant, session), payload,

@@ -7,7 +7,7 @@ import (
 )
 
 // PresenceBucket is the extension-liveness KV bucket (mirrors the protocol).
-const PresenceBucket = "abc-presence"
+const PresenceBucket = "easybus-presence"
 
 // presenceInitTTLMs is the per-key TTL used to pre-create the presence bucket.
 // A NATS KV bucket's TTL is fixed at CREATION (per-key TTLs must match it), so

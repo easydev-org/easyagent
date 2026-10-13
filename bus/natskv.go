@@ -12,7 +12,7 @@ import (
 
 // KV bucket names (mirror the TS agent).
 const (
-	PresetsBucket = "abc-presets"
+	PresetsBucket = "easybus-presets"
 	ConfigBucket  = "easyagent-config"
 )
 
