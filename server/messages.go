@@ -112,6 +112,13 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 // in-process hub from now.
 func (s *Server) WatchSession(ctx context.Context, req *agentv1.WatchSessionRequest, stream agentv1connect.AgentServiceWatchSessionServerStream) error {
 	tenant := tenantOf(ctx)
+	// Open the stream eagerly so a client's WatchSession() call returns as soon
+	// as the connection is established, instead of blocking until the first
+	// event (which may be long in coming). connecthttp's SendHeaders is a no-op
+	// server-side, so a real first frame is what flushes the response headers.
+	if err := stream.Send(&agentv1.WatchSessionResponse{Event: "ready"}); err != nil {
+		return err
+	}
 	if s.stream != nil {
 		ch, cancel, err := s.stream.SubscribeSessionEvents(ctx, tenant, req.Id, uint64(req.SinceSeq))
 		if err != nil {
