@@ -29,6 +29,8 @@ type Config struct {
 	AuthMode string
 	// AdminToken is the static admin bearer for AdminService.
 	AdminToken string
+	// AdminUsername is the platform admin's login name (paired with AdminToken).
+	AdminUsername string
 	// DefaultTenant is the tenant used when AuthMode="none".
 	DefaultTenant string
 }
@@ -198,6 +200,10 @@ func (s *Server) AuthInterceptor() connect.ServerInterceptor {
 	SetDefaultTenant(s.cfg.DefaultTenant)
 	return func(next connect.ServerFunc) connect.ServerFunc {
 		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			// Login is exempt: the (username, token) pair IS the credential.
+			if spec.Procedure == "/agent.v1.AdminService/Login" {
+				return next(ctx, spec, stream)
+			}
 			auth := inboundAuthorization(ctx)
 			if s.cfg.AuthMode == "none" {
 				return next(context.WithValue(ctx, tenantKey{}, s.cfg.DefaultTenant), spec, stream)

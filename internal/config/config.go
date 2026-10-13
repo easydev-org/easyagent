@@ -47,6 +47,9 @@ type Auth struct {
 	// AdminTokenFile reads the token from a file (k8s Secret); wins over
 	// AdminToken when set.
 	AdminTokenFile string `yaml:"admin_token_file"`
+	// AdminUsername is the platform admin's login name (paired with
+	// admin_token). Default "admin".
+	AdminUsername string `yaml:"admin_username"`
 }
 
 // Tenant holds tenant defaults.
@@ -168,7 +171,7 @@ func Default() Config {
 			CORSOrigin:   "*",
 			MaxBodyBytes: 64 << 20,
 		},
-		Auth:   Auth{Mode: "required"},
+		Auth:   Auth{Mode: "required", AdminUsername: "admin"},
 		Tenant: Tenant{Default: "default"},
 		Database: Database{
 			Backend: "sqlite",
@@ -250,6 +253,9 @@ func (c *Config) normalize() {
 	}
 	if c.Auth.Mode == "" {
 		c.Auth.Mode = "required"
+	}
+	if c.Auth.AdminUsername == "" {
+		c.Auth.AdminUsername = "admin"
 	}
 	if c.Tenant.Default == "" {
 		c.Tenant.Default = "default"

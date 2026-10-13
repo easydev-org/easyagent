@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
@@ -44,6 +45,63 @@ func (s *Server) scopeAllows(ctx context.Context, tenantID string) (bool, error)
 		return false, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	return in, nil
+}
+
+// Login verifies a (username, token) pair. The admin username is the configured
+// platform admin name; a tenant username is the tenant id (or its name). A
+// delegated admin token logs in under its subtree root's name/id.
+func (s *Server) Login(ctx context.Context, req *agentv1.LoginRequest) (*agentv1.LoginResponse, error) {
+	username := strings.TrimSpace(req.Username)
+	token := req.Token
+	if token == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "token is required")
+	}
+	// Platform admin: username must match the configured admin name.
+	if s.cfg.AdminToken != "" && constantTimeEqual(token, s.cfg.AdminToken) {
+		if !strings.EqualFold(username, s.cfg.AdminUsername) {
+			return nil, connect.NewError(connect.CodeUnauthenticated, "invalid username or token")
+		}
+		return &agentv1.LoginResponse{Role: "admin", Scope: "*"}, nil
+	}
+	sha := sha256Hex(token)
+	// Delegated admin token: the username is the subtree root (id or name).
+	if scope, atok, ok, err := s.db.AdminTokenBySHA(sha); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	} else if ok {
+		_ = s.db.TouchAdminToken(atok.TokenID)
+		if !s.usernameMatchesTenant(username, scope) {
+			return nil, connect.NewError(connect.CodeUnauthenticated, "invalid username or token")
+		}
+		return &agentv1.LoginResponse{Role: "admin", Scope: scope}, nil
+	}
+	// Tenant token: the username is the tenant id or name.
+	ten, tok, ok, err := s.db.TenantByTokenSHA(sha)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	if !ok || ten.Disabled {
+		return nil, connect.NewError(connect.CodeUnauthenticated, "invalid username or token")
+	}
+	if !strings.EqualFold(username, ten.ID) && !strings.EqualFold(username, ten.Name) {
+		return nil, connect.NewError(connect.CodeUnauthenticated, "invalid username or token")
+	}
+	_ = s.db.TouchToken(tok.TokenID)
+	name := ten.Name
+	if name == "" {
+		name = ten.ID
+	}
+	return &agentv1.LoginResponse{Role: "tenant", Tenant: ten.ID, TenantName: name}, nil
+}
+
+// usernameMatchesTenant reports whether username is the tenant's id or name.
+func (s *Server) usernameMatchesTenant(username, id string) bool {
+	if strings.EqualFold(username, id) {
+		return true
+	}
+	if t, ok, _ := s.db.GetTenant(id); ok && t.Name != "" && strings.EqualFold(username, t.Name) {
+		return true
+	}
+	return false
 }
 
 // ListTenants lists tenants.

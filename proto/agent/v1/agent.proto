@@ -735,11 +735,31 @@ service AdminService {
   rpc RotateTenantToken(RotateTenantTokenRequest) returns (RotateTenantTokenResponse);
   rpc SetTenantTokenLabel(SetTenantTokenLabelRequest) returns (SetTenantTokenLabelResponse);
 
+  // Login verifies a (username, token) pair and returns the caller's role +
+  // scope. The admin username is the configured platform admin name; a tenant
+  // username is the tenant id. Exempt from bearer auth (the pair IS the auth).
+  rpc Login(LoginRequest) returns (LoginResponse);
+
   // Delegated administrators (re-delegation): a platform admin may create an
   // admin token for ANY subtree; a delegated admin only within its OWN subtree.
   rpc CreateAdminToken(CreateAdminTokenRequest) returns (CreateAdminTokenResponse);
   rpc ListAdminTokens(ListAdminTokensRequest) returns (ListAdminTokensResponse);
   rpc RevokeAdminToken(RevokeAdminTokenRequest) returns (RevokeAdminTokenResponse);
+}
+
+message LoginRequest {
+  string username = 1;
+  string token = 2;
+}
+message LoginResponse {
+  // "admin" | "tenant".
+  string role = 1;
+  // Admin scope ("*" or a subtree root); empty for a tenant.
+  string scope = 2;
+  // The resolved tenant id (empty for an admin).
+  string tenant = 3;
+  // Human-readable tenant name.
+  string tenant_name = 4;
 }
 
 message CreateAdminTokenRequest {

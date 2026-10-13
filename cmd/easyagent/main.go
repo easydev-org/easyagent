@@ -133,7 +133,7 @@ func run(cfgPath string) error {
 	srv := server.New(server.Deps{
 		DB: db, Runtime: rt, Hub: hub,
 		Config: server.Config{
-			AuthMode: cfg.Auth.Mode, AdminToken: cfg.Auth.AdminToken, DefaultTenant: cfg.Tenant.Default,
+			AuthMode: cfg.Auth.Mode, AdminToken: cfg.Auth.AdminToken, AdminUsername: cfg.Auth.AdminUsername, DefaultTenant: cfg.Tenant.Default,
 		},
 		Presets: presets, ConfigKV: tenantConfig, Bus: runtimeBus,
 	})
