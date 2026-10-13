@@ -1,0 +1,636 @@
+id: bundled
+version: 0.1.1
+lifecycle: [deleted]
+
+tools:
+  # ---- memory / history / file / vision (from memory-extension) ----
+  - name: todo-write
+    description: Replace the session's todo list (stored in the database, not a file).
+    descriptions:
+      zh: 替换会话的待办列表（存于数据库，而非文件）。
+    input_schema:
+      type: object
+      properties:
+        todos:
+          type: array
+          description: The full todo list to replace the session current one.
+          descriptions:
+            zh: 替换会话当前列表的完整待办列表。
+          items:
+            type: object
+            properties:
+              content:
+                type: string
+                description: Todo item text.
+                descriptions:
+                  zh: 待办项文本。
+              status:
+                type: string
+                enum: [pending, in_progress, completed, cancelled]
+                description: Todo status.
+                descriptions:
+                  zh: 待办状态。
+              priority:
+                type: string
+                enum: [high, medium, low]
+                description: Todo priority.
+                descriptions:
+                  zh: 待办优先级。
+            required: [content, status, priority]
+      required: [todos]
+
+  - name: history-search
+    description: >-
+      Search this session's chat history by keyword (case-insensitive substring over
+      parts(type=text) text, tool names and change ids), optionally constrained to a time
+      range [from, to] (YYYY-MM-DD HH:MM:SS). Searches the FULL chain (no depth cap),
+      newest-first, and returns one page [offset, offset+limit) with role, depth (0 =
+      newest), tool name, workspace change id and the message content in full (a single
+      message is never truncated). Each entry's `data.entries[].content` is complete;
+      `max_total_chars` bounds the rendered text only.
+    descriptions:
+      zh: >-
+        按关键词搜索本会话的聊天历史（对 parts(type=text) 文本、工具名、change id 做大小写不敏感的子串匹配），可选时间范围
+        [from, to]（YYYY-MM-DD HH:MM:SS）。搜索整条链（无深度上限），按最新在前分页返回
+        [offset, offset+limit) 一页，含角色、深度（0=最新）、工具名、工作区 change id 与完整消息内容（单条永不截断）。
+        每条 `data.entries[].content` 均为全量；`max_total_chars` 仅约束 text 渲染长度。
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Case-insensitive keyword matched against message text, tool names and change ids.
+          descriptions:
+            zh: 不区分大小写的关键词，匹配消息文本、工具名与 change id。
+        from:
+          type: string
+          description: "Inclusive lower time bound (YYYY-MM-DD HH:MM:SS)."
+          descriptions:
+            zh: "含端点的下界时间（YYYY-MM-DD HH:MM:SS）。"
+        to:
+          type: string
+          description: "Inclusive upper time bound (YYYY-MM-DD HH:MM:SS)."
+          descriptions:
+            zh: "含端点的上界时间（YYYY-MM-DD HH:MM:SS）。"
+        offset:
+          type: integer
+          description: >-
+            Pagination offset into the match list (default 0). Pairs with `limit`;
+            the response reports `has_more` and `next_offset`.
+          descriptions:
+            zh: 匹配结果的分页偏移（默认 0）。与 `limit` 搭配；返回 `has_more` 与 `next_offset`。
+        limit:
+          type: integer
+          description: >-
+            Page size: maximum number of matched messages to return (default 50;
+            0 = no page cap).
+          descriptions:
+            zh: 页大小：最多返回的匹配消息数（默认 50；0 = 不分页）。
+        max_total_chars:
+          type: integer
+          description: >-
+            Total budget for the rendered text (default 100000; 0 = unlimited).
+            Entries accumulate (meta + full content); a single message is NEVER
+            truncated. When adding the next entry would exceed the budget, that entry
+            is still emitted in full and the list then stops (the total may slightly
+            exceed the budget). `data.entries[].content` is always the full content.
+          descriptions:
+            zh: >-
+              text 渲染的总字符预算（默认 100000；0 = 不限）。逐条累加（元信息 + 完整 content），
+              单条永不截断；加上下一条会超预算时，仍完整输出该条并停止（总量可略超预算）。
+              `data.entries[].content` 始终为完整内容。
+      required: [query]
+
+  - name: history-range
+    description: >-
+      Read this session's chat history by position (depth) window. depth 0 = the newest
+      message; positive numbers go back in time; negative numbers count from the newest side
+      (-1 = newest). Traverses the FULL chain (the window depth is never capped by `limit`)
+      and returns [depth_from, depth_to) oldest-first with role, content, tool name and
+      change id. `limit` caps only the number of returned messages (0 = no cap), and
+      `max_total_chars` bounds the rendered text.
+    descriptions:
+      zh: >-
+        按位置（深度）窗口读取本会话的聊天历史。depth 0 = 最新消息；正数向更早回溯；负数从最新一侧计数（-1 = 最新）。返回
+        [depth_from, depth_to)，最旧在前，含角色、内容、工具名与 change id。遍历整条链（窗口深度不受 `limit` 限制）；
+        `limit` 仅限制返回条数（0 = 不限），`max_total_chars` 约束 text 渲染长度。
+    input_schema:
+      type: object
+      properties:
+        from:
+          type: integer
+          description: Starting depth offset (0 = newest message).
+          descriptions:
+            zh: 起始深度偏移（0 = 最新一条消息）。
+        to:
+          type: integer
+          description: Exclusive depth bound.
+          descriptions:
+            zh: 不含端点的深度上界。
+        limit:
+          type: integer
+          description: >-
+            Maximum number of messages to RETURN (default 200; 0 = no cap). Does not
+            bound the traversal depth.
+          descriptions:
+            zh: 最多返回的消息数（默认 200；0 = 不限）。不限制遍历深度。
+        max_total_chars:
+          type: integer
+          description: >-
+            Total budget for the rendered text (default 100000; 0 = unlimited).
+            Entries accumulate (meta + full content); a single message is NEVER
+            truncated. When adding the next entry would exceed the budget, that entry
+            is still emitted in full and the list then stops.
+          descriptions:
+            zh: >-
+              text 渲染的总字符预算（默认 100000；0 = 不限）。逐条累加（元信息 + 完整 content），
+              单条永不截断；加上下一条会超预算时，仍完整输出该条并停止。
+
+  - name: file-info
+    description: >-
+      Return metadata (name, mime type, size, sha256) for a previously uploaded file
+      referenced as file:<code>. Use this first to learn a file's type and size before
+      deciding to read or analyze it.
+    descriptions:
+      zh: >-
+        返回以 file:<code> 引用的已上传文件元数据（名称、mime、大小、sha256）。先调用它以了解文件类型与大小，再决定读取或分析。
+    input_schema:
+      type: object
+      properties:
+        code:
+          type: string
+          description: "The file code (the 16-char segment after file:)."
+          descriptions:
+            zh: "文件编码（file: 之后的 16 字符部分）。"
+      required: [code]
+
+  - name: file-read
+    description: >-
+      Read the TEXT content of a previously uploaded file referenced as file:<code>,
+      line-numbered, windowed by offset/limit. Only plain-text formats are supported
+      (text/*, markdown, json, csv, code, …); binary files and Office documents
+      (docx/xlsx/pptx) are rejected. Use file-info first to check the type.
+    descriptions:
+      zh: >-
+        读取以 file:<code> 引用的已上传文件的文本内容，带行号，用 offset/limit 分窗。仅支持纯文本格式
+        （text/*、markdown、json、csv、代码等）；二进制文件与 Office 文档（docx/xlsx/pptx）会被拒绝。先用
+        file-info 查看类型。
+    input_schema:
+      type: object
+      properties:
+        code:
+          type: string
+          description: "The file code (the 16-char segment after file:)."
+          descriptions:
+            zh: "文件编码（file: 之后的 16 字符部分）。"
+        offset:
+          type: integer
+          description: "Start line (0-based, default 0)."
+          descriptions:
+            zh: "起始行（从 0 开始，默认 0）。"
+        limit:
+          type: integer
+          description: "Maximum lines to return (default 200, max 1000)."
+          descriptions:
+            zh: "最多返回行数（默认 200，最大 1000）。"
+      required: [code]
+
+  - name: image-read
+    description: >-
+      Understand a previously uploaded image referenced as file:<code> using a vision model.
+      Pass a question (prompt); the model returns a natural-language description/answer
+      about the image. The image is downscaled before sending.
+    descriptions:
+      zh: >-
+        使用视觉模型理解以 file:<code> 引用的已上传图片。传入问题（prompt）；模型返回对图片的自然语言描述/回答。发送前会先缩小图片。
+    input_schema:
+      type: object
+      properties:
+        code:
+          type: string
+          description: "The file code (the 16-char segment after file:)."
+          descriptions:
+            zh: "文件编码（file: 之后的 16 字符部分）。"
+        prompt:
+          type: string
+          description: "Question about the image (default: describe it in detail)."
+          descriptions:
+            zh: 关于图像的问题（默认：详细描述该图像）。
+      required: [code]
+    required_config: [model.text]
+
+  # ---- audio-transcribe (ASR) ----
+  - name: audio-transcribe
+    description: >-
+      Transcribe a previously uploaded audio file referenced as file:<code> to
+      text, using the configured transcription model (config `model.transcription`, a
+      provider_id/model_id registered on the agent with
+      capability=transcription, e.g. the abcp gateway's qwen3-asr). The
+      language is auto-detected.
+    descriptions:
+      zh: >-
+        将以 file:<code> 引用的已上传音频文件转写为文字，使用已配置的转写模型（配置
+        model.transcription，为 agent 上注册的 capability=transcription 的
+        provider_id/model_id，如 abcp 网关的 qwen3-asr）。语言自动检测。
+    input_schema:
+      type: object
+      properties:
+        code:
+          type: string
+          description: "The file code (the 16-char segment after file:) of the audio file."
+          descriptions:
+            zh: "音频文件的文件编码（file: 之后的 16 字符部分）。"
+      required: [code]
+    required_config: [model.transcription]
+
+  # ---- web-fetch ----
+  - name: web-fetch
+    description: >-
+      Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML.
+      Markdown is the default. Use a more targeted tool when one is available. This tool is
+      read-only. Large text results may be replaced with a preview while the complete output
+      is retained in managed storage.
+    descriptions:
+      zh: >-
+        从 HTTP 或 HTTPS URL 获取内容，以文本、markdown 或 html 返回；默认 markdown。有更精确的工具时请优先使用。本工具只读；
+        过大的文本结果可能以预览返回，完整输出保留在托管存储中。
+    input_schema:
+      type: object
+      properties:
+        url:
+          type: string
+          description: The HTTP or HTTPS URL to fetch content from.
+          descriptions:
+            zh: 要获取内容的 HTTP 或 HTTPS URL。
+        format:
+          type: string
+          enum: [text, markdown, html]
+          description: The format to return the content in. Defaults to markdown.
+          descriptions:
+            zh: 返回内容的格式。默认 markdown。
+        timeout:
+          type: number
+          description: Optional timeout in seconds (maximum 120).
+          descriptions:
+            zh: 可选超时秒数（最大 120）。
+      required: [url]
+
+  # ---- brave-search ----
+  - name: brave-search
+    description: >-
+      Search the web using the session's Brave Search provider. Use this for current
+      information beyond knowledge cutoff. This is a provider-independent local tool backed
+      by the Brave Search API. The current year is 2026; use this year when searching for
+      recent information or current events.
+    descriptions:
+      zh: >-
+        使用本会话的 Brave 搜索服务搜索网页。用于获取超出知识截止时间的最新信息。这是一个基于 Brave Search API、
+        与提供商无关的本地工具。当前年份为 2026，搜索近期信息或时事时请使用此年份。
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Web search query.
+          descriptions:
+            zh: 网页搜索关键词。
+        count:
+          type: integer
+          minimum: 1
+          maximum: 20
+          description: Number of search results to return (default 8, maximum 20).
+          descriptions:
+            zh: 返回的搜索结果条数（默认 8，最大 20）。
+      required: [query]
+    required_config: [brave_api_key]
+
+  # ---- image-generate / image-edit ----
+  - name: image-generate
+    description: >-
+      Generate an image from a natural-language prompt using the configured image
+      model (config `model.image`, a provider_id/model_id registered on the agent
+      with capability=image). The result is stored and referenced as file:<code>.
+    descriptions:
+      zh: >-
+        使用已配置的图像模型（配置 model.image，为 agent 上注册的 capability=image 的
+        provider_id/model_id）根据自然语言提示生成图像。结果会存储为 file:<code>。
+    input_schema:
+      type: object
+      properties:
+        prompt:
+          type: string
+          description: The prompt that should be used to generate the image.
+          descriptions:
+            zh: 用于生成图像的提示词。
+        size:
+          type: string
+          description: "Size of the image to generate (format `{width}x{height}`)."
+          descriptions:
+            zh: "生成图像的尺寸（格式 `{宽度}x{高度}`）。"
+        n:
+          type: integer
+          description: Number of images to generate (default 1).
+          descriptions:
+            zh: 生成的图像数量（默认 1）。
+      required: [prompt]
+    required_config: [model.image]
+
+  - name: image-edit
+    description: >-
+      Edit an image (referenced by file:<code>) using the configured image-edit
+      model (config `model.image_edit`, a provider_id/model_id with
+      capability=image), given a natural-language instruction. The result is
+      stored and referenced as file:<code>.
+    descriptions:
+      zh: >-
+        使用已配置的图像编辑模型（配置 model.image_edit，capability=image 的
+        provider_id/model_id）编辑以 file:<code> 引用的图像，给定一条自然语言指令。
+        结果会存储为 file:<code>。
+    input_schema:
+      type: object
+      properties:
+        code:
+          type: string
+          description: "The file code (the 16-char segment after file:) of the source image."
+          descriptions:
+            zh: "源图像的文件编码（file: 之后的 16 字符部分）。"
+        prompt:
+          type: string
+          description: The edit instruction to apply to the image.
+          descriptions:
+            zh: 应用到图像的编辑指令。
+      required: [code, prompt]
+    required_config: [model.image_edit]
+
+  - name: video-generate
+    description: >-
+      Generate a short video from a natural-language prompt using the configured
+      video model (config `model.video`, a provider_id/model_id registered on the
+      agent with capability=video, e.g. Google Veo). The result is stored and
+      referenced as file:<code>.
+    descriptions:
+      zh: >-
+        使用已配置的视频模型（配置 model.video，为 agent 上注册的 capability=video 的
+        provider_id/model_id，如 Google Veo）根据自然语言提示生成短视频。结果会存储为 file:<code>。
+    input_schema:
+      type: object
+      properties:
+        prompt:
+          type: string
+          description: The prompt that should be used to generate the video.
+          descriptions:
+            zh: 用于生成视频的提示词。
+        aspect_ratio:
+          type: string
+          enum: ['16:9', '9:16']
+          description: Aspect ratio of the video (default provider-specific).
+          descriptions:
+            zh: 视频宽高比（默认由提供商决定）。
+        resolution:
+          type: string
+          enum: ['720p', '1080p']
+          description: Resolution of the video.
+          descriptions:
+            zh: 视频分辨率。
+        first_frame_code:
+          type: string
+          description: >-
+            Optional file code (the 16-char segment after file:) of an IMAGE to
+            use as the video's first frame (image-to-video). Must be an image
+            file — any other media type fails.
+          descriptions:
+            zh: >-
+              可选的图片文件编码（file: 之后的 16 字符部分），作为视频首帧（图生视频）。
+              必须是图片文件，其他类型会报错。
+        last_frame_code:
+          type: string
+          description: >-
+            Optional file code (the 16-char segment after file:) of an IMAGE to
+            use as the video's last frame (first-last-frame generation). Must be
+            an image file — any other media type fails.
+          descriptions:
+            zh: >-
+              可选的图片文件编码（file: 之后的 16 字符部分），作为视频末帧（首末帧生成）。
+              必须是图片文件，其他类型会报错。
+      required: [prompt]
+    required_config: [model.video]
+
+  - name: tts-generate
+    description: >-
+      Synthesize speech audio from text using the configured preset-voice TTS
+      model (config `model.speech`, a provider_id/model_id registered on the
+      agent with capability=speech). The provider's default preset voice is
+      used. The result is stored and referenced as file:<code>.
+    descriptions:
+      zh: >-
+        使用已配置的预置音色语音合成模型（配置 model.speech，为 agent 上注册的
+        capability=speech 的 provider_id/model_id）把文本合成为语音，使用提供商默认的预置音色。
+        结果会存储为 file:<code>。
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text to synthesize.
+          descriptions:
+            zh: 要合成为语音的文本。
+      required: [text]
+    required_config: [model.speech]
+
+  - name: tts-clone
+    description: >-
+      Synthesize speech from text while CLONING the voice from a reference audio
+      clip. Uses the configured voice-cloning TTS model (config
+      `model.speech_clone`, a provider_id/model_id registered on the agent with
+      capability=speech). The reference clip is a stored audio file (pass its
+      file:<code>); `ref_text` is the clip's transcript when known. The result
+      is stored and referenced as file:<code>.
+    descriptions:
+      zh: >-
+        使用已配置的语音克隆模型（配置 model.speech_clone，为 agent 上注册的 capability=speech
+        的 provider_id/model_id），参照一段参考音频克隆音色并把文本合成为语音。参考音频是已存储的音频文件
+        （传入其 file:<code>）；ref_text 为参考音频的文本（已知时填写）。结果会存储为 file:<code>。
+    input_schema:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text to synthesize.
+          descriptions:
+            zh: 要合成为语音的文本。
+        code:
+          type: string
+          description: "The reference audio file code (the 16-char segment after file:)."
+          descriptions:
+            zh: "参考音频的文件编码（file: 之后的 16 字符部分）。"
+        ref_text:
+          type: string
+          description: Optional transcript of the reference audio clip.
+          descriptions:
+            zh: 可选的参考音频文本（参考音频所说内容的转写）。
+      required: [text, code]
+    required_config: [model.speech_clone]
+
+  # ---- cross-session: subsession (O(1) fork child) + direct messaging ----
+  - name: subsession-create
+    description: >-
+      Start a subsession to work on a self-contained task in the background.
+      A subsession is an ordinary session forked from THIS one (zero-copy: it
+      shares this conversation's history and inherits its model/preset), so
+      give it a complete, self-contained prompt — it does not see this turn's
+      instructions. The subsession runs in the background and will send its
+      result back to this session as a new message. IMPORTANT: after calling
+      this tool you MUST end your turn immediately and wait for the result —
+      do NOT poll, sleep, or duplicate the subsession's work; you will be
+      resumed automatically when its message arrives.
+    descriptions:
+      zh: >-
+        启动一个 subsession 在后台处理一个自包含任务。subsession 是从本会话 fork 出的普通会话
+        （零拷贝：共享本会话历史，继承其模型/预设），因此请给它一个完整、自包含的提示词——它看不到
+        本轮对话中的指令。subsession 在后台运行，完成后会把结果作为一条新消息发回本会话。重要：调用
+        本工具后你必须立即结束本轮，等待结果——不要轮询、不要 sleep、不要重复它的工作；结果到达时会
+        自动恢复你。
+    input_schema:
+      type: object
+      properties:
+        prompt:
+          type: string
+          description: The complete, self-contained task for the subsession.
+          descriptions:
+            zh: 给 subsession 的完整、自包含任务描述。
+        description:
+          type: string
+          description: Optional short (3-5 words) label for the task.
+          descriptions:
+            zh: 可选的任务短标签（3-5 个词）。
+        name:
+          type: string
+          description: Optional explicit subsession name (default is auto-generated).
+          descriptions:
+            zh: 可选的显式 subsession 名称（默认自动生成）。
+      required: [prompt]
+
+  - name: mail-send
+    description: >-
+      Send a message to another session in the same tenant, delivered to its
+      mailbox. The target resumes its turn on receipt (a user_prompt-style
+      delivery), which is how a subsession hands its result back to its parent.
+    descriptions:
+      zh: >-
+        向同租户内的另一个会话发送一条消息（投递到其 mailbox）。目标会话收到后将继续其回合
+        （以 user_prompt 方式投递），subsession 正是借此把结果发回父会话。
+    input_schema:
+      type: object
+      properties:
+        to:
+          type: string
+          description: Target session name.
+          descriptions:
+            zh: 目标会话名称。
+        text:
+          type: string
+          description: Message body to deliver.
+          descriptions:
+            zh: 要投递的消息内容。
+      required: [to, text]
+
+config:
+  # Model-reference knobs. `kind: model` + `capability` let the UI render a
+  # picker scoped to the registered modality instead of a free-form text field
+  # (no variable-name heuristics). Each knob resolves at runtime via
+  # resolveGenerative(capability, value).
+  - name: model.text
+    description: Vision-capable TEXT model ref (provider_id/model_id) used by image-read.
+    descriptions:
+      zh: "image-read 使用的视觉文本模型引用（provider_id/model_id，capability=text）。"
+    type: string
+    kind: model
+    capability: text
+    scope: global
+    default: ''
+  - name: model.image
+    description: >-
+      Image model ref (provider_id/model_id, capability=image) used by
+      image-generate. Register the model on the agent first.
+    descriptions:
+      zh: >-
+        image-generate 使用的图像模型引用（provider_id/model_id，capability=image）。
+        请先在 agent 上注册该模型。
+    type: string
+    kind: model
+    capability: image
+    scope: global
+    default: ''
+  - name: model.image_edit
+    description: >-
+      Image model ref (provider_id/model_id, capability=image) used by
+      image-edit. Register the model on the agent first.
+    descriptions:
+      zh: >-
+        image-edit 使用的图像模型引用（provider_id/model_id，capability=image）。
+        请先在 agent 上注册该模型。
+    type: string
+    kind: model
+    capability: image
+    scope: global
+    default: ''
+  - name: model.video
+    description: >-
+      Video model ref (provider_id/model_id, capability=video) used by
+      video-generate. Register the model on the agent first.
+    descriptions:
+      zh: >-
+        video-generate 使用的视频模型引用（provider_id/model_id，capability=video）。
+        请先在 agent 上注册该模型。
+    type: string
+    kind: model
+    capability: video
+    scope: global
+    default: ''
+  - name: model.speech
+    description: >-
+      Preset-voice speech model ref (provider_id/model_id, capability=speech)
+      used by tts-generate. Register the model on the agent first.
+    descriptions:
+      zh: >-
+        tts-generate 使用的预置音色语音模型引用（provider_id/model_id，capability=speech）。
+        请先在 agent 上注册该模型。
+    type: string
+    kind: model
+    capability: speech
+    scope: global
+    default: ''
+  - name: model.speech_clone
+    description: >-
+      Voice-cloning speech model ref (provider_id/model_id, capability=speech)
+      used by tts-clone. Register the model on the agent first.
+    descriptions:
+      zh: >-
+        tts-clone 使用的语音克隆模型引用（provider_id/model_id，capability=speech）。
+        请先在 agent 上注册该模型。
+    type: string
+    kind: model
+    capability: speech
+    scope: global
+    default: ''
+  - name: model.transcription
+    description: >-
+      Transcription model ref (provider_id/model_id, capability=transcription)
+      used by audio-transcribe. Register the model on the agent first.
+    descriptions:
+      zh: >-
+        audio-transcribe 使用的转写模型引用（provider_id/model_id，
+        capability=transcription）。请先在 agent 上注册该模型。
+    type: string
+    kind: model
+    capability: transcription
+    scope: global
+    default: ''
+
+  - name: brave_api_key
+    description: Brave Search API key (X-Subscription-Token) for brave-search.
+    descriptions:
+      zh: "brave-search 使用的 Brave Search API 密钥（X-Subscription-Token）。"
+    type: string
+    scope: global
+    default: ''
