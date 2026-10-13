@@ -17,6 +17,21 @@ The Go implementation of the **`agent.v1`** service (`AgentService` +
 See `DEVELOP.md` for the locked decisions, the two-phase DB pattern (no
 `RETURNING`, because mysql lacks it), and the remaining work.
 
+## Configuration
+
+The process is configured by **one YAML file** — there are no configuration
+environment variables. Start it with:
+
+```sh
+easyagent --config /etc/easyagent/config.yaml
+```
+
+With no `--config`, it looks for `./easyagent.yaml`, then
+`/etc/easyagent/config.yaml`, then runs on the built-in defaults. See
+`config.example.yaml` for every field. Secrets may be read from files with the
+`*_file` keys (the k8s-Secret pattern), and the replica identity defaults to
+`os.Hostname()`.
+
 ## Layout
 
 ```

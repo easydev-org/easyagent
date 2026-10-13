@@ -34,7 +34,7 @@ func freePort(t *testing.T) int {
 
 func startMonitored(t *testing.T) monitoredServer {
 	t.Helper()
-	bin := os.Getenv("ABC_NATS_SERVER_BIN")
+	bin := os.Getenv("EASYBUS_NATS_SERVER_BIN")
 	if bin == "" {
 		bin = "nats-server"
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 // startBus boots an embedded nats-server and connects a Bus. Skips when the
-// nats-server binary is unavailable (set ABC_NATS_SERVER_BIN).
+// nats-server binary is unavailable (set EASYBUS_NATS_SERVER_BIN).
 func startBus(t *testing.T) *Bus {
 	t.Helper()
 	srv, err := natsrun.Start(natsrun.Config{Port: 0})

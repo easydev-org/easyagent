@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/easydev-org/easyagent/internal/config"
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
@@ -30,16 +33,34 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	cfgPath := flag.String("config", "", "path to the YAML config file (default: ./easyagent.yaml, then /etc/easyagent/config.yaml)")
+	flag.Parse()
+	if err := run(*cfgPath); err != nil {
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	cfg := loadConfig()
+// resolveConfigPath applies the default lookup order when --config is unset.
+func resolveConfigPath(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	for _, p := range []string{"easyagent.yaml", "/etc/easyagent/config.yaml"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
 
-	db, err := store.Open(cfg.backend, cfg.dsn)
+func run(cfgPath string) error {
+	cfg, err := config.Load(resolveConfigPath(cfgPath))
+	if err != nil {
+		return err
+	}
+
+	db, err := store.Open(storeBackend(cfg.Database.Backend), cfg.Database.DSN)
 	if err != nil {
 		return err
 	}
@@ -50,19 +71,19 @@ func run() error {
 	hub := server.NewEventHub()
 	rtDeps := agent.RuntimeDeps{
 		DB: db, Resolver: &agent.StoreResolver{DB: db}, Lease: agent.NewMemoryLease(),
-		EmitFor: hub.Emitter, MaxTurns: cfg.maxTurns,
-		ToolTimeout:        time.Duration(envInt("AGENT_TOOL_TIMEOUT_SEC", 600)) * time.Second,
-		CompactAtFraction:  envFloat("AGENT_COMPACT_AT_FRACTION", 0.9),
-		ForceCompactTokens: envInt("AGENT_FORCE_COMPACT_TOKENS", 900000),
-		DeniedTools:        splitList(os.Getenv("DISABLED_TOOLS")),
+		EmitFor: hub.Emitter, MaxTurns: cfg.Agent.DefaultMaxTurns,
+		ToolTimeout:        cfg.Agent.ToolTimeout,
+		CompactAtFraction:  cfg.Agent.CompactAtFraction,
+		ForceCompactTokens: cfg.Agent.ForceCompactTokens,
+		DeniedTools:        cfg.Agent.DisabledTools,
 	}
 	var runtimeBus *bus.Bus
 	var toolExec *bus.ToolExecutor
 	// Presets + tenant config: JetStream KV when NATS is available (persisted
 	// across replicas/restarts), else in-memory.
 	var kv agent.KV = agent.NewMemoryKV()
-	if cfg.natsURL != "" {
-		b, err := bus.Connect(cfg.natsURL)
+	if cfg.NATS.URL != "" {
+		b, err := bus.Connect(cfg.NATS.URL)
 		if err != nil {
 			return fmt.Errorf("nats: %w", err)
 		}
@@ -111,11 +132,11 @@ func run() error {
 	srv := server.New(server.Deps{
 		DB: db, Runtime: rt, Hub: hub,
 		Config: server.Config{
-			AuthMode: cfg.authMode, AdminToken: cfg.adminToken, DefaultTenant: cfg.defaultTenant,
+			AuthMode: cfg.Auth.Mode, AdminToken: cfg.Auth.AdminToken, DefaultTenant: cfg.Tenant.Default,
 		},
 		Presets: presets, ConfigKV: tenantConfig, Bus: runtimeBus,
 	})
-	server.SetDefaultTenant(cfg.defaultTenant)
+	server.SetDefaultTenant(cfg.Tenant.Default)
 	if toolExec != nil {
 		srv.SetTools(toolExec)
 	}
@@ -130,15 +151,15 @@ func run() error {
 		srv.SetStreamSource(runtimeBus)
 	}
 	// Durable file bytes live in S3 when configured (AGENT_BLOB_BACKEND=s3).
-	if strings.EqualFold(os.Getenv("AGENT_BLOB_BACKEND"), "s3") {
+	if strings.EqualFold(cfg.Blob.Backend, "s3") {
 		store3, err := blob.NewS3(context.Background(), blob.S3Config{
-			Bucket:          os.Getenv("AGENT_S3_BUCKET"),
-			Region:          os.Getenv("AGENT_S3_REGION"),
-			Endpoint:        os.Getenv("AGENT_S3_ENDPOINT"),
-			AccessKeyID:     os.Getenv("AGENT_S3_ACCESS_KEY"),
-			SecretAccessKey: os.Getenv("AGENT_S3_SECRET_KEY"),
-			ForcePathStyle:  os.Getenv("AGENT_S3_FORCE_PATH_STYLE") == "true",
-			Prefix:          os.Getenv("AGENT_S3_PREFIX"),
+			Bucket:          cfg.Blob.S3.Bucket,
+			Region:          cfg.Blob.S3.Region,
+			Endpoint:        cfg.Blob.S3.Endpoint,
+			AccessKeyID:     cfg.Blob.S3.AccessKey,
+			SecretAccessKey: cfg.Blob.S3.SecretKey,
+			ForcePathStyle:  cfg.Blob.S3.ForcePathStyle,
+			Prefix:          cfg.Blob.S3.Prefix,
 		})
 		if err != nil {
 			return fmt.Errorf("s3 blob: %w", err)
@@ -151,7 +172,7 @@ func run() error {
 		fileBlobPut = func(ctx context.Context, code string, data []byte) error {
 			return store3.Put(ctx, code, data)
 		}
-		slog.Info("file bytes backed by S3", "bucket", os.Getenv("AGENT_S3_BUCKET"))
+		slog.Info("file bytes backed by S3", "bucket", cfg.Blob.S3.Bucket)
 	}
 
 	// Mailbox consumer: each replica joins the durable consumer and processes
@@ -160,7 +181,7 @@ func run() error {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		// A2: per-instance liveness heartbeat (owner bucket).
-		hb := runtimeBus.NewHeartbeat(os.Getenv("HOSTNAME"))
+		hb := runtimeBus.NewHeartbeat(replicaID(cfg.NATS.ReplicaID))
 		hb.Start(ctx, runtimeBus)
 		defer hb.Stop()
 		stop, err := runtimeBus.ConsumeMailbox(ctx, func(m bus.MailboxMessage) error {
@@ -175,8 +196,8 @@ func run() error {
 		agent.NewBackstop(rt, 60*time.Second).Start(ctx)
 		// Idle-turn watchdog: re-wake a session that stopped mid-task after a
 		// tool call (gated by AGENT_IDLEWATCH_INTERVAL, 0 = off).
-		if iv := envInt("AGENT_IDLEWATCH_INTERVAL_SEC", 0); iv > 0 {
-			agent.NewIdleWatch(rt, cfg.defaultTenant, time.Duration(iv)*time.Second).Start(ctx)
+		if cfg.Agent.IdleWatchInterval > 0 {
+			agent.NewIdleWatch(rt, cfg.Tenant.Default, cfg.Agent.IdleWatchInterval).Start(ctx)
 		}
 	}
 
@@ -184,19 +205,19 @@ func run() error {
 	mux := http.NewServeMux()
 	cs := connect.NewServer(srv.AuthInterceptor())
 	srv.Register(cs)
-	connecthttp.Mount(mux, cs, connecthttp.WithReadMaxBytes(cfg.maxBody))
+	connecthttp.Mount(mux, cs, connecthttp.WithReadMaxBytes(cfg.Server.MaxBodyBytes))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
 	rpc := &http.Server{
-		Addr:              cfg.addr,
-		Handler:           cors(cfg.corsOrigin, mux),
+		Addr:              cfg.Server.Addr,
+		Handler:           cors(cfg.Server.CORSOrigin, mux),
 		ReadHeaderTimeout: 15 * time.Second,
 		Protocols:         protocols(),
 	}
 	health := &http.Server{
-		Addr:              cfg.healthAddr,
+		Addr:              cfg.Server.HealthAddr,
 		Handler:           http.NewServeMux(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -208,7 +229,7 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- rpc.ListenAndServe() }()
-	if cfg.healthAddr != "" {
+	if cfg.Server.HealthAddr != "" {
 		go func() { errCh <- health.ListenAndServe() }()
 	}
 
@@ -255,56 +276,9 @@ func cors(origin string, h http.Handler) http.Handler {
 	})
 }
 
-// config holds the process configuration (env-driven, with dev defaults).
-type config struct {
-	addr          string
-	healthAddr    string
-	backend       store.Backend
-	dsn           string
-	natsURL       string
-	authMode      string
-	adminToken    string
-	defaultTenant string
-	corsOrigin    string
-	maxTurns      int
-	maxBody       int
-}
-
-func loadConfig() config {
-	c := config{
-		addr:          env("PORT", ":8080"),
-		healthAddr:    env("AGENT_HEALTH_ADDR", ":8081"),
-		natsURL:       os.Getenv("NATS_URL"),
-		authMode:      env("AGENT_AUTH_MODE", "required"),
-		adminToken:    os.Getenv("AGENT_ADMIN_TOKEN"),
-		defaultTenant: env("AGENT_DEFAULT_TENANT", "default"),
-		corsOrigin:    env("AGENT_CORS_ORIGIN", "*"),
-		maxTurns:      envInt("AGENT_DEFAULT_MAX_TURNS", 8),
-		maxBody:       envInt("AGENT_MAX_BODY_BYTES", 64<<20),
-	}
-	switch env("DB_BACKEND", "sqlite") {
-	case "pg", "postgres":
-		c.backend = store.Postgres
-	case "mysql":
-		c.backend = store.MySQL
-	default:
-		c.backend = store.SQLite
-	}
-	switch c.backend {
-	case store.SQLite:
-		c.dsn = env("DATABASE_URL", "/data/agent.db")
-	default:
-		c.dsn = os.Getenv("DATABASE_URL")
-	}
-	if !strings.HasPrefix(c.addr, ":") && !strings.Contains(c.addr, ":") {
-		c.addr = ":" + c.addr
-	}
-	return c
-}
-
 // seedPresets installs the built-in default preset (system keyspace) + a
 // default model config for tenants that have none.
-func seedPresets(p *agent.Presets, cfg *agent.Config, db *store.DB, c config) {
+func seedPresets(p *agent.Presets, cfg *agent.Config, db *store.DB, c config.Config) {
 	tenants, _ := db.KnownTenants()
 	for _, t := range tenants {
 		seedTenantDefaults(p, cfg, db, c, t)
@@ -316,10 +290,10 @@ func seedPresets(p *agent.Presets, cfg *agent.Config, db *store.DB, c config) {
 // "only when the tenant has none yet"), so it never clobbers a user value.
 // Shared by boot seeding and the AdminService's CreateTenant (a runtime-created
 // tenant must be immediately usable).
-func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c config, tenant string) {
+func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c config.Config, tenant string) {
 	// Host-injected immutable system presets (SYSTEM_PRESETS_FILE), mirroring
 	// the TS agent (e.g. admin/explorer presets from a deployment ConfigMap).
-	for _, row := range loadInjectedPresets(tenant) {
+	for _, row := range loadInjectedPresets(c.Seed.SystemPresetsFile, tenant) {
 		p.SeedSystem(tenant, row)
 	}
 	if len(p.List(tenant)) == 0 {
@@ -329,51 +303,33 @@ func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c con
 				"en": "You are a helpful assistant.",
 				"zh": "你是一个有用的助手。",
 			},
-			MaxTurns: c.maxTurns, IsSystem: true,
+			MaxTurns: c.Agent.DefaultMaxTurns, IsSystem: true,
 		})
 	}
-	// AGENT_PROVIDER_SEED: seeded only into tenants that have NONE yet.
-	if seed := os.Getenv("AGENT_PROVIDER_SEED"); seed != "" {
-		seedProviders(db, []string{tenant}, seed)
+	// Seed providers only into tenants that have NONE yet.
+	if len(c.Seed.Providers) > 0 {
+		seedProviders(db, []string{tenant}, c.Seed.Providers)
 	}
-	// AGENT_EXT_CONFIG_SEED: {tenant,extId,name,value}, create-if-absent.
-	if seed := os.Getenv("AGENT_EXT_CONFIG_SEED"); seed != "" {
-		var rows []struct{ Tenant, ExtID, Name, Value string }
-		if json.Unmarshal([]byte(seed), &rows) == nil {
-			for _, r := range rows {
-				if r.Tenant != "*" && r.Tenant != tenant {
-					continue
-				}
-				if _, ok := cfg.Get(tenant, r.Name); !ok {
-					cfg.Set(tenant, r.Name, r.Value)
-				}
-			}
+	// Extension config rows, create-if-absent.
+	for _, r := range c.Seed.ExtensionConfig {
+		if r.Tenant != "*" && r.Tenant != tenant {
+			continue
+		}
+		if _, ok := cfg.Get(tenant, r.Name); !ok {
+			cfg.Set(tenant, r.Name, r.Value)
 		}
 	}
-	// AGENT_CONFIG_SEED: {tenant,key,value}, create-if-absent.
-	if seed := os.Getenv("AGENT_CONFIG_SEED"); seed != "" {
-		var rows []struct{ Tenant, Key, Value string }
-		if json.Unmarshal([]byte(seed), &rows) == nil {
-			for _, r := range rows {
-				if r.Tenant != "*" && r.Tenant != tenant {
-					continue
-				}
-				if _, ok := cfg.Get(tenant, r.Key); !ok {
-					cfg.Set(tenant, r.Key, r.Value)
-				}
-			}
+	// Tenant config rows, create-if-absent.
+	for _, r := range c.Seed.Config {
+		if r.Tenant != "*" && r.Tenant != tenant {
+			continue
+		}
+		if _, ok := cfg.Get(tenant, r.Key); !ok {
+			cfg.Set(tenant, r.Key, r.Value)
 		}
 	}
 }
 
-func env(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
-
-// splitList splits a comma-separated env list, trimming blanks.
 // bundledDeps builds the host-capability adapter the in-process bundled
 // extension needs (the Go equivalent of the TS `BundledDeps` injection).
 func bundledDeps(db *store.DB, cfg *agent.Config, hub *server.EventHub) *bundled.StoreDeps {
@@ -425,24 +381,7 @@ var (
 	fileBlobPut func(ctx context.Context, code string, data []byte) error
 )
 
-func seedProviders(db *store.DB, tenants []string, raw string) {
-	var rows []struct {
-		Tenant     string `json:"tenant"`
-		ProviderID string `json:"providerId"`
-		Capability string `json:"capability"`
-		APIType    string `json:"apiType"`
-		BaseURL    string `json:"baseUrl"`
-		APIKey     string `json:"apiKey"`
-		Models     []struct {
-			ID           string `json:"id"`
-			Name         string `json:"name"`
-			ContextLimit int64  `json:"contextLimit"`
-			ModelType    string `json:"modelType"`
-		} `json:"models"`
-	}
-	if json.Unmarshal([]byte(raw), &rows) != nil {
-		return
-	}
+func seedProviders(db *store.DB, tenants []string, rows []config.SeedProvider) {
 	for _, r := range rows {
 		targets := tenants
 		if r.Tenant != "" && r.Tenant != "*" {
@@ -480,40 +419,6 @@ func seedProviders(db *store.DB, tenants []string, raw string) {
 	}
 }
 
-func splitList(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if v := strings.TrimSpace(p); v != "" {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-func envInt(k string, def int) int {
-	if v := os.Getenv(k); v != "" {
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
-			return n
-		}
-	}
-	return def
-}
-
-// envFloat parses a float env var (0 or invalid → def).
-func envFloat(k string, def float64) float64 {
-	if v := os.Getenv(k); v != "" {
-		var f float64
-		if _, err := fmt.Sscanf(v, "%g", &f); err == nil && f > 0 {
-			return f
-		}
-	}
-	return def
-}
-
 var _ = llm.New
 
 // loadInjectedPresets reads SYSTEM_PRESETS_FILE — the host-injected immutable
@@ -523,14 +428,13 @@ var _ = llm.New
 //     delegation subtree may carry its own set; unknown scopes use `default`.
 //
 // Entries accept snake_case OR camelCase. Invalid entries are skipped.
-func loadInjectedPresets(scopeID string) []agent.PresetRow {
-	file := os.Getenv("SYSTEM_PRESETS_FILE")
+func loadInjectedPresets(file, scopeID string) []agent.PresetRow {
 	if file == "" {
 		return nil
 	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		slog.Warn("SYSTEM_PRESETS_FILE read failed", "file", file, "err", err.Error())
+		slog.Warn("system_presets_file read failed", "file", file, "err", err.Error())
 		return nil
 	}
 	var v any
@@ -627,4 +531,28 @@ func firstStr(vs ...any) string {
 		}
 	}
 	return ""
+}
+
+// storeBackend maps the config's backend string to store.Backend.
+func storeBackend(name string) store.Backend {
+	switch name {
+	case "postgres":
+		return store.Postgres
+	case "mysql":
+		return store.MySQL
+	default:
+		return store.SQLite
+	}
+}
+
+// replicaID resolves this instance's identity among replicas: the configured
+// value, else the OS hostname (no env var needed).
+func replicaID(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if h, err := os.Hostname(); err == nil {
+		return h
+	}
+	return "agent"
 }

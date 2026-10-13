@@ -1,0 +1,62 @@
+# easyagent configuration — the ONE place to configure the process.
+#
+# Run:  easyagent --config /etc/easyagent/config.yaml
+#       (with no --config it looks for ./easyagent.yaml, then
+#        /etc/easyagent/config.yaml, then uses the built-in defaults)
+#
+# Every field is optional: anything omitted keeps its built-in default. Unknown
+# keys are a hard error (typos never pass silently).
+
+server:
+  addr: ":8080"                # RPC (h1 + h2c)
+  health_addr: ":8081"         # plain-HTTP health port
+  cors_origin: "*"
+  max_body_bytes: 67108864     # 64 MiB
+
+auth:
+  mode: required               # required | none (none = dev only)
+  admin_token: ""              # plaintext, or:
+  # admin_token_file: /run/secrets/easyagent-admin   # k8s Secret mount
+
+tenant:
+  default: default
+
+database:
+  backend: sqlite              # sqlite | postgres | mysql
+  dsn: /data/agent.db          # sqlite path, or a host=… conn string
+
+nats:
+  url: ""                      # empty = degraded (in-memory KV, bundled tools only)
+  # url: nats://nats:4222
+  server_bin: ""               # embedded broker binary (empty = PATH)
+  replica_id: ""               # empty = os.Hostname()
+
+agent:
+  default_max_turns: 8
+  tool_timeout: 600s
+  compact_at_fraction: 0.9     # clamped to (0, 1]
+  force_compact_tokens: 900000
+  idlewatch_interval: 0s       # 0 = disabled
+  disabled_tools: []           # e.g. ["bundled.subsession-create"]
+
+blob:
+  backend: ""                  # "" (in-memory) | s3
+  s3:
+    bucket: ""
+    region: ""
+    endpoint: ""
+    access_key: ""
+    secret_key: ""             # or:
+    # secret_key_file: /run/secrets/s3-secret
+    force_path_style: false
+    prefix: ""
+
+seed:                          # create-if-absent boot data; never clobbers a user value
+  system_presets_file: ""      # path to a JSON file of immutable system presets
+  providers: []                # [{tenant, provider_id, capability, api_type, base_url, api_key, models:[{id,name,context_limit,model_type}]}]
+  config: []                   # [{tenant, key, value}]
+  extension_config: []         # [{tenant, ext_id, name, value}]
+
+log:
+  level: info                  # debug | info | warn | error
+  format: text                 # text | json
