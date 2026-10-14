@@ -298,11 +298,14 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 	res, err := r.runTurn(ctx, tenant, session)
 	if err != nil {
 		slog.Warn("turn failed", "tenant", tenant, "session", session, "err", err)
-		// Record WHY it ended even on failure: an interrupted / lease-lost run
-		// has a precise reason (set at cancel time); anything else is "error".
+		// Record WHY it ended even on failure. Precedence:
+		//   1. a cancel reason (interrupted / locklost) — set at cancel time;
+		//   2. otherwise CLASSIFY the error: an input-overflow (handled by
+		//      compaction elsewhere) vs. a transient transport/5xx failure worth
+		//      retrying ("retryable") vs. a permanent failure ("error").
 		reason := r.takeCancelReason(tenant, session)
 		if reason == "" {
-			reason = "error"
+			reason = classifyTurnError(err)
 		}
 		_ = r.deps.DB.SetTurnEnd(tenant, session, reason)
 		return false
@@ -319,6 +322,22 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 	}
 	_ = r.deps.DB.SetTurnEnd(tenant, session, reason)
 	return true
+}
+
+// classifyTurnError maps a turn failure onto a precise reason:
+//
+//	"overflow"  — the INPUT exceeded the context window (compaction territory);
+//	"retryable" — a transient transport/5xx/429 failure worth retrying;
+//	"error"     — a permanent failure (bad request, auth, unknown model, ...).
+func classifyTurnError(err error) string {
+	switch {
+	case llm.IsContextOverflowError(err):
+		return "overflow"
+	case llm.IsRetryable(err):
+		return "retryable"
+	default:
+		return "error"
+	}
 }
 
 // Interrupt aborts a session's in-flight turn on THIS replica (a cross-replica

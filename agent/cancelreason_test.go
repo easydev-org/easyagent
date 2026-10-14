@@ -107,6 +107,52 @@ func TestNormalTurnRecordsStop(t *testing.T) {
 	waitReason(t, db, "t1", "s1", "stop")
 }
 
+// A truncated generation (provider finishReason "length") records "length",
+// not "stop".
+func TestLengthFinishRecordsReason(t *testing.T) {
+	db := testStore(t)
+	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"})
+	srv := mockV4(t,
+		`{"type":"text-delta","id":"t","delta":"half a thou"}`,
+		`{"type":"finish","finishReason":{"unified":"length"}}`,
+	)
+	defer srv.Close()
+	kv := NewMemoryKV()
+	presets := NewPresets(kv)
+	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
+	rt := NewRuntime(RuntimeDeps{
+		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
+		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
+	})
+	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	waitReason(t, db, "t1", "s1", "length")
+}
+
+// An error is classified: a retryable transport failure -> "retryable", a
+// permanent failure -> "error".
+func TestErrorClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"retryable 5xx", &llm.APIError{StatusCode: 503, Message: "unavailable"}, "retryable"},
+		{"retryable transport", &llm.APIError{Message: "connection reset by peer"}, "retryable"},
+		{"permanent 400", &llm.APIError{StatusCode: 400, Message: "bad request"}, "error"},
+		{"permanent 401", &llm.APIError{StatusCode: 401, Message: "unauthorized"}, "error"},
+	}
+	for _, c := range cases {
+		got := classifyTurnError(c.err)
+		if got != c.want {
+			t.Errorf("%s: classify(%v) = %q, want %q", c.name, c.err, got, c.want)
+		}
+	}
+}
+
 // loseOnRenewLease claims successfully but reports the lock LOST on renew.
 type loseOnRenewLease struct{}
 

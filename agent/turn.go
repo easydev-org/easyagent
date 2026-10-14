@@ -292,6 +292,12 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 				"finishReason": finish, "run_id": in.RunID,
 			})
 			res.Reason = "stop"
+			// A truncated generation (the model hit its output-token ceiling,
+			// provider finishReason "length") is NOT a natural stop — it stopped
+			// mid-thought. Record it distinctly so a watcher can resume it.
+			if finish == "length" {
+				res.Reason = "length"
+			}
 			_ = emit(ctx, deps.Emit, "turn-complete", map[string]any{
 				"reason": res.Reason, "run_id": in.RunID,
 			})
