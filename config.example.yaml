@@ -36,7 +36,8 @@ agent:
   tool_timeout: 600s
   compact_at_fraction: 0.9     # clamped to (0, 1]
   force_compact_tokens: 900000
-  idlewatch_interval: 0s       # 0 = disabled
+  resume_watch_interval: 0s    # 0 = disabled; auto-resume a turn that ended
+                               #   "length" (truncated) or "retryable" (transient)
   disabled_tools: []           # e.g. ["bundled.subsession-create"]
 
 blob:

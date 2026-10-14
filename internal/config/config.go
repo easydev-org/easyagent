@@ -76,11 +76,11 @@ type NATS struct {
 
 // Agent tunes the turn loop.
 type Agent struct {
-	DefaultMaxTurns    int           `yaml:"default_max_turns"`
-	ToolTimeout        time.Duration `yaml:"tool_timeout"`
-	CompactAtFraction  float64       `yaml:"compact_at_fraction"`
-	ForceCompactTokens int           `yaml:"force_compact_tokens"`
-	IdleWatchInterval  time.Duration `yaml:"idlewatch_interval"`
+	DefaultMaxTurns     int           `yaml:"default_max_turns"`
+	ToolTimeout         time.Duration `yaml:"tool_timeout"`
+	CompactAtFraction   float64       `yaml:"compact_at_fraction"`
+	ForceCompactTokens  int           `yaml:"force_compact_tokens"`
+	ResumeWatchInterval time.Duration `yaml:"resume_watch_interval"`
 	// DisabledTools is the host hard-denylist of qualified `<extId>.<name>` ids.
 	DisabledTools []string `yaml:"disabled_tools"`
 }

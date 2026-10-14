@@ -195,10 +195,11 @@ func run(cfgPath string) error {
 		// A5: boot recovery + a periodic backstop for dropped wakes.
 		rt.RecoverOnBoot(ctx)
 		agent.NewBackstop(rt, 60*time.Second).Start(ctx)
-		// Idle-turn watchdog: re-wake a session that stopped mid-task after a
-		// tool call (gated by AGENT_IDLEWATCH_INTERVAL, 0 = off).
-		if cfg.Agent.IdleWatchInterval > 0 {
-			agent.NewIdleWatch(rt, cfg.Tenant.Default, cfg.Agent.IdleWatchInterval).Start(ctx)
+		// Resume watchdog: auto-resume a session whose last turn ended with a
+		// RESUMABLE reason (length / retryable) — gated by resume_watch_interval
+		// (0 = off).
+		if cfg.Agent.ResumeWatchInterval > 0 {
+			agent.NewResumeWatch(rt, cfg.Tenant.Default, cfg.Agent.ResumeWatchInterval).Start(ctx)
 		}
 	}
 

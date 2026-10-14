@@ -63,7 +63,7 @@ func TestDurationParsing(t *testing.T) {
 	p := write(t, "c.yaml", `
 agent:
   tool_timeout: 90s
-  idlewatch_interval: 5m
+  resume_watch_interval: 5m
 `)
 	c, err := Load(p)
 	if err != nil {
@@ -72,8 +72,8 @@ agent:
 	if c.Agent.ToolTimeout != 90*time.Second {
 		t.Errorf("tool_timeout = %v", c.Agent.ToolTimeout)
 	}
-	if c.Agent.IdleWatchInterval != 5*time.Minute {
-		t.Errorf("idlewatch = %v", c.Agent.IdleWatchInterval)
+	if c.Agent.ResumeWatchInterval != 5*time.Minute {
+		t.Errorf("resume_watch = %v", c.Agent.ResumeWatchInterval)
 	}
 }
 
