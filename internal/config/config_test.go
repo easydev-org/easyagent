@@ -56,6 +56,22 @@ func TestLoadNoFile(t *testing.T) {
 	if c.Server.Addr != ":8080" || c.Auth.Mode != "required" {
 		t.Fatalf("defaults wrong: %+v", c)
 	}
+	// Auto-resume is ON by default.
+	if c.Agent.ResumeWatchInterval != 30*time.Second {
+		t.Errorf("resume_watch default = %v, want 30s", c.Agent.ResumeWatchInterval)
+	}
+}
+
+// resume_watch_interval = 0 disables auto-resume (the ONLY way to turn it off).
+func TestResumeWatchCanBeDisabled(t *testing.T) {
+	p := write(t, "c.yaml", "agent:\n  resume_watch_interval: 0s\n")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Agent.ResumeWatchInterval != 0 {
+		t.Errorf("explicit 0 should disable, got %v", c.Agent.ResumeWatchInterval)
+	}
 }
 
 // Durations accept Go's "600s"/"10m" syntax.

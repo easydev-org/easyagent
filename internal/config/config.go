@@ -182,6 +182,11 @@ func Default() Config {
 			ToolTimeout:        600 * time.Second,
 			CompactAtFraction:  0.9,
 			ForceCompactTokens: 900_000,
+			// Auto-resume is ON by default: a turn that ended "length"
+			// (truncated) or "retryable" (transient) is re-triggered on this
+			// interval. Set 0 to disable (and a negative value is normalized
+			// to the default, so 0 is the ONLY way to turn it off).
+			ResumeWatchInterval: 30 * time.Second,
 		},
 		Log: Log{Level: "info", Format: "text"},
 	}
@@ -265,6 +270,9 @@ func (c *Config) normalize() {
 	}
 	if c.Agent.CompactAtFraction > 1 {
 		c.Agent.CompactAtFraction = 1
+	}
+	if c.Agent.ResumeWatchInterval < 0 {
+		c.Agent.ResumeWatchInterval = 30 * time.Second
 	}
 }
 
