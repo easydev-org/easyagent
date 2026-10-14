@@ -94,6 +94,11 @@ type Runtime struct {
 	deps   RuntimeDeps
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
+	// cancelReason records WHY an in-flight run was cancelled (per
+	// tenant\x00session), so the turn-end reason is accurate instead of blank:
+	// "interrupted" (a user/client interrupt) or "locklost" (the run lease was
+	// lost to another replica). Set just before cancel(); read once at turn end.
+	cancelReason map[string]string
 	// compaction budgets (0 = defaults; injectable for tests).
 	compactTailTokens int
 	compactFoldTokens int
@@ -104,7 +109,31 @@ func NewRuntime(deps RuntimeDeps) *Runtime {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Runtime{deps: deps, active: map[string]context.CancelFunc{}}
+	return &Runtime{deps: deps, active: map[string]context.CancelFunc{}, cancelReason: map[string]string{}}
+}
+
+// markCancel records why a session's run is being cancelled, then cancels it.
+// A no-op when no run is active (so the reason map never leaks a stale entry).
+func (r *Runtime) markCancel(tenant, session, reason string) {
+	r.mu.Lock()
+	cancel, ok := r.active[tenant+"\x00"+session]
+	if ok {
+		r.cancelReason[tenant+"\x00"+session] = reason
+	}
+	r.mu.Unlock()
+	if ok {
+		cancel()
+	}
+}
+
+// takeCancelReason returns and clears a session's recorded cancel reason.
+func (r *Runtime) takeCancelReason(tenant, session string) string {
+	k := tenant + "\x00" + session
+	r.mu.Lock()
+	reason := r.cancelReason[k]
+	delete(r.cancelReason, k)
+	r.mu.Unlock()
+	return reason
 }
 
 // Wake processes a session: claim the lease, then loop (drain the mailbox, run
@@ -151,7 +180,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 				held, rerr := r.deps.Lease.Renew(runCtx, tenant, session)
 				if rerr == nil && !held {
 					leaseLost.Store(true)
-					cancel()
+					r.markCancel(tenant, session, "locklost")
 					return
 				}
 			}
@@ -172,7 +201,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 							return
 						}
 						if typ == "interrupt" {
-							cancel()
+							r.markCancel(tenant, session, "interrupted")
 						}
 					}
 				}
@@ -249,7 +278,7 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 				return false
 			}
 		case "interrupt":
-			cancel()
+			r.markCancel(tenant, session, "interrupted")
 		case "compact":
 			if _, err := r.CompactSession(context.WithoutCancel(ctx), tenant, session, "manual"); err != nil {
 				return false
@@ -269,12 +298,24 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 	res, err := r.runTurn(ctx, tenant, session)
 	if err != nil {
 		slog.Warn("turn failed", "tenant", tenant, "session", session, "err", err)
+		// Record WHY it ended even on failure: an interrupted / lease-lost run
+		// has a precise reason (set at cancel time); anything else is "error".
+		reason := r.takeCancelReason(tenant, session)
+		if reason == "" {
+			reason = "error"
+		}
+		_ = r.deps.DB.SetTurnEnd(tenant, session, reason)
 		return false
 	}
 	// B4: record why the turn ended (readable from the list row without polling).
 	reason := res.Reason
 	if reason == "" {
 		reason = "stop"
+	}
+	// A cancelled-but-successful return (e.g. the model finished right as the
+	// interrupt landed) still carries the cancel reason.
+	if cr := r.takeCancelReason(tenant, session); cr != "" {
+		reason = cr
 	}
 	_ = r.deps.DB.SetTurnEnd(tenant, session, reason)
 	return true
@@ -284,10 +325,10 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 // interrupt arrives via the mailbox as an `interrupt` item).
 func (r *Runtime) Interrupt(tenant, session string) bool {
 	r.mu.Lock()
-	cancel, ok := r.active[tenant+"\x00"+session]
+	_, ok := r.active[tenant+"\x00"+session]
 	r.mu.Unlock()
 	if ok {
-		cancel()
+		r.markCancel(tenant, session, "interrupted")
 	}
 	return ok
 }
