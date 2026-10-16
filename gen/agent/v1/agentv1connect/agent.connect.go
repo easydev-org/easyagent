@@ -107,6 +107,12 @@ const (
 	// AgentServiceSetExtensionConfigProcedure is the procedure name of the AgentService's
 	// SetExtensionConfig RPC.
 	AgentServiceSetExtensionConfigProcedure = "/agent.v1.AgentService/SetExtensionConfig"
+	// AgentServiceListExtensionsProcedure is the procedure name of the AgentService's ListExtensions
+	// RPC.
+	AgentServiceListExtensionsProcedure = "/agent.v1.AgentService/ListExtensions"
+	// AgentServiceGetExtensionConfigProcedure is the procedure name of the AgentService's
+	// GetExtensionConfig RPC.
+	AgentServiceGetExtensionConfigProcedure = "/agent.v1.AgentService/GetExtensionConfig"
 	// AgentServiceUploadFileProcedure is the procedure name of the AgentService's UploadFile RPC.
 	AgentServiceUploadFileProcedure = "/agent.v1.AgentService/UploadFile"
 	// AgentServiceIngestFileProcedure is the procedure name of the AgentService's IngestFile RPC.
@@ -409,6 +415,20 @@ var (
 			Procedure:  AgentServiceSetExtensionConfigProcedure,
 		}
 	})
+	agentServiceListExtensionsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListExtensions"),
+			Procedure:  AgentServiceListExtensionsProcedure,
+		}
+	})
+	agentServiceGetExtensionConfigSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("GetExtensionConfig"),
+			Procedure:  AgentServiceGetExtensionConfigProcedure,
+		}
+	})
 	agentServiceUploadFileSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -491,6 +511,8 @@ type AgentServiceClient interface {
 	GetToolConfig(context.Context, *v1.GetToolConfigRequest) (*v1.GetToolConfigResponse, error)
 	SetToolConfig(context.Context, *v1.SetToolConfigRequest) (*v1.SetToolConfigResponse, error)
 	SetExtensionConfig(context.Context, *v1.SetExtensionConfigRequest) (*v1.SetExtensionConfigResponse, error)
+	ListExtensions(context.Context, *v1.ListExtensionsRequest) (*v1.ListExtensionsResponse, error)
+	GetExtensionConfig(context.Context, *v1.GetExtensionConfigRequest) (*v1.GetExtensionConfigResponse, error)
 	UploadFile(context.Context, *v1.UploadFileRequest) (*v1.UploadFileResponse, error)
 	IngestFile(context.Context, *v1.IngestFileRequest) (*v1.IngestFileResponse, error)
 	GetFile(context.Context, *v1.GetFileRequest) (*v1.GetFileResponse, error)
@@ -626,6 +648,8 @@ type AgentServiceHandler interface {
 	GetToolConfig(context.Context, *v1.GetToolConfigRequest) (*v1.GetToolConfigResponse, error)
 	SetToolConfig(context.Context, *v1.SetToolConfigRequest) (*v1.SetToolConfigResponse, error)
 	SetExtensionConfig(context.Context, *v1.SetExtensionConfigRequest) (*v1.SetExtensionConfigResponse, error)
+	ListExtensions(context.Context, *v1.ListExtensionsRequest) (*v1.ListExtensionsResponse, error)
+	GetExtensionConfig(context.Context, *v1.GetExtensionConfigRequest) (*v1.GetExtensionConfigResponse, error)
 	UploadFile(context.Context, *v1.UploadFileRequest) (*v1.UploadFileResponse, error)
 	IngestFile(context.Context, *v1.IngestFileRequest) (*v1.IngestFileResponse, error)
 	GetFile(context.Context, *v1.GetFileRequest) (*v1.GetFileResponse, error)
@@ -674,6 +698,8 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceGetToolConfigSpec(), Handler: adapter.getToolConfig},
 		connect.Method{Spec: agentServiceSetToolConfigSpec(), Handler: adapter.setToolConfig},
 		connect.Method{Spec: agentServiceSetExtensionConfigSpec(), Handler: adapter.setExtensionConfig},
+		connect.Method{Spec: agentServiceListExtensionsSpec(), Handler: adapter.listExtensions},
+		connect.Method{Spec: agentServiceGetExtensionConfigSpec(), Handler: adapter.getExtensionConfig},
 		connect.Method{Spec: agentServiceUploadFileSpec(), Handler: adapter.uploadFile},
 		connect.Method{Spec: agentServiceIngestFileSpec(), Handler: adapter.ingestFile},
 		connect.Method{Spec: agentServiceGetFileSpec(), Handler: adapter.getFile},
@@ -891,6 +917,14 @@ func (UnimplementedAgentServiceHandler) SetToolConfig(context.Context, *v1.SetTo
 
 func (UnimplementedAgentServiceHandler) SetExtensionConfig(context.Context, *v1.SetExtensionConfigRequest) (*v1.SetExtensionConfigResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.SetExtensionConfig is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListExtensions(context.Context, *v1.ListExtensionsRequest) (*v1.ListExtensionsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListExtensions is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) GetExtensionConfig(context.Context, *v1.GetExtensionConfigRequest) (*v1.GetExtensionConfigResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.GetExtensionConfig is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) UploadFile(context.Context, *v1.UploadFileRequest) (*v1.UploadFileResponse, error) {
@@ -1204,6 +1238,22 @@ func (c *agentServiceClient) SetToolConfig(ctx context.Context, req *v1.SetToolC
 func (c *agentServiceClient) SetExtensionConfig(ctx context.Context, req *v1.SetExtensionConfigRequest) (*v1.SetExtensionConfigResponse, error) {
 	var res v1.SetExtensionConfigResponse
 	if err := c.client.CallUnary(ctx, agentServiceSetExtensionConfigSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListExtensions(ctx context.Context, req *v1.ListExtensionsRequest) (*v1.ListExtensionsResponse, error) {
+	var res v1.ListExtensionsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListExtensionsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) GetExtensionConfig(ctx context.Context, req *v1.GetExtensionConfigRequest) (*v1.GetExtensionConfigResponse, error) {
+	var res v1.GetExtensionConfigResponse
+	if err := c.client.CallUnary(ctx, agentServiceGetExtensionConfigSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1673,6 +1723,30 @@ func (h agentServiceHandler) setExtensionConfig(ctx context.Context, _ connect.S
 		return err
 	}
 	res, err := h.svc.SetExtensionConfig(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listExtensions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListExtensionsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListExtensions(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) getExtensionConfig(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetExtensionConfigRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetExtensionConfig(ctx, &req)
 	if err != nil {
 		return err
 	}

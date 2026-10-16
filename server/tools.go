@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/bundled"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 )
 
@@ -55,6 +56,54 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 		out = append(out, info)
 	}
 	return &agentv1.ListToolsResponse{Tools: out}, nil
+}
+
+// configFieldToProto maps a declared config field onto its wire form.
+func configFieldToProto(cf bundled.ConfigField) *agentv1.ToolConfigField {
+	f := &agentv1.ToolConfigField{
+		Name: cf.Name, Type: cf.Type, Description: cf.Description,
+		Scope: cf.Scope, Kind: cf.Kind, Capability: cf.Capability,
+	}
+	if cf.Default != "" {
+		f.Default = structpb.NewStringValue(cf.Default)
+	}
+	return f
+}
+
+// ListExtensions returns each discovered extension's WHOLE config surface +
+// capabilities + the tools it provides (the extension-config page). Only the
+// in-process bundled extension is currently discoverable here.
+func (s *Server) ListExtensions(ctx context.Context, _ *agentv1.ListExtensionsRequest) (*agentv1.ListExtensionsResponse, error) {
+	if s.bundledTools == nil || s.bundledFields == nil {
+		return &agentv1.ListExtensionsResponse{}, nil
+	}
+	defs := s.bundledTools.Tools()
+	info := &agentv1.ExtensionInfo{ExtId: "bundled", Version: "1"}
+	if len(defs) > 0 {
+		info.Capabilities = []string{"tools"}
+	}
+	for _, d := range defs {
+		info.Tools = append(info.Tools, d.Name)
+	}
+	for _, cf := range s.bundledFields.ConfigFields() {
+		info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
+	}
+	return &agentv1.ListExtensionsResponse{Extensions: []*agentv1.ExtensionInfo{info}}, nil
+}
+
+// GetExtensionConfig returns the configured value for each of an extension's
+// declared knobs (a `{knob: value}` map). Empty when unset.
+func (s *Server) GetExtensionConfig(ctx context.Context, req *agentv1.GetExtensionConfigRequest) (*agentv1.GetExtensionConfigResponse, error) {
+	tenant := tenantOf(ctx)
+	values := map[string]*structpb.Value{}
+	if s.bundledFields != nil && (req.ExtId == "" || req.ExtId == "bundled") {
+		for _, cf := range s.bundledFields.ConfigFields() {
+			if v, ok := configOrEmptyOK(cfgProvider(s.config), tenant, cf.Name); ok {
+				values[cf.Name] = structpb.NewStringValue(v)
+			}
+		}
+	}
+	return &agentv1.GetExtensionConfigResponse{Values: values}, nil
 }
 
 // GetToolConfig returns the aggregate `{toolName: {knob: value}}` config surface

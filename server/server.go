@@ -108,9 +108,11 @@ type ToolSource interface {
 // SetBundledTools installs the in-process bundled tool surface (for ListTools).
 func (s *Server) SetBundledTools(t ToolSource) { s.bundledTools = t }
 
-// ConfigFieldSource exposes a tool's declared config fields (for ListTools).
+// ConfigFieldSource exposes a tool's declared config fields (for ListTools) and
+// the extension's WHOLE config surface (for the extension-config page).
 type ConfigFieldSource interface {
 	ConfigFieldsFor(toolName string) []bundled.ConfigField
+	ConfigFields() []bundled.ConfigField
 }
 
 // SetBundledConfigFields installs the bundled config-field source.

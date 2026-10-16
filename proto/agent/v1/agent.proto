@@ -494,6 +494,26 @@ message SetToolConfigResponse { bool ok = 1; }
 message SetExtensionConfigRequest { string ext_id = 1; string name = 2; google.protobuf.Value value = 3; }
 message SetExtensionConfigResponse { bool ok = 1; }
 
+// ExtensionInfo describes one discovered extension's WHOLE config surface (not
+// per-tool). A tool's `config_fields` is only the subset it requires; this is
+// every knob the extension declares.
+message ExtensionInfo {
+  string ext_id = 1;
+  string version = 2;
+  repeated string capabilities = 3;
+  repeated ToolConfigField config_fields = 4;
+  // The tool names this extension provides.
+  repeated string tools = 5;
+}
+
+message ListExtensionsRequest {}
+message ListExtensionsResponse { repeated ExtensionInfo extensions = 1; }
+
+// GetExtensionConfig returns the configured value for each of an extension's
+// declared knobs (a `{knob: value}` map).
+message GetExtensionConfigRequest { string ext_id = 1; }
+message GetExtensionConfigResponse { map<string, google.protobuf.Value> values = 1; }
+
 message UploadFileRequest { FileRef file = 1; string data = 2; }
 // `mime` is the SERVER-DERIVED content type of the stored file (see
 // IngestFileResponse); the caller never supplies one.
@@ -606,6 +626,8 @@ service AgentService {
   rpc GetToolConfig(GetToolConfigRequest) returns (GetToolConfigResponse);
   rpc SetToolConfig(SetToolConfigRequest) returns (SetToolConfigResponse);
   rpc SetExtensionConfig(SetExtensionConfigRequest) returns (SetExtensionConfigResponse);
+  rpc ListExtensions(ListExtensionsRequest) returns (ListExtensionsResponse);
+  rpc GetExtensionConfig(GetExtensionConfigRequest) returns (GetExtensionConfigResponse);
   rpc UploadFile(UploadFileRequest) returns (UploadFileResponse);
   rpc IngestFile(IngestFileRequest) returns (IngestFileResponse);
   rpc GetFile(GetFileRequest) returns (GetFileResponse);

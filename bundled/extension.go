@@ -99,6 +99,29 @@ func scopeOrGlobal(c ConfigKnob) string {
 	return "global"
 }
 
+// ConfigFields returns the extension's WHOLE declared config surface (every
+// knob in the manifest), independent of which tools require them. The
+// extension-config page edits these; a tool page only shows the subset it
+// requires.
+func (e *Extension) ConfigFields() []ConfigField {
+	out := make([]ConfigField, 0, len(e.manifest.Config))
+	for _, c := range e.manifest.Config {
+		typ := c.Type
+		if typ == "" {
+			typ = "string"
+		}
+		kind := c.Kind
+		if kind == "" {
+			kind = "value"
+		}
+		out = append(out, ConfigField{
+			Name: c.Name, Type: typ, Description: c.Description,
+			Scope: scopeOrGlobal(c), Kind: kind, Capability: c.Capability, Default: c.Default,
+		})
+	}
+	return out
+}
+
 // Execute runs one tool (implements agent.ToolExecutor). It accepts both the
 // bare name and the extension-qualified `<id>-<name>` form.
 func (e *Extension) Execute(ctx context.Context, tenant, session, name, args string) (agent.ToolOutcome, error) {
