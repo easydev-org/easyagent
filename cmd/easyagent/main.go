@@ -192,6 +192,14 @@ func run(cfgPath string) error {
 			return fmt.Errorf("mailbox consumer: %w", err)
 		}
 		defer stop()
+		// File RPCs: let a DB-less / store-less EXTENSION persist bytes through
+		// the agent (easybus.<tenant>.file.ingest / file.get). Bytes never ride
+		// the message — only the transient object reference does.
+		stopFileRPC, err := srv.ServeFileRPC(ctx, runtimeBus.Transport())
+		if err != nil {
+			return fmt.Errorf("file rpc: %w", err)
+		}
+		defer stopFileRPC()
 		// A5: boot recovery + a periodic backstop for dropped wakes.
 		rt.RecoverOnBoot(ctx)
 		agent.NewBackstop(rt, 60*time.Second).Start(ctx)
