@@ -11,10 +11,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"sync"
 	"time"
 
 	agentpkg "github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/bundled"
+	easybus "github.com/easydev-org/easybus-sdk"
 	abcagent "github.com/easydev-org/easybus-sdk/agent"
 	"github.com/easydev-org/easybus-sdk/bus"
 	"github.com/easydev-org/easybus-sdk/events"
@@ -220,11 +223,15 @@ type ToolExecutor struct {
 	mu    sync.RWMutex
 	owner map[string]string // bare tool name -> extension id
 	defs  map[string]agentpkg.ToolDef
+	// extFields maps an extension id -> its declared config surface (from the
+	// discovered manifest), so the server can list + edit extension config
+	// without re-discovering. Populated by Refresh.
+	extFields map[string][]bundled.ConfigField
 }
 
 // NewToolExecutor builds a tool executor over the agent role.
 func NewToolExecutor(a *abcagent.Agent) *ToolExecutor {
-	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}}
+	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}}
 }
 
 // Refresh discovers extensions and records tool -> extension ownership.
@@ -236,6 +243,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, m := range manifests {
+		// Record the extension's declared config surface (for the config page),
+		// independent of whether it declares any tool.
+		e.extFields[m.Id] = manifestConfigFields(m)
 		if m.Tools == nil {
 			continue
 		}
@@ -253,6 +263,44 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 		}
 	}
 	return nil
+}
+
+// manifestConfigFields maps a discovered extension's declared config items onto
+// the server's ConfigField shape (kind/scope/enum/default preserved).
+func manifestConfigFields(m *easybus.ExtensionManifest) []bundled.ConfigField {
+	if m == nil || len(m.Config) == 0 {
+		return nil
+	}
+	out := make([]bundled.ConfigField, 0, len(m.Config))
+	for _, c := range m.Config {
+		kind := "value"
+		if c.Kind != nil && *c.Kind != "" {
+			kind = *c.Kind
+		}
+		typ := c.Type
+		if typ == "" {
+			typ = "string"
+		}
+		scope := c.Scope
+		if scope == "" {
+			scope = "global"
+		}
+		f := bundled.ConfigField{Name: c.Name, Type: typ, Scope: scope, Kind: kind}
+		if c.Description != nil {
+			f.Description = *c.Description
+		}
+		if c.Capability != nil {
+			f.Capability = *c.Capability
+		}
+		// A secret's default is never surfaced (nor broadcast).
+		if c.Default != nil && kind != bundled.ConfigKindSecret {
+			if s, ok := c.Default.AsInterface().(string); ok {
+				f.Default = s
+			}
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // Execute calls one tool and maps the abc ToolResult to the agent's ToolOutcome.
@@ -307,6 +355,26 @@ func (e *ToolExecutor) Tools() []agentpkg.ToolDef {
 	for _, d := range e.defs {
 		out = append(out, d)
 	}
+	return out
+}
+
+// ExtensionConfigFields returns an extension's declared config surface (from
+// the last Refresh), or nil when the extension is unknown / declares none.
+func (e *ToolExecutor) ExtensionConfigFields(extID string) []bundled.ConfigField {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.extFields[extID]
+}
+
+// ExtensionIDs returns the discovered extension ids (sorted for stability).
+func (e *ToolExecutor) ExtensionIDs() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]string, 0, len(e.extFields))
+	for id := range e.extFields {
+		out = append(out, id)
+	}
+	sort.Strings(out)
 	return out
 }
 

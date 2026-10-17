@@ -59,6 +59,19 @@ type ConfigField struct {
 	Default     string
 }
 
+// Config knob kinds. `Kind` is an open string on the wire; these are the
+// values the agent/server treat specially.
+//
+//   - ConfigKindValue  — an ordinary knob (default).
+//   - ConfigKindModel  — a `provider_id/model_id` reference (a picker).
+//   - ConfigKindSecret — a credential: the server NEVER returns its value to a
+//     client (see server.GetExtensionConfig), only whether it is set.
+const (
+	ConfigKindValue  = "value"
+	ConfigKindModel  = "model"
+	ConfigKindSecret = "secret"
+)
+
 // ConfigFieldsFor returns the config knobs a tool requires (in manifest order),
 // resolved from the manifest's config declarations.
 func (e *Extension) ConfigFieldsFor(toolName string) []ConfigField {

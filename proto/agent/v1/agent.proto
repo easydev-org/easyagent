@@ -512,7 +512,15 @@ message ListExtensionsResponse { repeated ExtensionInfo extensions = 1; }
 // GetExtensionConfig returns the configured value for each of an extension's
 // declared knobs (a `{knob: value}` map).
 message GetExtensionConfigRequest { string ext_id = 1; }
-message GetExtensionConfigResponse { map<string, google.protobuf.Value> values = 1; }
+message GetExtensionConfigResponse {
+  // Values for ordinary knobs. A knob declared `kind == "secret"` is NEVER
+  // present here — its value is withheld by the server.
+  map<string, google.protobuf.Value> values = 1;
+  // Names of the `kind == "secret"` knobs that currently have a value set.
+  // The client renders "set" (with a replace/clear action) vs "not set",
+  // without ever seeing the credential.
+  repeated string secret_set = 2;
+}
 
 message UploadFileRequest { FileRef file = 1; string data = 2; }
 // `mime` is the SERVER-DERIVED content type of the stored file (see

@@ -43,14 +43,7 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 		info.RequiredConfig = d.RequiredConfig
 		if s.bundledFields != nil {
 			for _, cf := range s.bundledFields.ConfigFieldsFor(d.Name) {
-				f := &agentv1.ToolConfigField{
-					Name: cf.Name, Type: cf.Type, Description: cf.Description,
-					Scope: cf.Scope, Kind: cf.Kind, Capability: cf.Capability,
-				}
-				if cf.Default != "" {
-					f.Default = structpb.NewStringValue(cf.Default)
-				}
-				info.ConfigFields = append(info.ConfigFields, f)
+				info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
 			}
 		}
 		out = append(out, info)
@@ -64,46 +57,108 @@ func configFieldToProto(cf bundled.ConfigField) *agentv1.ToolConfigField {
 		Name: cf.Name, Type: cf.Type, Description: cf.Description,
 		Scope: cf.Scope, Kind: cf.Kind, Capability: cf.Capability,
 	}
-	if cf.Default != "" {
+	// A secret knob's default is NEVER surfaced (it would be broadcast in the
+	// manifest); the field declares only its shape.
+	if cf.Default != "" && cf.Kind != bundled.ConfigKindSecret {
 		f.Default = structpb.NewStringValue(cf.Default)
 	}
 	return f
 }
 
+// isSecretField reports whether a declared knob is a credential (its value is
+// never returned to a client).
+func isSecretField(cf bundled.ConfigField) bool {
+	return cf.Kind == bundled.ConfigKindSecret
+}
+
+// isSecretKnob reports whether `knob` of extension `extID` is a secret. The
+// bundled extension is the default when extID is empty/unknown.
+func (s *Server) isSecretKnob(extID, knob string) bool {
+	var fields []bundled.ConfigField
+	if (extID == "" || extID == "bundled") && s.bundledFields != nil {
+		fields = s.bundledFields.ConfigFields()
+	} else if s.tools != nil {
+		fields = s.tools.ExtensionConfigFields(extID)
+	}
+	for _, cf := range fields {
+		if cf.Name == knob {
+			return isSecretField(cf)
+		}
+	}
+	return false
+}
+
 // ListExtensions returns each discovered extension's WHOLE config surface +
-// capabilities + the tools it provides (the extension-config page). Only the
-// in-process bundled extension is currently discoverable here.
+// capabilities + the tools it provides (the extension-config page). Both the
+// in-process bundled extension AND every discovered NATS extension are listed.
 func (s *Server) ListExtensions(ctx context.Context, _ *agentv1.ListExtensionsRequest) (*agentv1.ListExtensionsResponse, error) {
-	if s.bundledTools == nil || s.bundledFields == nil {
-		return &agentv1.ListExtensionsResponse{}, nil
+	out := make([]*agentv1.ExtensionInfo, 0, 2)
+	// The in-process bundled extension (always present).
+	if s.bundledTools != nil && s.bundledFields != nil {
+		defs := s.bundledTools.Tools()
+		info := &agentv1.ExtensionInfo{ExtId: "bundled", Version: "1"}
+		if len(defs) > 0 {
+			info.Capabilities = []string{"tools"}
+		}
+		for _, d := range defs {
+			info.Tools = append(info.Tools, d.Name)
+		}
+		for _, cf := range s.bundledFields.ConfigFields() {
+			info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
+		}
+		out = append(out, info)
 	}
-	defs := s.bundledTools.Tools()
-	info := &agentv1.ExtensionInfo{ExtId: "bundled", Version: "1"}
-	if len(defs) > 0 {
-		info.Capabilities = []string{"tools"}
+	// Discovered NATS extensions (each with its declared config surface).
+	if s.tools != nil {
+		for _, extID := range s.tools.ExtensionIDs() {
+			fields := s.tools.ExtensionConfigFields(extID)
+			if len(fields) == 0 {
+				continue
+			}
+			info := &agentv1.ExtensionInfo{ExtId: extID}
+			for _, cf := range fields {
+				info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
+			}
+			out = append(out, info)
+		}
 	}
-	for _, d := range defs {
-		info.Tools = append(info.Tools, d.Name)
-	}
-	for _, cf := range s.bundledFields.ConfigFields() {
-		info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
-	}
-	return &agentv1.ListExtensionsResponse{Extensions: []*agentv1.ExtensionInfo{info}}, nil
+	return &agentv1.ListExtensionsResponse{Extensions: out}, nil
 }
 
 // GetExtensionConfig returns the configured value for each of an extension's
 // declared knobs (a `{knob: value}` map). Empty when unset.
+//
+// SECRET knobs are withheld: their value never leaves the server. A secret
+// knob that currently has a value is reported by name in `secret_set` so the
+// client can render "set / not set" without ever seeing the credential.
 func (s *Server) GetExtensionConfig(ctx context.Context, req *agentv1.GetExtensionConfigRequest) (*agentv1.GetExtensionConfigResponse, error) {
 	tenant := tenantOf(ctx)
 	values := map[string]*structpb.Value{}
-	if s.bundledFields != nil && (req.ExtId == "" || req.ExtId == "bundled") {
-		for _, cf := range s.bundledFields.ConfigFields() {
-			if v, ok := configOrEmptyOK(cfgProvider(s.config), tenant, cf.Name); ok {
-				values[cf.Name] = structpb.NewStringValue(v)
+	var secretSet []string
+	// The declared config surface of the requested extension (bundled or a
+	// discovered NATS extension).
+	var fields []bundled.ConfigField
+	if req.ExtId == "" || req.ExtId == "bundled" {
+		if s.bundledFields != nil {
+			fields = s.bundledFields.ConfigFields()
+		}
+	} else if s.tools != nil {
+		fields = s.tools.ExtensionConfigFields(req.ExtId)
+	}
+	for _, cf := range fields {
+		v, ok := configOrEmptyOK(cfgProvider(s.config), tenant, cf.Name)
+		if isSecretField(cf) {
+			// Withhold the value; only disclose that it is set.
+			if ok && v != "" {
+				secretSet = append(secretSet, cf.Name)
 			}
+			continue
+		}
+		if ok {
+			values[cf.Name] = structpb.NewStringValue(v)
 		}
 	}
-	return &agentv1.GetExtensionConfigResponse{Values: values}, nil
+	return &agentv1.GetExtensionConfigResponse{Values: values, SecretSet: secretSet}, nil
 }
 
 // GetToolConfig returns the aggregate `{toolName: {knob: value}}` config surface
@@ -115,6 +170,10 @@ func (s *Server) GetToolConfig(ctx context.Context, _ *agentv1.GetToolConfigRequ
 		for _, d := range s.tools.Tools() {
 			bucket := map[string]any{}
 			for _, knob := range d.RequiredConfig {
+				// A secret knob's value is withheld (it must never reach a client).
+				if s.isSecretKnob(d.ExtID, knob) {
+					continue
+				}
 				if v, ok := configOrEmptyOK(cfgProvider(s.config), tenant, knob); ok {
 					bucket[knob] = v
 				}

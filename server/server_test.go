@@ -23,6 +23,12 @@ const adminToken = "admin-secret"
 var seededFor []string
 
 func newTestServer(t *testing.T) (*httptest.Server, *store.DB) {
+	ts, db, _ := newTestServerWithSrv(t)
+	return ts, db
+}
+
+// newTestServerWithSrv also returns the *Server so a test can install stubs.
+func newTestServerWithSrv(t *testing.T) (*httptest.Server, *store.DB, *Server) {
 	t.Helper()
 	db, err := store.Open(store.SQLite, ":memory:")
 	if err != nil {
@@ -60,7 +66,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.DB) {
 	ts.Config.Protocols = proto
 	ts.Start()
 	t.Cleanup(ts.Close)
-	return ts, db
+	return ts, db, srv
 }
 
 func clientFor(t *testing.T, ts *httptest.Server, token string) agentv1connect.AgentServiceClient {
