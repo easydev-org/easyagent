@@ -56,23 +56,12 @@ func (d *DB) IsInChain(tenant, tipID, targetID string) (bool, error) {
 	if tipID == targetID {
 		return true, nil
 	}
-	const maxHops = 1_000_000
-	cur := tipID
-	for i := 0; i < maxHops && cur != ""; i++ {
-		m, ok, err := d.GetMessage(tenant, cur)
-		if err != nil {
-			return false, err
-		}
-		if !ok || m.PrevID == nil {
-			return false, nil
-		}
-		cur = *m.PrevID
-		if cur == targetID {
-			return true, nil
-		}
-	}
-	return false, nil
+	// One recursive query (never one SELECT per hop).
+	return d.chainContains(tenant, tipID, targetID, maxChainDepth)
 }
+
+// maxChainDepth bounds a recursive walk (guards against a cyclic link).
+const maxChainDepth = 100_000
 
 // Chain walks the prev_id chain backwards from tip (or from before's
 // predecessor), newest→oldest, up to limit, then returns oldest-first.
@@ -94,20 +83,17 @@ func (d *DB) Chain(tenant, tipID string, limit int, before string) ([]Message, e
 	if limit <= 0 {
 		limit = 50
 	}
-	out := make([]Message, 0, limit)
-	for len(out) < limit && cursor != "" {
-		m, ok, err := d.GetMessage(tenant, cursor)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
+	// One recursive query (never one SELECT per hop).
+	nodes, err := d.chainNodes(tenant, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Message, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, n.message())
+		if len(out) >= limit {
 			break
 		}
-		out = append(out, *m)
-		if m.PrevID == nil {
-			break
-		}
-		cursor = *m.PrevID
 	}
 	reverse(out)
 	return out, nil
@@ -133,26 +119,18 @@ func (d *DB) DeltaSince(tenant, tipID, anchorID string, limit int) (Delta, error
 	if limit <= 0 {
 		limit = 50
 	}
-	out := make([]Message, 0, limit)
-	cursor := tipID
-	for cursor != "" {
-		m, ok, err := d.GetMessage(tenant, cursor)
-		if err != nil {
-			return Delta{}, err
-		}
-		if !ok {
-			break
-		}
-		if m.ID == anchorID {
+	// One recursive query (never one SELECT per hop).
+	nodes, err := d.chainNodes(tenant, tipID, limit+1)
+	if err != nil {
+		return Delta{}, err
+	}
+	out := make([]Message, 0, len(nodes))
+	for _, n := range nodes {
+		if n.ID == anchorID {
 			reverse(out)
 			return Delta{Messages: out, AnchorReached: true}, nil
 		}
-		out = append(out, *m)
-		if m.PrevID == nil {
-			reverse(out)
-			return Delta{Messages: out, ReachedRoot: true}, nil
-		}
-		cursor = *m.PrevID
+		out = append(out, n.message())
 		if len(out) > limit {
 			break
 		}
