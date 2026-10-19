@@ -54,7 +54,7 @@ func TestSessionCRUDAndCounters(t *testing.T) {
 		t.Errorf("tip = %q", tip)
 	}
 	// SetTip does NOT bump message_seq.
-	if err := d.SetTip("t1", "s1", ptr("m1")); err != nil {
+	if _, err := d.SetTip("t1", "s1", ptr("m1")); err != nil {
 		t.Fatal(err)
 	}
 	s, _, _ = d.GetSession("t1", "s1")

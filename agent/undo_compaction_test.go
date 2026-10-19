@@ -91,7 +91,7 @@ func TestUndoRecentMessage_KeepsCheckpoint(t *testing.T) {
 	if !ok || m.Role != "assistant" {
 		t.Fatalf("expected a2 as tip, got %+v", m)
 	}
-	if err := db.SetTip("t1", "s1", m.PrevID); err != nil {
+	if _, err := db.SetTip("t1", "s1", m.PrevID); err != nil {
 		t.Fatal(err)
 	}
 	texts := rebuild(t, db)
@@ -120,7 +120,7 @@ func TestUndoToTailBoundary_RollsBackCompaction(t *testing.T) {
 	db, _ := seedCompacted(t)
 
 	// Undo u2 (the tail boundary) — the checkpoint sits after u2, so it goes too.
-	if err := db.SetTip("t1", "s1", strOrNil("u2")); err != nil {
+	if _, err := db.SetTip("t1", "s1", strOrNil("u2")); err != nil {
 		t.Fatal(err)
 	}
 	texts := rebuild(t, db)
@@ -151,7 +151,7 @@ func TestUndoToTailBoundary_RollsBackCompaction(t *testing.T) {
 func TestUndoIntoCompaction_UndoTailBoundary(t *testing.T) {
 	db, _ := seedCompacted(t)
 
-	if err := db.SetTip("t1", "s1", strOrNil("a1")); err != nil { // undo u2 + a2
+	if _, err := db.SetTip("t1", "s1", strOrNil("a1")); err != nil { // undo u2 + a2
 		t.Fatal(err)
 	}
 	texts := rebuild(t, db)
@@ -184,7 +184,7 @@ func TestUndoTheCompactionItself(t *testing.T) {
 	if cpID == "" {
 		t.Fatal("no checkpoint found")
 	}
-	if err := db.SetTip("t1", "s1", strOrNil(cpPrev)); err != nil {
+	if _, err := db.SetTip("t1", "s1", strOrNil(cpPrev)); err != nil {
 		t.Fatal(err)
 	}
 	texts := rebuild(t, db) // must not panic

@@ -97,9 +97,15 @@ func (d *DB) SessionTip(tenant, name string) (string, error) {
 
 // SetTip moves the chain tip WITHOUT bumping message_seq (an undo/withdraw is
 // not a new message).
-func (d *DB) SetTip(tenant, name string, tipID *string) error {
-	return d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
-		Updates(map[string]any{"tip_id": tipID, "updated_at": nowStr()}).Error
+//
+// It returns the `updated_at` it wrote, so a caller that already holds the row
+// can patch it in memory instead of re-reading the row (undo used to issue a
+// second GetSession purely to return the refreshed session to the client).
+func (d *DB) SetTip(tenant, name string, tipID *string) (updatedAt string, err error) {
+	updatedAt = nowStr()
+	err = d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+		Updates(map[string]any{"tip_id": tipID, "updated_at": updatedAt}).Error
+	return updatedAt, err
 }
 
 // AppendMessageTip atomically sets tip_id AND bumps message_seq, returning the

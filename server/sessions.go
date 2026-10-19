@@ -211,10 +211,14 @@ func (s *Server) Undo(ctx context.Context, req *agentv1.UndoRequest) (*agentv1.U
 			}
 		}
 	}
-	if err := s.db.SetTip(tenant, req.Id, newTip); err != nil {
+	updatedAt, err := s.db.SetTip(tenant, req.Id, newTip)
+	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	row, _, _ = s.db.GetSession(tenant, req.Id)
+	// Patch the row we already read instead of re-reading it: SetTip only
+	// changes tip_id + updated_at, and it hands back the timestamp it wrote.
+	row.TipID = newTip
+	row.UpdatedAt = updatedAt
 	return &agentv1.UndoResponse{Session: sessionToMsg(*row, "idle")}, nil
 }
 
