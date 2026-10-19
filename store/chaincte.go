@@ -66,6 +66,13 @@ func (d *DB) chainNodes(tenant, startID string, maxDepth int) ([]chainNode, erro
 
 // chainContains reports whether target is reachable from startID by following
 // prev_id (one recursive query).
+//
+// Undo calls this to validate "is this message an ancestor of the tip?". It
+// used to be `SELECT COUNT(*) FROM chain`, which forces the recursion to walk
+// the WHOLE chain: a 1000-message session took ~300ms per undo. The outer
+// `SELECT 1 ... LIMIT 1` lets the recursive CTE stop as soon as a produced row
+// matches, which is the common case (an undo usually targets a recent message,
+// i.e. the target sits near the tip). `maxDepth` still bounds a cyclic link.
 func (d *DB) chainContains(tenant, startID, targetID string, maxDepth int) (bool, error) {
 	const sqlText = `WITH RECURSIVE chain(id, depth) AS (
   SELECT id, 0 FROM messages WHERE tenant = ? AND id = ?
@@ -74,18 +81,18 @@ func (d *DB) chainContains(tenant, startID, targetID string, maxDepth int) (bool
   FROM chain c JOIN messages m ON m.id = c.id
   WHERE c.depth < ? AND m.prev_id IS NOT NULL
 )
-SELECT COUNT(*) FROM chain WHERE id = ?`
-	var n int64
+SELECT 1 AS found FROM chain WHERE id = ? LIMIT 1`
+	var found []int64
 	err := d.g.Transaction(func(tx *gorm.DB) error {
 		if d.backend == MySQL && maxDepth > 1000 {
 			if e := tx.Exec(fmt.Sprintf("SET SESSION cte_max_recursion_depth = %d", maxDepth+1)).Error; e != nil {
 				return e
 			}
 		}
-		return tx.Raw(sqlText, tenant, startID, maxDepth, targetID).Scan(&n).Error
+		return tx.Raw(sqlText, tenant, startID, maxDepth, targetID).Scan(&found).Error
 	})
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	return len(found) > 0, nil
 }

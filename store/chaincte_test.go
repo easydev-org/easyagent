@@ -89,3 +89,44 @@ func seq(n int) []int {
 	}
 	return out
 }
+
+// TestIsInChainSemantics pins the exact answers after the LIMIT 1 rewrite:
+// true for the tip and every ancestor, false for a stranger and for a
+// descendant (a message that came AFTER the queried start).
+func TestIsInChainSemantics(t *testing.T) {
+	d := newTestDB(t)
+	const n = 40
+	roles := make([]string, n)
+	for i := range roles {
+		roles[i] = "user"
+	}
+	tip, logical := buildChain(t, d, "t", roles, seq(n))
+
+	// Every member is reachable from the tip.
+	for _, id := range logical {
+		ok, err := d.IsInChain("t", tip, id)
+		if err != nil {
+			t.Fatalf("IsInChain(%s): %v", id, err)
+		}
+		if !ok {
+			t.Errorf("IsInChain(%s) = false, want true", id)
+		}
+	}
+	// The tip itself (short-circuit at depth 0).
+	if ok, _ := d.IsInChain("t", tip, tip); !ok {
+		t.Error("IsInChain(tip, tip) = false")
+	}
+	// A stranger.
+	if ok, _ := d.IsInChain("t", tip, "no-such-message"); ok {
+		t.Error("IsInChain(stranger) = true")
+	}
+	// Walking from a MID-chain message must NOT reach a later one.
+	mid := logical[n/2]
+	later := logical[n/2+1]
+	if ok, _ := d.IsInChain("t", mid, later); ok {
+		t.Errorf("IsInChain(%s -> %s) = true; a descendant is not an ancestor", mid, later)
+	}
+	if ok, _ := d.IsInChain("t", mid, logical[0]); !ok {
+		t.Errorf("IsInChain(%s -> root) = false, want true", mid)
+	}
+}
