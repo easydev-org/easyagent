@@ -73,7 +73,7 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
-		Lease: NewMemoryLease(), Emit: rec,
+		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 		// A tiny window so 90% is crossed immediately.
 		ContextLimit: 500, CompactAtFraction: 0.9,
 	})
@@ -122,7 +122,7 @@ func TestNoProactiveCompactionWithoutLimit(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
-		Lease: NewMemoryLease(), Emit: rec, // no ContextLimit
+		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{}, // no ContextLimit
 	})
 	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
@@ -175,7 +175,7 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
-		Lease: NewMemoryLease(), Emit: rec,
+		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 		// No window limit; only the absolute force threshold applies.
 		ForceCompactTokens: 100,
 	})

@@ -8,10 +8,17 @@ import (
 
 // sessionToMsg maps a store row to the proto Session.
 func sessionToMsg(s store.Session, status string) *agentv1.Session {
+	// A session row created before the preset default was enforced may have an
+	// empty preset. Report the default rather than an empty string so the UI
+	// always has a preset to resolve its system prompt from.
+	preset := s.Preset
+	if preset == "" {
+		preset = DefaultPreset
+	}
 	msg := &agentv1.Session{
 		Name:             s.Name,
 		Model:            s.Model,
-		Preset:           s.Preset,
+		Preset:           preset,
 		MaxTurns:         int32(s.MaxTurns),
 		SystemPrompt:     s.SystemPrompt,
 		LastInputTokens:  int32(s.LastInputTokens),

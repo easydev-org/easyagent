@@ -7,10 +7,13 @@ import (
 	"connectrpc.com/connect/v2"
 	"github.com/easydev-org/easyagent/agent"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
+	"github.com/easydev-org/easyagent/store"
 )
 
 // DefaultPreset is the built-in fallback preset id (mirrors the TS agent).
-const DefaultPreset = "default"
+// It aliases store.DefaultPreset so the store (which also enforces the
+// "every session has a preset" invariant) and the server cannot drift.
+const DefaultPreset = store.DefaultPreset
 
 // ListPresets lists presets (system + user), localizing the prompt when asked.
 func (s *Server) ListPresets(ctx context.Context, req *agentv1.ListPresetsRequest) (*agentv1.ListPresetsResponse, error) {

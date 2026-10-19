@@ -70,6 +70,7 @@ func TestLeaseLossAbortsTurn(t *testing.T) {
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: lease, LeaseTTL: 30 * time.Millisecond, Emit: &recorder{},
+		Presets: stubPresets{},
 	})
 	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	start := time.Now()
@@ -106,6 +107,7 @@ func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), InterruptWatch: watch, Emit: &recorder{},
+		Presets: stubPresets{},
 	})
 	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	start := time.Now()
@@ -139,7 +141,7 @@ func TestDrainLoopChainsWithoutReleasingLease(t *testing.T) {
 	lease := NewMemoryLease()
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
-		Lease: lease, Emit: &recorder{}, MaxTurns: 2,
+		Lease: lease, Emit: &recorder{}, MaxTurns: 2, Presets: stubPresets{},
 	})
 	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
@@ -168,7 +170,7 @@ func TestRecoverOnBootWakesPending(t *testing.T) {
 	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "left over"}, "user")
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
-		Lease: NewMemoryLease(), Emit: &recorder{},
+		Lease: NewMemoryLease(), Emit: &recorder{}, Presets: stubPresets{},
 	})
 	rt.RecoverOnBoot(context.Background())
 	if p, _ := db.HasPending("t1", "s1"); p {

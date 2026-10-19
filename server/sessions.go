@@ -251,6 +251,9 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	if preset == "" {
 		preset = parent.Preset
 	}
+	if preset == "" {
+		preset = DefaultPreset
+	}
 	in := store.SessionInput{
 		Name: req.Name, Model: parent.Model, Variant: parent.Variant, Preset: preset,
 		TipID: forkTip, SystemPrompt: parent.SystemPrompt, MaxTurns: parent.MaxTurns,

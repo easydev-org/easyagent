@@ -54,7 +54,7 @@ func TestTurnRecoversFromContextOverflow(t *testing.T) {
 
 	rt := NewRuntime(RuntimeDeps{
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
-		Lease: NewMemoryLease(), Emit: &recorder{}, MaxTurns: 3,
+		Lease: NewMemoryLease(), Emit: &recorder{}, MaxTurns: 3, Presets: stubPresets{},
 	})
 	// Force compaction to actually fold by shrinking the tail budget.
 	rt.compactTailTokens = 1
