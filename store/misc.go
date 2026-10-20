@@ -220,8 +220,58 @@ func (d *DB) ListAdminTokens(scopeTenant string) ([]AdminToken, error) {
 
 // RevokeAdminToken marks a delegated admin token revoked.
 func (d *DB) RevokeAdminToken(tokenID string) error {
-	return d.g.Model(&AdminToken{}).Where("token_id = ?", tokenID).
-		Update("revoked_at", nowStr()).Error
+	// Revoking DELETES the row. A revoked token is a dead credential: keeping it
+	// only lets the UI render a tombstone ("revoked") that nobody can act on, and
+	// leaves a row that every lookup has to filter out.
+	return d.g.Where("token_id = ?", tokenID).Delete(&AdminToken{}).Error
+}
+
+// ---- session tokens ----
+
+// CreateSessionToken stores a new session credential (only its sha256).
+func (d *DB) CreateSessionToken(sha, role, tenantID, scope, label string) (string, error) {
+	id := newID()
+	t := SessionToken{
+		TokenID: id, TokenSHA256: sha, Role: role,
+		TenantID: tenantID, Scope: scope, Label: label, CreatedAt: nowStr(),
+	}
+	if err := d.g.Create(&t).Error; err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SessionTokenBySHA resolves a presented credential. It returns the row plus
+// the tenant (nil for a platform admin) so the middleware needs no second query.
+func (d *DB) SessionTokenBySHA(sha string) (*SessionToken, *Tenant, bool, error) {
+	var tok SessionToken
+	err := d.g.Where("token_sha256 = ?", sha).First(&tok).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if tok.TenantID == "" {
+		return &tok, nil, true, nil
+	}
+	t, ok, terr := d.GetTenant(tok.TenantID)
+	if terr != nil || !ok {
+		return &tok, nil, false, terr
+	}
+	return &tok, t, true, nil
+}
+
+// TouchSessionToken records last use (best effort).
+func (d *DB) TouchSessionToken(tokenID string) {
+	_ = d.g.Model(&SessionToken{}).Where("token_id = ?", tokenID).
+		Update("last_used_at", nowStr()).Error
+}
+
+// DeleteSessionTokensForTenant drops every session of a tenant. Used when the
+// tenant is disabled or deleted, so a live session cannot outlive it.
+func (d *DB) DeleteSessionTokensForTenant(tenantID string) error {
+	return d.g.Where("tenant_id = ?", tenantID).Delete(&SessionToken{}).Error
 }
 
 // GetTenant returns (tenant, true) or (nil, false).
@@ -318,8 +368,8 @@ func (d *DB) RenameToken(tokenID, label string) error {
 
 // RevokeToken marks a token revoked.
 func (d *DB) RevokeToken(tokenID string) error {
-	return d.g.Model(&TenantToken{}).Where("token_id = ?", tokenID).
-		Update("revoked_at", nowStr()).Error
+	// Deleting, not tombstoning — see RevokeAdminToken.
+	return d.g.Where("token_id = ?", tokenID).Delete(&TenantToken{}).Error
 }
 
 // ---- Files ----

@@ -790,6 +790,18 @@ message LoginResponse {
   string tenant = 3;
   // Human-readable tenant name.
   string tenant_name = 4;
+  // session_token is the credential to present on every SUBSEQUENT call
+  // ("Authorization: Bearer <session_token>").
+  //
+  // The username+token PAIR is exchanged here once, and only once. Why:
+  //   * the pair's secret may be a short, human-chosen label, and presenting it
+  //     on every RPC would send a guessable string constantly;
+  //   * this token is random and GLOBALLY UNIQUE, so the per-call middleware can
+  //     resolve a caller from the token alone — no username, and no ambiguity
+  //     when two tenants happen to pick the same label.
+  // It is null when the caller used the static platform admin token (that
+  // credential is presented directly, as before).
+  string session_token = 5;
 }
 
 message CreateAdminTokenRequest {

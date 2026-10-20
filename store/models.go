@@ -137,6 +137,37 @@ type AdminToken struct {
 
 func (AdminToken) TableName() string { return "admin_tokens" }
 
+// SessionToken is the credential an API call actually presents.
+//
+// Login exchanges a PAIR (username + secret) for one of these. Why a second
+// layer exists:
+//
+//   - The PAIR is what a human types, and its secret may be a short, guessable
+//     label. Presenting it on every RPC would mean the guessable string travels
+//     constantly AND that two tenants choosing the same label collide in the
+//     lookup.
+//   - This token is globally unique and random, so the per-RPC middleware can
+//     resolve a caller from it alone (no username, no ambiguity).
+//
+// Only the sha256 of the random token is stored; the plaintext is returned once
+// by Login and kept by the client.
+type SessionToken struct {
+	TokenID     string `gorm:"column:token_id;primaryKey;size:64"`
+	TokenSHA256 string `gorm:"column:token_sha256;size:64;uniqueIndex"`
+	// Role is "tenant" or "admin" — the identity the pair resolved to.
+	Role string `gorm:"column:role;size:16"`
+	// TenantID is the tenant the caller acts as ("" for a platform admin).
+	TenantID string `gorm:"column:tenant_id;size:64;index"`
+	// Scope is the admin scope ("*" or a subtree root); "" for a tenant.
+	Scope string `gorm:"column:scope;size:64"`
+	// Label is a human note (e.g. the username that logged in), never a secret.
+	Label      string  `gorm:"column:label"`
+	CreatedAt  string  `gorm:"column:created_at"`
+	LastUsedAt *string `gorm:"column:last_used_at"`
+}
+
+func (SessionToken) TableName() string { return "session_tokens" }
+
 // TenantToken is a bearer credential minted for one tenant. Only its sha256 is
 // stored (a DB compromise yields no usable credential).
 type TenantToken struct {

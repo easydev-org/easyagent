@@ -76,7 +76,7 @@ func TestDelegationScopeBlocksForeignTenants(t *testing.T) {
 	ctx := context.Background()
 	_, _ = admin.CreateTenant(ctx, &agentv1.CreateTenantRequest{Id: "downA", Name: "A"})
 	_, _ = admin.CreateTenant(ctx, &agentv1.CreateTenantRequest{Id: "downB", Name: "B"})
-	at, _ := admin.CreateAdminToken(ctx, &agentv1.CreateAdminTokenRequest{ScopeTenantId: "downA"})
+	at, _ := admin.CreateAdminToken(ctx, &agentv1.CreateAdminTokenRequest{ScopeTenantId: "downA", Label: "subA"})
 	sub := adminWithToken(ts, at.Plaintext)
 
 	// Managing a tenant OUTSIDE the scope is PermissionDenied.
@@ -104,7 +104,7 @@ func TestDelegatedAdminTokenAuth(t *testing.T) {
 	admin := adminWithToken(ts, adminToken)
 	ctx := context.Background()
 	_, _ = admin.CreateTenant(ctx, &agentv1.CreateTenantRequest{Id: "downA"})
-	at, _ := admin.CreateAdminToken(ctx, &agentv1.CreateAdminTokenRequest{ScopeTenantId: "downA"})
+	at, _ := admin.CreateAdminToken(ctx, &agentv1.CreateAdminTokenRequest{ScopeTenantId: "downA", Label: "subA"})
 
 	// The delegated token resolves to role admin (GetIdentity).
 	id, err := clientFor(t, ts, at.Plaintext).GetIdentity(ctx, &agentv1.GetIdentityRequest{})
@@ -127,7 +127,7 @@ func TestRevokeAdminToken(t *testing.T) {
 	admin := adminWithToken(ts, adminToken)
 	ctx := context.Background()
 	_, _ = admin.CreateTenant(ctx, &agentv1.CreateTenantRequest{Id: "downA"})
-	at, _ := admin.CreateAdminToken(ctx, &agentv1.CreateAdminTokenRequest{ScopeTenantId: "downA"})
+	at, _ := admin.CreateAdminToken(ctx, &agentv1.CreateAdminTokenRequest{ScopeTenantId: "downA", Label: "subA"})
 
 	sub := adminWithToken(ts, at.Plaintext)
 	if _, err := sub.ListTenants(ctx, &agentv1.ListTenantsRequest{}); err != nil {

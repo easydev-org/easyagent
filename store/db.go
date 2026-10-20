@@ -71,7 +71,7 @@ func (d *DB) Migrate() error {
 	if err := d.g.AutoMigrate(
 		&Session{}, &Message{}, &Part{}, &Mailbox{},
 		&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
-		&BundledTodo{}, &AdminToken{},
+		&BundledTodo{}, &AdminToken{}, &SessionToken{},
 	); err != nil {
 		return err
 	}

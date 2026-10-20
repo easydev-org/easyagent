@@ -72,7 +72,14 @@ func (s *Server) Login(ctx context.Context, req *agentv1.LoginRequest) (*agentv1
 		if !s.usernameMatchesTenant(username, scope) {
 			return nil, connect.NewError(connect.CodeUnauthenticated, "invalid username or token")
 		}
-		return &agentv1.LoginResponse{Role: "admin", Scope: scope}, nil
+		// Mint the SESSION credential the client will actually present: the
+		// username+token pair is only ever exchanged here, so a guessable token
+		// never travels on ordinary RPCs.
+		sess, err := s.mintSession("admin", "", scope, username)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error())
+		}
+		return &agentv1.LoginResponse{Role: "admin", Scope: scope, SessionToken: sess}, nil
 	}
 	// Tenant token: the username is the tenant id or name.
 	ten, tok, ok, err := s.db.TenantByTokenSHA(sha)
@@ -90,7 +97,53 @@ func (s *Server) Login(ctx context.Context, req *agentv1.LoginRequest) (*agentv1
 	if name == "" {
 		name = ten.ID
 	}
-	return &agentv1.LoginResponse{Role: "tenant", Tenant: ten.ID, TenantName: name}, nil
+	sess, err := s.mintSession("tenant", ten.ID, "", username)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	return &agentv1.LoginResponse{Role: "tenant", Tenant: ten.ID, TenantName: name, SessionToken: sess}, nil
+}
+
+// mintSession issues the random, GLOBALLY UNIQUE credential a client presents
+// on every later RPC. Only its sha256 is stored.
+func (s *Server) mintSession(role, tenantID, scope, label string) (string, error) {
+	plaintext := mintToken()
+	if _, err := s.db.CreateSessionToken(sha256Hex(plaintext), role, tenantID, scope, label); err != nil {
+		return "", err
+	}
+	return plaintext, nil
+}
+
+// claimTokenLabel validates a label that will BE the credential, and returns it.
+//
+// The label is now the secret a human types at login, and the login lookup is by
+// token alone (store.TenantByTokenSHA / AdminTokenBySHA both query sha256 and
+// take the first row). Two tenants sharing a label would therefore resolve to
+// whichever row came first — whoever logs in second would land in the OTHER
+// tenant's account. Requiring global uniqueness is what makes a label-as-secret
+// safe; there is deliberately no strength rule, because the label is expected to
+// be short and human-chosen.
+func (s *Server) claimTokenLabel(ctx context.Context, label string) (string, error) {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return "", connect.NewError(connect.CodeInvalidArgument,
+			"label is required: it is the token you will type at login")
+	}
+	// Collide with a TENANT token?
+	if _, _, ok, err := s.db.TenantByTokenSHA(sha256Hex(label)); err != nil {
+		return "", connect.NewError(connect.CodeInternal, err.Error())
+	} else if ok {
+		return "", connect.NewError(connect.CodeAlreadyExists,
+			"this label is already a token; choose a different one (labels are the login secret and must be unique)")
+	}
+	// Collide with a DELEGATED-ADMIN token?
+	if _, _, ok, err := s.db.AdminTokenBySHA(sha256Hex(label)); err != nil {
+		return "", connect.NewError(connect.CodeInternal, err.Error())
+	} else if ok {
+		return "", connect.NewError(connect.CodeAlreadyExists,
+			"this label is already a sub-admin token; choose a different one")
+	}
+	return label, nil
 }
 
 // usernameMatchesTenant reports whether username is the tenant's id or name.
@@ -176,8 +229,10 @@ func (s *Server) CreateTenant(ctx context.Context, req *agentv1.CreateTenantRequ
 	if err := s.db.CreateTenantScoped(id, req.Name, parent, rootScope); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	plaintext := mintToken()
-	if _, err := s.db.CreateToken(id, sha256Hex(plaintext), "tenant"); err != nil {
+	// The token a human will type is the tenant's own id (e.g. "acme"): the
+	// label IS the credential, so there is no second secret to lose.
+	plaintext := id
+	if _, err := s.db.CreateToken(id, sha256Hex(plaintext), plaintext); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	// Seed ALL deployment-pinned defaults for the runtime-created tenant (boot
@@ -244,7 +299,13 @@ func (s *Server) IssueTenantToken(ctx context.Context, req *agentv1.IssueTenantT
 	} else if !ok {
 		return nil, connect.NewError(connect.CodePermissionDenied, "tenant is outside your scope")
 	}
-	plaintext := mintToken()
+	// The LABEL is the credential. It must be globally unique because the login
+	// lookup is by token alone (see store.TenantByTokenSHA) — two tenants sharing
+	// a label would resolve to whichever row came first.
+	plaintext, err := s.claimTokenLabel(ctx, req.Label)
+	if err != nil {
+		return nil, err
+	}
 	id, err := s.db.CreateToken(req.TenantId, sha256Hex(plaintext), req.Label)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -335,7 +396,13 @@ func (s *Server) RotateTenantToken(ctx context.Context, req *agentv1.RotateTenan
 	if err := s.db.RevokeToken(req.TokenId); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	plaintext := mintToken()
+	// Rotating a label-as-credential token KEEPS the label (it is what the user
+	// knows) and replaces the row. The old row was just deleted, so the label is
+	// free again.
+	plaintext, err := s.claimTokenLabel(ctx, label)
+	if err != nil {
+		return nil, err
+	}
 	id, err := s.db.CreateToken(tenantID, sha256Hex(plaintext), label)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -379,7 +446,12 @@ func (s *Server) CreateAdminToken(ctx context.Context, req *agentv1.CreateAdminT
 	} else if !exists {
 		return nil, connect.NewError(connect.CodeNotFound, "scope tenant not found")
 	}
-	plaintext := mintToken()
+	// The LABEL is the credential (see claimTokenLabel): it must be unique
+	// across every tenant and admin token, because login resolves by token alone.
+	plaintext, err := s.claimTokenLabel(ctx, req.GetLabel())
+	if err != nil {
+		return nil, err
+	}
 	id, err := s.db.CreateAdminToken(target, sha256Hex(plaintext), req.Label)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())

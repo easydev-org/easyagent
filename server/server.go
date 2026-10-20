@@ -221,6 +221,21 @@ func (s *Server) AuthInterceptor() connect.ServerInterceptor {
 				ctx = context.WithValue(ctx, scopeKey{}, "*")
 				return next(ctx, spec, stream)
 			}
+			// SESSION token first: the credential Login hands back is random and
+			// globally unique, so it resolves a caller on its own. Checking it
+			// before the label-based tokens is what keeps a tenant's short,
+			// guessable label from ever being the thing presented per RPC.
+			if st, ten, ok, err := s.db.SessionTokenBySHA(sha256Hex(auth)); err != nil {
+				return connect.NewError(connect.CodeInternal, err.Error())
+			} else if ok {
+				if ten != nil && ten.Disabled {
+					return connect.NewError(connect.CodeUnauthenticated, "tenant is disabled")
+				}
+				s.db.TouchSessionToken(st.TokenID)
+				ctx = context.WithValue(ctx, tenantKey{}, st.TenantID)
+				ctx = context.WithValue(ctx, scopeKey{}, st.Scope)
+				return next(ctx, spec, stream)
+			}
 			// Delegated admin token: scoped to its subtree root.
 			if scope, atok, ok, err := s.db.AdminTokenBySHA(sha256Hex(auth)); err != nil {
 				return connect.NewError(connect.CodeInternal, err.Error())
