@@ -192,6 +192,42 @@ message ToolConfigField {
   // (text | image | video | speech | transcription | embedding | rerank |
   // realtime).
   string capability = 10;
+  // ---- structured knobs (type == "list" | "object") --------------------------
+  //
+  // fields types the SHAPE: the keys of an object, or of each list item when
+  // item_type == "object". With it a client renders a real form — one card per
+  // list item, a "+" to add one, a picker for an enum field — instead of a JSON
+  // textarea. Empty fields means the knob is untyped and stays a json blob,
+  // which is the backward-compatible behaviour for every older extension.
+  repeated ConfigFieldSchema fields = 11;
+  // item_type is the element type when type == "list"
+  // (object | string | number | boolean).
+  string item_type = 12;
+  // min_items / max_items bound a list (0 = unbounded).
+  int32 min_items = 13;
+  int32 max_items = 14;
+}
+
+// ConfigFieldSchema is ONE key of a structured config value.
+//
+// It mirrors the extension protocol's message of the same name: `enum` becomes a
+// picker (os -> linux|windows|macos|android), `kind: secret` a masked input,
+// `format: uri` a URL field. `fields` nests one level for an object field; both
+// this client and the extension stop at that depth on purpose.
+message ConfigFieldSchema {
+  string name = 1;
+  // type: string | number | boolean | enum | json | object
+  string type = 2;
+  // kind: value (default) | secret (never echoed back to a client)
+  string kind = 3;
+  // format narrows a string: uri | host | path | email | duration | semver
+  string format = 4;
+  repeated string enum_values = 5;
+  google.protobuf.Value default = 6;
+  bool required = 7;
+  string description = 8;
+  map<string, string> descriptions = 9;
+  repeated ConfigFieldSchema fields = 10;
 }
 
 // A tool's configured value.

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
+	"fmt"
+
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/easydev-org/easyagent/agent"
@@ -69,7 +71,39 @@ func configFieldToProto(cf bundled.ConfigField) *agentv1.ToolConfigField {
 	if cf.Default != "" && cf.Kind != bundled.ConfigKindSecret {
 		f.Default = structpb.NewStringValue(cf.Default)
 	}
+	// A structured knob ships its SHAPE so the console can render a form (a card
+	// per list item with a "+", a picker for an enum field) instead of a JSON
+	// textarea. Empty Fields keeps the old behaviour intact.
+	f.Fields = configFieldSchemas(cf.Fields)
+	f.ItemType = cf.ItemType
+	f.MinItems = int32(cf.MinItems)
+	f.MaxItems = int32(cf.MaxItems)
 	return f
+}
+
+// configFieldSchemas maps a structured knob's shape onto the wire type.
+//
+// It recurses the same shallow depth the extension declared: a field may be an
+// object, and the console renderer stops there on purpose rather than growing an
+// unbounded tree.
+func configFieldSchemas(in []bundled.ConfigFieldSpec) []*agentv1.ConfigFieldSchema {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*agentv1.ConfigFieldSchema, 0, len(in))
+	for _, f := range in {
+		s := &agentv1.ConfigFieldSchema{
+			Name: f.Name, Type: f.Type, Kind: f.Kind, Format: f.Format,
+			EnumValues: f.EnumValues, Required: f.Required,
+			Description: f.Description, Descriptions: f.Descriptions,
+		}
+		if f.Default != "" {
+			s.Default = structpb.NewStringValue(fmt.Sprintf("%v", f.Default))
+		}
+		s.Fields = configFieldSchemas(f.Fields)
+		out = append(out, s)
+	}
+	return out
 }
 
 // isSecretField reports whether a declared knob is a credential (its value is

@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -338,6 +339,9 @@ func configFieldSpecs(in []*easybus.ConfigFieldSchema) []bundled.ConfigFieldSpec
 		}
 		if f.Description != nil {
 			spec.Description = *f.Description
+		}
+		if f.Default != nil {
+			spec.Default = fmt.Sprintf("%v", f.Default.AsInterface())
 		}
 		spec.Fields = configFieldSpecs(f.GetFields())
 		out = append(out, spec)

@@ -77,6 +77,9 @@ type ConfigFieldSpec struct {
 	// Format narrows a string: uri | host | path | email | duration | semver.
 	Format       string
 	EnumValues   []string
+	// Default is the field's default rendered as text (a form hint; it is not the
+	// knob's stored value).
+	Default      string
 	Required     bool
 	Description  string
 	Descriptions map[string]string
