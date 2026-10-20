@@ -298,7 +298,49 @@ func manifestConfigFields(m *easybus.ExtensionManifest) []bundled.ConfigField {
 				f.Default = s
 			}
 		}
+		// Carry the SHAPE of a structured knob so the console can render a form.
+		// Without this a `list`/`object` knob degrades to a JSON textarea, which is
+		// exactly the hand-editing this exists to remove.
+		f.Fields = configFieldSpecs(c.Fields)
+		if c.ItemType != nil {
+			f.ItemType = *c.ItemType
+		}
+		if c.MinItems != nil {
+			f.MinItems = int(*c.MinItems)
+		}
+		if c.MaxItems != nil {
+			f.MaxItems = int(*c.MaxItems)
+		}
 		out = append(out, f)
+	}
+	return out
+}
+
+// configFieldSpecs maps the wire schema onto the agent's own type.
+//
+// It recurses the same shallow depth the extension declared: a field may be an
+// object, and the console renderer/validator stop there on purpose.
+func configFieldSpecs(in []*easybus.ConfigFieldSchema) []bundled.ConfigFieldSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]bundled.ConfigFieldSpec, 0, len(in))
+	for _, f := range in {
+		spec := bundled.ConfigFieldSpec{
+			Name: f.GetName(), Type: f.GetType(), Required: f.GetRequired(),
+			EnumValues: f.GetEnumValues(), Descriptions: f.GetDescriptions(),
+		}
+		if f.Kind != nil {
+			spec.Kind = *f.Kind
+		}
+		if f.Format != nil {
+			spec.Format = *f.Format
+		}
+		if f.Description != nil {
+			spec.Description = *f.Description
+		}
+		spec.Fields = configFieldSpecs(f.GetFields())
+		out = append(out, spec)
 	}
 	return out
 }

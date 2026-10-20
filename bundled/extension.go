@@ -57,6 +57,30 @@ type ConfigField struct {
 	Kind        string
 	Capability  string
 	Default     string
+	// Fields types a STRUCTURED knob (Type "list" or "object"): the keys of the
+	// object / of each list item. Empty means "untyped" — the knob is a `json`
+	// blob and the console shows a JSON textarea, which is the backward-compatible
+	// behaviour for every extension that predates this.
+	Fields []ConfigFieldSpec
+	// ItemType is the element type when Type == "list".
+	ItemType string
+	MinItems int
+	MaxItems int
+}
+
+// ConfigFieldSpec is one key of a structured config value.
+type ConfigFieldSpec struct {
+	Name string
+	Type string
+	// Kind is "value" (default) or "secret".
+	Kind string
+	// Format narrows a string: uri | host | path | email | duration | semver.
+	Format       string
+	EnumValues   []string
+	Required     bool
+	Description  string
+	Descriptions map[string]string
+	Fields       []ConfigFieldSpec
 }
 
 // Config knob kinds. `Kind` is an open string on the wire; these are the

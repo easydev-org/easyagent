@@ -27,6 +27,13 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 	if s.tools != nil {
 		defs = append(defs, s.tools.Tools()...)
 	}
+	// Apply the SAME gate the turn plan applies. Without this, ListTools
+	// advertised every tool an extension declares — including ones whose
+	// required config is unset — while Plan() silently removed them at run time.
+	// The console therefore showed a full toolbox that did not work: "git-push"
+	// appeared, and an agent could never call it. Filtering here makes the
+	// advertised surface equal the runnable one.
+	defs = agent.FilterBlockedByConfig(defs, cfgProvider(s.config), tenant)
 	out := make([]*agentv1.ToolInfo, 0, len(defs))
 	for _, d := range defs {
 		// The tool's OWN name (TS `listTools` returns `t.name`, the raw name),

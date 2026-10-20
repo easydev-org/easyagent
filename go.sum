@@ -52,6 +52,10 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/easydev-org/easybus-sdk v0.2.0 h1:CZqV5HafDsPAOOyP86kyfPMoYAnrSoR6jXUYvxkbAxA=
 github.com/easydev-org/easybus-sdk v0.2.0/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
+github.com/easydev-org/easybus-sdk v0.3.0 h1:hbiG5St/JdX7SLL/yn266yQ0CB3HO79TXV8+gais8lA=
+github.com/easydev-org/easybus-sdk v0.3.0/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
+github.com/easydev-org/easybus-sdk v0.3.1 h1:9eaDB2WgBiGemuqj8yeu01aAoEU+3eFwXRir5WdsnEk=
+github.com/easydev-org/easybus-sdk v0.3.1/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
 github.com/gabriel-vasile/mimetype v1.4.15 h1:05iP/CYtZ/w455R/KZM6rZ5ieAdh99UPtd+d3YzLmaI=
 github.com/gabriel-vasile/mimetype v1.4.15/go.mod h1:azpTcoLcDZRNgFou5j+APrqQx9HqVPWa6ijYQIIVswQ=
 github.com/glebarez/go-sqlite v1.21.2 h1:3a6LFC4sKahUunAmynQKLZceZCOzUthkRkEAl9gAXWo=

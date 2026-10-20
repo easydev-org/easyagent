@@ -95,7 +95,7 @@ func Plan(ctx context.Context, deps RuntimeDeps, in PlanInput) (TurnPlan, error)
 	if deps.Registry != nil {
 		tools = FilterTools(deps.Registry.Tools(), whitelist, in.DeniedTools)
 		tools = filterByExtensionAllowlist(tools, deps, in.Tenant)
-		tools = filterBlockedByConfig(tools, deps.Config, in.Tenant)
+		tools = FilterBlockedByConfig(tools, deps.Config, in.Tenant)
 	}
 	return TurnPlan{System: system, Locale: locale, Tools: tools, MaxTurns: maxTurns}, nil
 }
@@ -126,9 +126,13 @@ func filterByExtensionAllowlist(tools []ToolDef, deps RuntimeDeps, tenant string
 	return out
 }
 
-// filterBlockedByConfig drops tools whose declared required config is unset: the
+// FilterBlockedByConfig drops tools whose declared required config is unset: the
 // model must not be offered a tool it cannot run.
-func filterBlockedByConfig(tools []ToolDef, cfg ConfigProvider, tenant string) []ToolDef {
+//
+// Exported because ListTools must apply the SAME gate: the console and the turn
+// plan have to agree on what is runnable, or the UI advertises tools that the
+// executor then refuses.
+func FilterBlockedByConfig(tools []ToolDef, cfg ConfigProvider, tenant string) []ToolDef {
 	if cfg == nil {
 		return tools
 	}
