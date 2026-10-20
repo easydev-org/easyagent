@@ -71,8 +71,10 @@ func TestInterruptRecordsReason(t *testing.T) {
 func TestLeaseLostRecordsReason(t *testing.T) {
 	srv, arrived := slowSSE(t)
 	rt, db := newCancelRuntime(t, srv.URL)
-	// A lease that reports LOST on the first renew, then stays lost.
-	rt.deps.Lease = &loseOnRenewLease{}
+	// The lease reports LOST only once `armed` is closed, which this test does
+	// after the turn has demonstrably started. See loseOnRenewLease.
+	lease := &loseOnRenewLease{armed: make(chan struct{})}
+	rt.deps.Lease = lease
 	rt.deps.LeaseTTL = 30 * time.Millisecond // renew at TTL/3 = 10ms
 
 	if _, err := db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user"); err != nil {
@@ -80,6 +82,8 @@ func TestLeaseLostRecordsReason(t *testing.T) {
 	}
 	go func() { _ = rt.Wake(context.Background(), "t1", "s1") }()
 	waitOrFail(t, arrived, "turn did not start")
+	// The turn is running now; losing the lease from here is unambiguous.
+	close(lease.armed)
 	waitReason(t, db, "t1", "s1", "locklost")
 }
 
@@ -153,27 +157,53 @@ func TestErrorClassification(t *testing.T) {
 	}
 }
 
-// loseOnRenewLease claims successfully but reports the lock LOST on renew.
-type loseOnRenewLease struct{}
+// loseOnRenewLease keeps the lock until `armed` is closed, then reports it LOST.
+//
+// Counting renews ("keep the first one") is still a timing guess: under -race with
+// the whole suite running, the turn's startup can take longer than the renew
+// interval and the lease is declared lost before the turn ever began — the test
+// then fails with "turn did not start", which describes scheduling, not lock loss.
+//
+// Arming is driven by the test itself: it closes `armed` only after the mock LLM
+// has actually received the request, so the loss is guaranteed to happen DURING a
+// running turn.
+type loseOnRenewLease struct {
+	armed chan struct{}
+}
 
 func (l *loseOnRenewLease) Claim(context.Context, string, string) (bool, error) { return true, nil }
-func (l *loseOnRenewLease) Renew(context.Context, string, string) (bool, error) { return false, nil }
-func (l *loseOnRenewLease) Release(context.Context, string, string) error       { return nil }
+
+func (l *loseOnRenewLease) Renew(context.Context, string, string) (bool, error) {
+	select {
+	case <-l.armed:
+		return false, nil // armed: the turn is running, so report the loss
+	default:
+		return true, nil
+	}
+}
+
+func (l *loseOnRenewLease) Release(context.Context, string, string) error { return nil }
 
 func waitOrFail(t *testing.T, wg *sync.WaitGroup, msg string) {
 	t.Helper()
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
+	// 10s, not 3s: these tests run under -race on a shared CI runner, where
+	// starting a turn (HTTP client, preset lookup, first SSE byte) routinely takes
+	// longer than on a developer machine. A 3s bound failed on CI while passing
+	// locally. It still bounds the wait — a turn that never starts is still caught.
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal(msg)
 	}
 }
 
 func waitReason(t *testing.T, db *store.DB, tenant, session, want string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// Same reasoning as waitOrFail: the reason is written after the turn unwinds,
+	// which is slower under -race on CI.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if s, ok, _ := db.GetSession(tenant, session); ok && s.LastTurnReason == want {
 			return
