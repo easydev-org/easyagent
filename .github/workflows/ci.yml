@@ -46,21 +46,35 @@ jobs:
       # compiles but cannot start is the failure this catches, and the unit tests
       # never see it.
       - name: boot the agent against a real broker
-        env:
-          NATS_URL: nats://127.0.0.1:4222
-          DB_BACKEND: sqlite
-          DATABASE_URL: /tmp/agent.db
-          AGENT_HEALTH_ADDR: 127.0.0.1:18081
-          PORT: "18080"
+        # The binary reads a YAML config (`-config`, else ./easyagent.yaml); it has
+        # NO environment-variable overrides. Passing PORT/DATABASE_URL here did
+        # nothing, so it tried to bind :8080 and open /data/agent.db — which is why
+        # the first attempt died with "unable to open database file" and the second
+        # with "address already in use".
         run: |
           go build -o /tmp/easyagent ./cmd/easyagent
-          /tmp/easyagent &
+          cat >agent.yaml <<'YAML'
+          server:
+            addr: "127.0.0.1:18080"
+            health_addr: "127.0.0.1:18081"
+          database:
+            backend: sqlite
+            dsn: "./agent-e2e.db"
+          nats:
+            url: "nats://127.0.0.1:4222"
+          auth:
+            mode: "none"
+          YAML
+          /tmp/easyagent -config agent.yaml >agent.log 2>&1 &
           pid=$!
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1; then
               echo "agent healthy"; kill $pid; exit 0
             fi
-            if ! kill -0 $pid 2>/dev/null; then echo "agent exited early"; exit 1; fi
+            if ! kill -0 $pid 2>/dev/null; then
+              echo "agent exited early; its output:"; cat agent.log; exit 1
+            fi
             sleep 1
           done
-          echo "agent never became healthy"; kill $pid 2>/dev/null || true; exit 1
+          echo "agent never became healthy; its output:"; cat agent.log
+          kill $pid 2>/dev/null || true; exit 1
