@@ -15,6 +15,9 @@ type ToolDef struct {
 	// RequiredConfig names config knobs whose value must be set for the tool to
 	// run; a tool with an unset required knob is HARD-DISABLED (not offered).
 	RequiredConfig []string
+	// Namespace groups this tool with siblings that do the same kind of job
+	// (pvc, build, storage, ...). Organisational: the name is unchanged.
+	Namespace string
 }
 
 // ToolRegistry supplies the tools a session may call. The production impl

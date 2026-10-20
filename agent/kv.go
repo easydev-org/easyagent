@@ -166,15 +166,87 @@ func decodePreset(raw string) (PresetRow, error) {
 // `locale`).
 type Config struct {
 	kv KV
+	mu sync.Mutex
+	// namespaces maps "<extID>.<knob>" -> the namespace that knob was DECLARED
+	// in, so a read addresses the same key a write used. Filled from the
+	// extensions' manifests; an unregistered knob reads as extension-level.
+	namespaces map[string]string
 }
 
 // NewConfig builds the config service over a KV.
 func NewConfig(kv KV) *Config { return &Config{kv: kv} }
 
-func cfgKey(tenant, key string) string { return "cfg." + tenant + "." + key }
+// SetKnobNamespaces records the declared namespace per "<extID>.<knob>".
+func (c *Config) SetKnobNamespaces(m map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.namespaces = m
+}
 
-// Get returns (value, true) or ("", false).
-func (c *Config) Get(tenant, key string) (string, bool) { return c.kv.Get(cfgKey(tenant, key)) }
+// knobNamespace is the declared namespace for one knob ("" = extension level).
+func (c *Config) knobNamespace(extID, name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.namespaces[extID+"."+name]
+}
 
-// Set writes a config value.
-func (c *Config) Set(tenant, key, value string) { c.kv.Put(cfgKey(tenant, key), value) }
+// ConfigExt reads a knob in its owning extension's scope.
+//
+// There is deliberately NO fallback to the tenant-wide key: a value stored by a
+// different extension must never satisfy this one, which is the entire point of
+// the namespaced key.
+func (c *Config) ConfigExt(tenant, extID, name string) (string, bool) {
+	return c.GetExt(tenant, extID, c.knobNamespace(extID, name), name)
+}
+
+// cfgKey is the storage address of one config value.
+//
+// The key is (tenant, extId, namespace, name) — NOT just (tenant, name).
+//
+// WHY the extension is in the key: the old flat `cfg.<tenant>.<name>` was a
+// single global namespace, so two extensions that declared a knob with the same
+// name silently shared one stored value. Setting `sandboxes` for git made the
+// sandbox extension report it as configured too. Namespacing by extension makes
+// that impossible.
+//
+// A knob with an empty extId keeps the LEGACY address (`cfg.<tenant>.<name>`):
+// that is the tenant-wide tier (locale, default_model, ...) which no extension
+// owns, and it is also what the migration reads.
+//
+// A knob with an empty namespace is EXTENSION-level: shared by every namespace
+// of that extension, which is what an endpoint/token knob wants.
+func cfgKey(tenant, extID, namespace, name string) string {
+	switch {
+	case extID == "":
+		return "cfg." + tenant + "." + name
+	case namespace == "":
+		return "cfg." + tenant + "." + extID + "." + name
+	default:
+		return "cfg." + tenant + "." + extID + "." + namespace + "." + name
+	}
+}
+
+// Get returns (value, true) or ("", false) for a TENANT-wide knob (no
+// extension). Extension knobs use GetExt.
+func (c *Config) Get(tenant, key string) (string, bool) {
+	return c.kv.Get(cfgKey(tenant, "", "", key))
+}
+
+// Set writes a tenant-wide config value.
+func (c *Config) Set(tenant, key, value string) {
+	c.kv.Put(cfgKey(tenant, "", "", key), value)
+}
+
+// GetExt returns an extension-scoped knob's value.
+func (c *Config) GetExt(tenant, extID, namespace, key string) (string, bool) {
+	return c.kv.Get(cfgKey(tenant, extID, namespace, key))
+}
+
+// SetExt writes an extension-scoped knob's value.
+func (c *Config) SetExt(tenant, extID, namespace, key, value string) {
+	c.kv.Put(cfgKey(tenant, extID, namespace, key), value)
+}
+
+// KeysWithPrefix exposes the underlying keys (the one-time namespace migration
+// needs to enumerate what exists).
+func (c *Config) KeysWithPrefix(prefix string) []string { return c.kv.Keys(prefix) }

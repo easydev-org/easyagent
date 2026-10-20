@@ -206,6 +206,13 @@ message ToolConfigField {
   // min_items / max_items bound a list (0 = unbounded).
   int32 min_items = 13;
   int32 max_items = 14;
+  // namespace scopes this knob's STORED VALUE to one namespace of the owning
+  // extension. Empty = extension-level, shared by every namespace of that
+  // extension (an endpoint/token knob).
+  //
+  // It is part of the storage address, so a client MUST round-trip it: a write
+  // without it lands in a different cell than the read.
+  string namespace = 15;
 }
 
 // ConfigFieldSchema is ONE key of a structured config value.
@@ -540,6 +547,28 @@ message ExtensionInfo {
   repeated ToolConfigField config_fields = 4;
   // The tool names this extension provides.
   repeated string tools = 5;
+  // namespaces declares the grouping this extension uses for its tools and
+  // config (pvc, build, storage, ...). Purely descriptive: a client uses it to
+  // lay the groups out in a stable order and to label them.
+  repeated ExtensionNamespace namespaces = 6;
+  // tools_detailed carries each tool WITH its namespace, so a client can group
+  // them. `tools` above stays for clients that only need the names.
+  repeated ExtensionToolInfo tools_detailed = 7;
+}
+
+// ExtensionNamespace is one declared grouping of an extension's surface.
+message ExtensionNamespace {
+  string name = 1;
+  string description = 2;
+  map<string, string> descriptions = 3;
+}
+
+// ExtensionToolInfo is one tool plus the namespace it belongs to.
+message ExtensionToolInfo {
+  string name = 1;
+  // namespace is empty when the tool is not grouped.
+  string namespace = 2;
+  string description = 3;
 }
 
 message ListExtensionsRequest {}

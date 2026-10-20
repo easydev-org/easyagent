@@ -213,6 +213,12 @@ func run(cfgPath string) error {
 
 	// RPC server (h1 + h2c) and the separate plain-HTTP health server.
 	mux := http.NewServeMux()
+	// Move any value still sitting in the OLD flat config namespace into its
+	// per-extension one. Run before serving so no request can observe the
+	// half-migrated state; idempotent, so a restart is harmless.
+	if n := srv.MigrateLegacyConfig(); n > 0 {
+		slog.Info("config migrated to per-extension namespaces", "values", n)
+	}
 	cs := connect.NewServer(srv.AuthInterceptor())
 	srv.Register(cs)
 	connecthttp.Mount(mux, cs, connecthttp.WithReadMaxBytes(cfg.Server.MaxBodyBytes))

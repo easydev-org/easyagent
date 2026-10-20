@@ -24,6 +24,20 @@ type ConfigProvider interface {
 	Config(tenant, key string) (string, bool)
 }
 
+// ExtConfigProvider additionally reads a knob in the scope of the extension that
+// declares it.
+//
+// WHY this is separate from Config: `required_config` is declared by a TOOL, so
+// the value that satisfies it belongs to that tool's extension. With the old flat
+// key, `git` was satisfied by a `sandboxes` value that the user had actually set
+// for the `sandbox` extension — the config appeared configured but the extension
+// it was meant for had nothing.
+type ExtConfigProvider interface {
+	// ConfigExt returns the value of `name` as declared by extension `extID`,
+	// using that knob's namespace ("" = extension level).
+	ConfigExt(tenant, extID, name string) (string, bool)
+}
+
 // ConfigStore adapts *Config to ConfigProvider.
 type ConfigStore struct{ C *Config }
 
@@ -137,10 +151,21 @@ func FilterBlockedByConfig(tools []ToolDef, cfg ConfigProvider, tenant string) [
 		return tools
 	}
 	out := make([]ToolDef, 0, len(tools))
+	extCfg, _ := cfg.(ExtConfigProvider)
 	for _, t := range tools {
 		blocked := false
 		for _, name := range t.RequiredConfig {
-			if v, ok := cfg.Config(tenant, name); !ok || v == "" {
+			// Resolve in the OWNING extension's scope when the provider can; fall
+			// back to the tenant-wide read for a provider that has no notion of
+			// extensions (tests, the memory store).
+			var v string
+			var ok bool
+			if extCfg != nil {
+				v, ok = extCfg.ConfigExt(tenant, t.ExtID, name)
+			} else {
+				v, ok = cfg.Config(tenant, name)
+			}
+			if !ok || v == "" {
 				blocked = true
 				break
 			}

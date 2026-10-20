@@ -66,6 +66,20 @@ type ConfigField struct {
 	ItemType string
 	MinItems int
 	MaxItems int
+	// Namespace scopes this knob's STORED VALUE to one namespace of the owning
+	// extension. Empty = extension-level (shared by all its namespaces).
+	Namespace string
+}
+
+// Namespace is one declared grouping of an extension's tools and config.
+//
+// A single extension commonly covers several unrelated jobs (an ops extension
+// that manages PVCs, builds images and runs jobs). The namespace is the unit a
+// client groups by, and for CONFIG it is also part of the storage address.
+type Namespace struct {
+	Name         string
+	Description  string
+	Descriptions map[string]string
 }
 
 // ConfigFieldSpec is one key of a structured config value.
@@ -75,8 +89,8 @@ type ConfigFieldSpec struct {
 	// Kind is "value" (default) or "secret".
 	Kind string
 	// Format narrows a string: uri | host | path | email | duration | semver.
-	Format       string
-	EnumValues   []string
+	Format     string
+	EnumValues []string
 	// Default is the field's default rendered as text (a form hint; it is not the
 	// knob's stored value).
 	Default      string

@@ -56,6 +56,12 @@ github.com/easydev-org/easybus-sdk v0.3.0 h1:hbiG5St/JdX7SLL/yn266yQ0CB3HO79TXV8
 github.com/easydev-org/easybus-sdk v0.3.0/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
 github.com/easydev-org/easybus-sdk v0.3.1 h1:9eaDB2WgBiGemuqj8yeu01aAoEU+3eFwXRir5WdsnEk=
 github.com/easydev-org/easybus-sdk v0.3.1/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
+github.com/easydev-org/easybus-sdk v0.4.0 h1:Rp7g2KP+zRsdttJdzaNjOggG5P3Mo1E0CAu25T9sWUE=
+github.com/easydev-org/easybus-sdk v0.4.0/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
+github.com/easydev-org/easybus-sdk v0.5.0 h1:9eDTaBD/MeOL+os2R8jmh6y6hA8ObsWFxjjk2EjEvVY=
+github.com/easydev-org/easybus-sdk v0.5.0/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
+github.com/easydev-org/easybus-sdk v0.5.1 h1:ir0x4SgrNHvovam7s0fb+dxglf4y+71iU0+0/bxc4Zg=
+github.com/easydev-org/easybus-sdk v0.5.1/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
 github.com/gabriel-vasile/mimetype v1.4.15 h1:05iP/CYtZ/w455R/KZM6rZ5ieAdh99UPtd+d3YzLmaI=
 github.com/gabriel-vasile/mimetype v1.4.15/go.mod h1:azpTcoLcDZRNgFou5j+APrqQx9HqVPWa6ijYQIIVswQ=
 github.com/glebarez/go-sqlite v1.21.2 h1:3a6LFC4sKahUunAmynQKLZceZCOzUthkRkEAl9gAXWo=

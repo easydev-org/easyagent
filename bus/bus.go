@@ -228,11 +228,13 @@ type ToolExecutor struct {
 	// discovered manifest), so the server can list + edit extension config
 	// without re-discovering. Populated by Refresh.
 	extFields map[string][]bundled.ConfigField
+	// extNS maps an extension id -> its DECLARED namespaces (in author order).
+	extNS map[string][]bundled.Namespace
 }
 
 // NewToolExecutor builds a tool executor over the agent role.
 func NewToolExecutor(a *abcagent.Agent) *ToolExecutor {
-	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}}
+	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}, extNS: map[string][]bundled.Namespace{}}
 }
 
 // Refresh discovers extensions and records tool -> extension ownership.
@@ -247,6 +249,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 		// Record the extension's declared config surface (for the config page),
 		// independent of whether it declares any tool.
 		e.extFields[m.Id] = manifestConfigFields(m)
+		// The declared grouping (pvc, build, ...), so a client can lay the surface
+		// out in the author's order instead of one flat list.
+		e.extNS[m.Id] = manifestNamespaces(m)
 		if m.Tools == nil {
 			continue
 		}
@@ -259,6 +264,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 			def.Descriptions = t.Descriptions
 			if t.RequiredConfig != nil {
 				def.RequiredConfig = t.RequiredConfig
+			}
+			if t.Namespace != nil {
+				def.Namespace = *t.Namespace
 			}
 			e.defs[t.Name] = def
 		}
@@ -311,6 +319,12 @@ func manifestConfigFields(m *easybus.ExtensionManifest) []bundled.ConfigField {
 		}
 		if c.MaxItems != nil {
 			f.MaxItems = int(*c.MaxItems)
+		}
+		// The namespace is what scopes the stored key, so it has to survive the
+		// manifest hop; without it every knob of an extension collapses into one
+		// flat namespace again.
+		if c.Namespace != nil {
+			f.Namespace = *c.Namespace
 		}
 		out = append(out, f)
 	}
@@ -601,4 +615,32 @@ func newCallID() string {
 	var b [12]byte
 	_, _ = rand.Read(b[:])
 	return "call_" + hex.EncodeToString(b[:])
+}
+
+// ExtensionNamespaces returns an extension's DECLARED namespaces, in the order
+// the author listed them.
+//
+// The order matters: it is what a client uses to lay the groups out, and an
+// author's ordering (services, build, storage, ...) reflects how the extension
+// is actually used.
+func (e *ToolExecutor) ExtensionNamespaces(extID string) []bundled.Namespace {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.extNS[extID]
+}
+
+// manifestNamespaces maps the wire declaration onto the agent's own type.
+func manifestNamespaces(m *easybus.ExtensionManifest) []bundled.Namespace {
+	if m == nil || len(m.Namespaces) == 0 {
+		return nil
+	}
+	out := make([]bundled.Namespace, 0, len(m.Namespaces))
+	for _, n := range m.Namespaces {
+		ns := bundled.Namespace{Name: n.GetName(), Descriptions: n.GetDescriptions()}
+		if n.Description != nil {
+			ns.Description = *n.Description
+		}
+		out = append(out, ns)
+	}
+	return out
 }
