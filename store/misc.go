@@ -299,9 +299,57 @@ func (d *DB) UpdateTenant(id string, name *string, disabled *bool) error {
 	return d.g.Model(&Tenant{}).Where("id = ?", id).Updates(patch).Error
 }
 
-// DeleteTenant removes a tenant row.
+// DeleteTenant removes a tenant AND everything that authenticates as it.
+//
+// Deleting only the tenant row used to leave orphan credentials behind: its
+// tenant tokens kept resolving (the lookup joins the tenant, so they became
+// dead), its delegated-admin tokens and live sessions stayed in the tables
+// forever, and a DOMAIN (a root with children) left its children pointing at a
+// parent that no longer existed. All of that is cleaned up here, in one
+// transaction.
+//
+// Children are deleted recursively so removing a domain removes its users —
+// which is what "delete this domain" has to mean, otherwise the users survive
+// as roots of a domain nobody can see.
 func (d *DB) DeleteTenant(id string) error {
-	return d.g.Where("id = ?", id).Delete(&Tenant{}).Error
+	return d.g.Transaction(func(tx *gorm.DB) error {
+		var ids []string
+		if err := collectSubtree(tx, id, &ids); err != nil {
+			return err
+		}
+		for _, tid := range ids {
+			if err := tx.Where("tenant_id = ?", tid).Delete(&TenantToken{}).Error; err != nil {
+				return err
+			}
+			// Sessions scoped to this tenant (role=tenant) and delegated-admin
+			// sessions whose scope is this tenant.
+			if err := tx.Where("tenant_id = ? OR scope = ?", tid, tid).Delete(&SessionToken{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("scope_tenant_id = ?", tid).Delete(&AdminToken{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id = ?", tid).Delete(&Tenant{}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// collectSubtree gathers id and every tenant below it (depth-first).
+func collectSubtree(tx *gorm.DB, id string, out *[]string) error {
+	*out = append(*out, id)
+	var kids []Tenant
+	if err := tx.Where("parent_id = ?", id).Find(&kids).Error; err != nil {
+		return err
+	}
+	for i := range kids {
+		if err := collectSubtree(tx, kids[i].ID, out); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateToken stores a token (sha256 only), returning its id.
