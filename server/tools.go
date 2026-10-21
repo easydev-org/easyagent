@@ -253,6 +253,16 @@ func (s *Server) GetExtensionConfig(ctx context.Context, req *agentv1.GetExtensi
 	tenant := tenantOf(ctx)
 	values := map[string]*structpb.Value{}
 	var secretSet []string
+	// Reading is also the moment to re-sync a running extension.
+	//
+	// The extension's copy is in memory: it is lost when the extension restarts,
+	// and it was never populated for values stored before the push existed. The
+	// console calls this on open, so pushing here repairs both cases without a
+	// separate timer. Internally: the extension's reply is what tells us it is
+	// actually listening.
+	if s.runtimeBus != nil && req.ExtId != "" && req.ExtId != "bundled" {
+		defer s.resyncExtensionConfig(ctx, tenant, req.ExtId)
+	}
 	// The declared config surface of the requested extension (bundled or a
 	// discovered NATS extension).
 	var fields []bundled.ConfigField
@@ -395,7 +405,46 @@ func (s *Server) SetExtensionConfig(ctx context.Context, req *agentv1.SetExtensi
 		extID = "bundled"
 	}
 	s.config.SetExt(tenant, extID, ns, req.Name, valueToString(req.Value))
+
+	// Push the value to the RUNNING extension.
+	//
+	// Persisting alone updates the store the console reads, but an extension keeps
+	// its own in-memory copy and only refreshes it on a ConfigSet from the agent.
+	// Without this the console showed a value as set while the extension kept
+	// answering "no sandboxes configured" — the setting was saved and invisible.
+	//
+	// bundled is skipped: it is in-process and reads the store directly.
+	if s.runtimeBus != nil && extID != "bundled" {
+		if err := s.runtimeBus.PushExtensionConfig(ctx, tenant, extID, req.Name, valueToString(req.Value), ""); err != nil {
+			// Report it: the value is stored but the extension did not take it, and
+			// silently succeeding would recreate the exact confusion this fixes.
+			return nil, connectErr(fmt.Errorf("config saved but the %s extension did not accept it: %w", extID, err))
+		}
+	}
 	return &agentv1.SetExtensionConfigResponse{Ok: true}, nil
+}
+
+// resyncExtensionConfig re-pushes every stored knob of an extension.
+//
+// The extension holds the values in memory and loses them on restart; values
+// stored before the push existed were never delivered at all. Re-sending on every
+// config read repairs both, and costs one small request per knob.
+//
+// Failures are ignored on purpose: this is a repair path, and a temporarily
+// absent extension must not make reading the config fail.
+func (s *Server) resyncExtensionConfig(ctx context.Context, tenant, extID string) {
+	if s.runtimeBus == nil || s.config == nil {
+		return
+	}
+	for _, cf := range s.knobFields(extID) {
+		v, ok := s.config.GetExt(tenant, extID, cf.Namespace, cf.Name)
+		if !ok || v == "" {
+			continue
+		}
+		if err := s.runtimeBus.PushExtensionConfig(ctx, tenant, extID, cf.Name, v, ""); err != nil {
+			return // the extension is not listening; nothing to repair
+		}
+	}
 }
 
 // knobFields lists an extension's declared config knobs (bundled or discovered).

@@ -543,6 +543,45 @@ func (b *Bus) PublishSessionEvent(ctx context.Context, tenant, session, id strin
 		bus.InboxPublishOpts{ID: id, SessionName: session, Tenant: tenant})
 }
 
+// PushExtensionConfig delivers one config value to a RUNNING extension.
+//
+// WHY this is required at all: an extension does not read the agent's config
+// store. It subscribes to easybus.<tenant>.config.<extId> and keeps its own
+// in-memory copy, which the SDK only refreshes when the agent sends a ConfigSet.
+// Writing the store alone therefore updates what the CONSOLE shows and nothing
+// else — the extension keeps answering "not configured" for a knob that is
+// plainly set.
+//
+// It is a REQUEST, not a publish: the SDK's serveConfig ignores a ConfigSet with
+// no ReplyTo, and the reply carries the extension's accept/reject verdict (a
+// OnConfigChange hook may refuse a value).
+func (b *Bus) PushExtensionConfig(ctx context.Context, tenant, extID, name string, value any, session string) error {
+	ack := true
+	set := easybus.ConfigSet{
+		Name:  name,
+		Value: easybus.Value(value),
+		Scope: easybus.ConfigSetScopeGlobal,
+		// Ask for the accept/reject reply.
+		//
+		// The SDK only publishes to ReplyTo when Ack is set, so without it a
+		// Request waits for a reply that never comes and the caller times out —
+		// even though the extension applied the value correctly. That is a nasty
+		// shape: the config works and every save reports failure.
+		Ack: &ack,
+	}
+	if tenant != "" {
+		t := tenant
+		set.Tenant = &t
+	}
+	if session != "" {
+		set.Scope = easybus.ConfigSetScopeSession
+		s := session
+		set.SessionName = &s
+	}
+	_, err := b.transport.Request(ctx, protocol.ChConfig(tenant, extID), set, bus.RequestOpts{Tenant: tenant})
+	return err
+}
+
 // SubscribeSessionEvents subscribes to a session's durable event stream. If
 // sinceSeq > 0 it first replays retained frames at/after that sequence, then
 // streams live (deduping by id). Returns a channel + a cancel func.
