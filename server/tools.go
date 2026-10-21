@@ -29,13 +29,17 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 	if s.tools != nil {
 		defs = append(defs, s.tools.Tools()...)
 	}
-	// Apply the SAME gate the turn plan applies. Without this, ListTools
-	// advertised every tool an extension declares — including ones whose
-	// required config is unset — while Plan() silently removed them at run time.
-	// The console therefore showed a full toolbox that did not work: "git-push"
-	// appeared, and an agent could never call it. Filtering here makes the
-	// advertised surface equal the runnable one.
-	defs = agent.FilterBlockedByConfig(defs, cfgProvider(s.config), tenant)
+	// List EVERY tool, including ones whose required config is unset.
+	//
+	// This used to mirror the turn plan's filter, to stop the console advertising
+	// tools the executor would refuse. The cure was worse: a tool that is absent
+	// cannot be discovered or configured, so the user saw a gap and had no way to
+	// learn WHICH knob it wanted. The console now shows every tool and greys out
+	// the runnable-blocked ones — the response already carries `required_config`
+	// and `config_fields` (with current values), which is all a client needs.
+	//
+	// The turn plan keeps the hard filter (agent.FilterBlockedByConfig): the model
+	// must never be offered a tool it cannot run.
 	out := make([]*agentv1.ToolInfo, 0, len(defs))
 	for _, d := range defs {
 		// The tool's OWN name (TS `listTools` returns `t.name`, the raw name),

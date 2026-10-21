@@ -140,12 +140,13 @@ func filterByExtensionAllowlist(tools []ToolDef, deps RuntimeDeps, tenant string
 	return out
 }
 
-// FilterBlockedByConfig drops tools whose declared required config is unset: the
-// model must not be offered a tool it cannot run.
+// FilterBlockedByConfig drops tools whose required config is unset: the MODEL must
+// never be offered a tool it cannot run.
 //
-// Exported because ListTools must apply the SAME gate: the console and the turn
-// plan have to agree on what is runnable, or the UI advertises tools that the
-// executor then refuses.
+// The console deliberately does NOT use this. ListTools returns the full set and
+// lets the client grey out the blocked ones, because a tool that vanishes from the
+// console cannot be discovered or configured — the user sees a gap and never learns
+// which knob to set.
 func FilterBlockedByConfig(tools []ToolDef, cfg ConfigProvider, tenant string) []ToolDef {
 	if cfg == nil {
 		return tools
