@@ -578,7 +578,10 @@ func (b *Bus) PushExtensionConfig(ctx context.Context, tenant, extID, name strin
 		s := session
 		set.SessionName = &s
 	}
-	_, err := b.transport.Request(ctx, protocol.ChConfig(tenant, extID), set, bus.RequestOpts{Tenant: tenant})
+	// Pointer, not value: ConfigSet embeds protoimpl.MessageState, which holds a
+	// sync.Mutex. Passing it by value copies a lock (`go vet` flags it, correctly —
+	// copying a mutex is undefined behaviour waiting for a timing to go wrong).
+	_, err := b.transport.Request(ctx, protocol.ChConfig(tenant, extID), &set, bus.RequestOpts{Tenant: tenant})
 	return err
 }
 
