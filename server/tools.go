@@ -54,14 +54,64 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 			info.Parameters = structFromMap(agent.LocalizeSchema(d.InputSchema, locale))
 		}
 		info.RequiredConfig = d.RequiredConfig
-		if s.bundledFields != nil {
-			for _, cf := range s.bundledFields.ConfigFieldsFor(d.Name) {
-				info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
-			}
-		}
+		// The knob surface of THIS tool.
+		//
+		// Both branches matter and only one used to exist: `bundled` is in-process
+		// and exposes its fields directly, while a NATS extension's surface lives in
+		// its manifest. Without the second branch every out-of-process tool reported
+		// zero config fields, so the console showed "no config" for tools that
+		// require one — and a structured knob (the sandbox list) could never render
+		// its form, because the SHAPE never arrived.
+		info.ConfigFields = append(info.ConfigFields, s.toolConfigFields(d)...)
 		out = append(out, info)
 	}
 	return &agentv1.ListToolsResponse{Tools: out}, nil
+}
+
+// toolConfigFields returns the declared config knobs of one tool.
+//
+// A tool's knobs are those named in its own `required_config`, resolved against
+// the owning extension's declared surface. The bundled extension exposes the
+// per-tool view directly; a discovered extension declares its surface once, per
+// extension, and each tool names the subset it needs.
+func (s *Server) toolConfigFields(d agent.ToolDef) []*agentv1.ToolConfigField {
+	var out []*agentv1.ToolConfigField
+	if d.ExtID == "" || d.ExtID == "bundled" {
+		if s.bundledFields == nil {
+			return nil
+		}
+		for _, cf := range s.bundledFields.ConfigFieldsFor(d.Name) {
+			out = append(out, configFieldToProto(cf))
+		}
+		return out
+	}
+	// A discovered extension: pick the knobs this tool requires out of the
+	// extension's whole surface. When a tool declares no requirement, its surface
+	// is still worth showing — the Tools page renders it read-only — so an empty
+	// required_config falls back to the whole set.
+	if s.tools == nil {
+		return nil
+	}
+	all := s.tools.ExtensionConfigFields(d.ExtID)
+	if len(all) == 0 {
+		return nil
+	}
+	if len(d.RequiredConfig) == 0 {
+		for _, cf := range all {
+			out = append(out, configFieldToProto(cf))
+		}
+		return out
+	}
+	want := make(map[string]bool, len(d.RequiredConfig))
+	for _, n := range d.RequiredConfig {
+		want[n] = true
+	}
+	for _, cf := range all {
+		if want[cf.Name] {
+			out = append(out, configFieldToProto(cf))
+		}
+	}
+	return out
 }
 
 // configFieldToProto maps a declared config field onto its wire form.
