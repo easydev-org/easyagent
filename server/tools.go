@@ -394,10 +394,26 @@ func (s *Server) SetExtensionConfig(ctx context.Context, req *agentv1.SetExtensi
 	// scoped to one namespace of this extension). An unknown knob has none, which
 	// lands it at extension level — still isolated from every other extension.
 	ns := ""
+	var declared *bundled.ConfigField
 	for _, cf := range s.knobFields(req.ExtId) {
 		if cf.Name == req.Name {
 			ns = cf.Namespace
+			c := cf
+			declared = &c
 			break
+		}
+	}
+	// Reject values that cannot possibly be what the knob means, BEFORE storing
+	// them. A value that is stored but unparseable is the worst outcome: the
+	// console shows it as set, the extension receives it, and the failure only
+	// surfaces later as a confusing error from inside the extension.
+	raw := valueToString(req.Value)
+	if err := validateKnobValue(req.Name, raw); err != nil {
+		return nil, connectErr(err)
+	}
+	if declared != nil {
+		if err := validateStructuredKnob(*declared, raw); err != nil {
+			return nil, connectErr(err)
 		}
 	}
 	extID := req.ExtId
