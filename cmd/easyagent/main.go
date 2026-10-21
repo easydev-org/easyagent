@@ -123,6 +123,10 @@ func run(cfgPath string) error {
 		)
 		rtDeps.Tools = composite
 		rtDeps.Registry = composite
+		// Live tool output: the extension publishes in-flight updates on
+		// easybus.<tenant>.tool.progress.<callID>; the turn re-emits each frame onto
+		// the session's durable event stream so a reconnecting client still sees it.
+		rtDeps.ToolProgress = agent.NewToolProgressSource(b.Agent())
 		toolExec = exec
 	} else {
 		rtDeps.Tools = bundledExt

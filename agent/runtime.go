@@ -43,6 +43,12 @@ type RuntimeDeps struct {
 	Resolver ProviderResolver
 	Lease    Lease
 	Tools    ToolExecutor
+	// ToolProgress streams in-flight updates for a running tool call.
+	//
+	// Injected rather than subscribed here because RuntimeDeps deliberately has no
+	// bus: the runtime drives turns, and everything that touches the transport is
+	// wired in main. nil disables the live view; the tool still runs.
+	ToolProgress ToolProgressSource
 	// Registry supplies the tools offered to the model (filtered per turn by
 	// the preset whitelist + the denylist).
 	Registry ToolRegistry
@@ -490,11 +496,15 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		extra = body
 	}
 	res, err := RunTurn(ctx, Deps{
-		Client:             client,
-		Retry:              r.deps.Retry,
-		Tools:              r.deps.Tools,
-		Emit:               sink,
-		MaxTurns:           plan.MaxTurns,
+		Client:   client,
+		Retry:    r.deps.Retry,
+		Tools:    r.deps.Tools,
+		Emit:     sink,
+		MaxTurns: plan.MaxTurns,
+		// Relay a tool's in-flight progress onto the session's durable event
+		// stream. The frames reach clients (and replay on reconnect) but never
+		// enter the model's context — see relayProgress in turn.go.
+		ToolProgress:       r.deps.ToolProgress,
 		ToolTimeout:        r.deps.ToolTimeout,
 		SystemTokens:       EstimateTokens(plan.System),
 		ContextLimit:       r.contextLimit(tenant, s.Model),

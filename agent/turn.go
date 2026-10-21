@@ -27,6 +27,19 @@ type ToolOutcome struct {
 	Metadata any
 }
 
+// ToolProgressUpdate is one in-flight report from a running tool call.
+//
+// Deliberately a plain struct rather than the protocol type: the turn only needs
+// "what to show", and keeping it decoded here avoids every caller of turn.go
+// depending on the wire types.
+type ToolProgressUpdate struct {
+	CallID   string
+	Phase    string
+	Text     string
+	Progress float64
+	Metadata any
+}
+
 // Deps are the turn loop's collaborators.
 type Deps struct {
 	Client   *llm.Client
@@ -34,6 +47,15 @@ type Deps struct {
 	Tools    ToolExecutor
 	Emit     Emitter
 	MaxTurns int
+	// ToolProgress, when set, streams in-flight updates for one tool call.
+	//
+	// These updates are relayed to the session's durable event stream so a client
+	// that reconnects can still see everything a long job produced. They are NOT
+	// added to `messages`: the model only ever sees the tool's final result. That
+	// separation is what makes live output affordable — no tokens are spent on it.
+	//
+	// nil disables relaying (the tool still runs; only the live view is missing).
+	ToolProgress func(ctx context.Context, tenant, callID string) (<-chan ToolProgressUpdate, func(), error)
 	// Compact, when set, is invoked on a CONTEXT-OVERFLOW error: it folds the
 	// session and returns the REBUILT history + the new chain tip. The step is
 	// then retried ONCE with the trimmed context (transparent to the caller).
@@ -326,7 +348,9 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 				})
 				continue
 			}
-			outcome, execErr := execTool(ctx, deps, in, name, call.Args)
+			// call.ID is the identity the extension reports progress under, so it
+			// is what the relay subscribes to.
+			outcome, execErr := execTool(ctx, deps, in, name, call.ID, call.Args)
 			if execErr != nil {
 				// A failed tool still pairs with its call id so the provider
 				// never sees a dangling tool-call (rule 4).
@@ -377,7 +401,13 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 }
 
 // execTool runs one tool with the per-tool wall-clock timeout.
-func execTool(ctx context.Context, deps Deps, in Input, name, args string) (ToolOutcome, error) {
+//
+// While the tool runs, any in-flight progress it reports is relayed to the
+// session's durable event stream as `tool-progress` frames. Those frames reach
+// the UI and a reconnecting client replays them, but they never enter
+// `messages` — the model still sees only the tool's final result.
+func execTool(ctx context.Context, deps Deps, in Input, name, callID, args string) (ToolOutcome, error) {
+	relayProgress(ctx, deps, in, callID)
 	if deps.ToolTimeout <= 0 {
 		return deps.Tools.Execute(ctx, in.Tenant, in.Session, name, args)
 	}
@@ -398,6 +428,51 @@ func execTool(ctx context.Context, deps Deps, in Input, name, args string) (Tool
 	case <-tctx.Done():
 		return ToolOutcome{}, fmt.Errorf("tool %q timed out after %s", name, deps.ToolTimeout)
 	}
+}
+
+// relayProgress forwards a tool's in-flight updates to the event stream.
+//
+// It returns immediately; the subscription lives until the progress channel
+// closes. Relaying is best-effort by design: the tool's result is the contract,
+// and a UI that misses a frame has lost nothing that matters.
+func relayProgress(ctx context.Context, deps Deps, in Input, callID string) {
+	if deps.ToolProgress == nil || deps.Emit == nil || callID == "" {
+		return
+	}
+	// The subscription must not die with the turn's context if the turn returns
+	// while a job keeps printing — but it must die if the session is cancelled.
+	// Deriving from ctx (not Background) keeps that guarantee; the channel closes
+	// on its own when the tool finishes.
+	ch, cancel, err := deps.ToolProgress(ctx, in.Tenant, callID)
+	if err != nil || ch == nil {
+		return
+	}
+	go func() {
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case upd, ok := <-ch:
+				if !ok {
+					return
+				}
+				params := map[string]any{
+					"toolCallId": upd.CallID,
+					"phase":      upd.Phase,
+					"text":       upd.Text,
+					"run_id":     in.RunID,
+				}
+				if upd.Progress > 0 {
+					params["progress"] = upd.Progress
+				}
+				if upd.Metadata != nil {
+					params["metadata"] = upd.Metadata
+				}
+				_ = emitBg(deps.Emit, "tool-progress", params)
+			}
+		}
+	}()
 }
 
 // resolveToolName maps a model-emitted tool name onto an offered tool: an exact
