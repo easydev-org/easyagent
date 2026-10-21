@@ -44,6 +44,22 @@ type ConfigStore struct{ C *Config }
 // Config implements ConfigProvider.
 func (c ConfigStore) Config(tenant, key string) (string, bool) { return c.C.Get(tenant, key) }
 
+// ConfigExt implements ExtConfigProvider.
+//
+// WITHOUT this, ConfigStore satisfied only ConfigProvider, so
+// FilterBlockedByConfig's type assertion failed and fell back to
+// Config(tenant, name) — reading `cfg.<tenant>.<name>`. Every extension config is
+// STORED at `cfg.<tenant>.<extID>.<name>`, so the read never matched the write:
+// a knob could be saved, pushed to its extension, and still leave every dependent
+// tool permanently filtered out of the model's toolbox. The console showed
+// "required config" no matter how many times it was filled in.
+//
+// It forwards to the Config's namespaced read rather than duplicating the key
+// construction, so the store and the reader cannot drift apart again.
+func (c ConfigStore) ConfigExt(tenant, extID, name string) (string, bool) {
+	return c.C.ConfigExt(tenant, extID, name)
+}
+
 // TurnPlan is the resolved configuration of one turn: the system prompt (preset
 // prompt + <env>), the effective locale, the tool list, and the step budget.
 type TurnPlan struct {

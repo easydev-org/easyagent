@@ -101,6 +101,16 @@ func run(cfgPath string) error {
 	if runtimeBus != nil {
 		tenantConfig = agent.NewConfig(bus.NewNATSKV(runtimeBus, bus.ConfigBucket))
 	}
+	// The TURN needs the same presets the console edits.
+	//
+	// This was missing: the server was constructed with `Presets: presets`, so the
+	// Presets page worked and saved rows — while every turn failed with
+	// "preset store unavailable", because RuntimeDeps.Presets was never set. A
+	// session that references any preset could not run at all.
+	// The adapters, not the raw stores: Presets/Config implement the storage
+	// operations, while the turn wants the narrow read interfaces.
+	rtDeps.Presets = agent.PresetStore{P: presets}
+	rtDeps.Config = agent.ConfigStore{C: tenantConfig}
 	seedPresets(presets, tenantConfig, db, cfg)
 	// The in-process bundled extension (Go rewrite of the TS bundled-extension):
 	// it supplies the memory/history/file/web/vision/generation/subsession tools.
