@@ -162,12 +162,24 @@ func TestTurnToolLoop(t *testing.T) {
 	if len(tools.calls) != 1 || tools.calls[0] != `todo-write({"todos":[]})` {
 		t.Errorf("tool calls = %v", tools.calls)
 	}
-	tr, ok := rec.first("tool-result")
+	// The terminal frame is `tool-output-available` without `preliminary`: it is
+	// the tool's result, delivered as a snapshot like everything else.
+	tr, ok := rec.first("tool-output-available")
 	if !ok {
-		t.Fatal("no tool-result emitted")
+		t.Fatal("no tool-output-available emitted")
 	}
-	if tr.Params["toolCallId"] != "call_1" || tr.Params["formatted"] != "ok" || tr.Params["change_id"] != "c9" {
-		t.Errorf("tool-result params = %v", tr.Params)
+	if tr.Params["toolCallId"] != "call_1" {
+		t.Errorf("toolCallId = %v", tr.Params["toolCallId"])
+	}
+	if tr.Params["preliminary"] == true {
+		t.Error("the terminal frame must not be marked preliminary")
+	}
+	out, _ := tr.Params["output"].(map[string]any)
+	if asString(out["content"]) != "ok" {
+		t.Errorf("output content = %q, want ok", asString(out["content"]))
+	}
+	if asString(out["change_id"]) != "c9" {
+		t.Errorf("output change_id = %q, want c9 (structured metadata rides in output)", asString(out["change_id"]))
 	}
 	var added int
 	for _, e := range rec.events {
@@ -198,9 +210,9 @@ func TestTurnToolErrorPairsWithCall(t *testing.T) {
 	if res.Reason != "stop" {
 		t.Errorf("res = %+v", res)
 	}
-	te, ok := rec.first("tool-error")
+	te, ok := rec.first("tool-output-error")
 	if !ok || te.Params["toolCallId"] != "call_x" {
-		t.Errorf("tool-error = %v", te.Params)
+		t.Errorf("tool-output-error = %v", te.Params)
 	}
 }
 

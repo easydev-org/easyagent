@@ -57,6 +57,12 @@ type toolPart struct {
 type toolResultPart struct {
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
+	// State records HOW the call ended: "ok" | "error" | "timeout" | "cancelled".
+	// The console needs it to tell "finished" from "stopped early", and the model
+	// needs the content to know how far the command got.
+	State string `json:"state,omitempty"`
+	// Meta is the tool's structured output (jobId, exitCode, change_id, files...).
+	Meta map[string]any `json:"meta,omitempty"`
 }
 
 // rebuildHistory maps a session's persisted chain (oldest-first) into the model

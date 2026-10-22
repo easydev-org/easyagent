@@ -360,11 +360,7 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 				messages = append(messages, llm.Message{
 					Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name, Content: execErr.Error(),
 				})
-				_ = emit(ctx, deps.Emit, "tool-error", map[string]any{
-					"toolCallId": call.ID, "toolName": call.Name,
-					"error": execErr.Error(), "message": execErr.Error(),
-					"message_id": stepID, "run_id": in.RunID,
-				})
+				emitError(ctx, deps, in, stepID, call.ID, call.Name, execErr)
 				continue
 			}
 			// call.ID is the identity the extension reports progress under, so it
@@ -373,14 +369,12 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 			if execErr != nil {
 				// A failed tool still pairs with its call id so the provider
 				// never sees a dangling tool-call (rule 4).
+				// The terminal `tool-output-error` frame was already published by
+				// execTool; emitting a second error event here would make the client
+				// render the same failure twice.
 				messages = append(messages, llm.Message{
 					Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
 					Content: execErr.Error(),
-				})
-				_ = emit(ctx, deps.Emit, "tool-error", map[string]any{
-					"toolCallId": call.ID, "toolName": call.Name,
-					"error": execErr.Error(), "message": execErr.Error(),
-					"message_id": stepID, "run_id": in.RunID,
 				})
 				continue
 			}
@@ -388,23 +382,10 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 				Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
 				Content: outcome.Content,
 			})
-			var input any
-			_ = json.Unmarshal([]byte(call.Args), &input)
-			params := map[string]any{
-				"toolCallId": call.ID, "toolName": call.Name, "input": input,
-				"output": map[string]any{
-					"content": outcome.Content, "metadata": outcome.Metadata,
-				},
-				// Derived convenience fields the existing clients read.
-				"formatted": outcome.Content, "data": outcome.Metadata,
-				"message_id": stepID, "run_id": in.RunID,
-			}
-			if m, ok := outcome.Metadata.(map[string]any); ok {
-				if cid, ok := m["change_id"].(string); ok {
-					params["change_id"] = cid
-				}
-			}
-			_ = emit(ctx, deps.Emit, "tool-result", params)
+			// No separate result event: execTool already published the terminal
+			// `tool-output-available` for this call. Emitting the old `tool-result`
+			// alongside it would give the client two sources for one result, and
+			// they would have to agree.
 		}
 	}
 
@@ -421,53 +402,151 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 
 // execTool runs one tool with the per-tool wall-clock timeout.
 //
-// While the tool runs, any in-flight progress it reports is relayed to the
-// session's durable event stream as `tool-progress` frames. Those frames reach
-// the UI and a reconnecting client replays them, but they never enter
-// `messages` — the model still sees only the tool's final result.
+// EVERY tool publishes its output the same way: as `tool-output-available`
+// snapshots while it runs (preliminary) and one terminal frame at the end. Tools
+// that report progress get their lines relayed as they arrive; tools that simply
+// return get their whole result published at the end. The client therefore has one
+// rendering path, and the output survives a refresh because the frames are durable
+// session events.
+//
+// None of this reaches `messages`: the model still sees only the final result.
 func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, args string) (ToolOutcome, error) {
-	relayProgress(ctx, deps, in, callID, stepID)
+	stream := newResultStream()
+	stopRelay := relayInto(ctx, deps, in, callID, stepID, name, stream)
+	defer stopRelay()
+
+	run := func(runCtx context.Context) (ToolOutcome, error) {
+		return deps.Tools.Execute(runCtx, in.Tenant, in.Session, callID, name, args)
+	}
+
+	var out ToolOutcome
+	var err error
 	if deps.ToolTimeout <= 0 {
-		return deps.Tools.Execute(ctx, in.Tenant, in.Session, callID, name, args)
+		out, err = run(ctx)
+	} else {
+		type result struct {
+			out ToolOutcome
+			err error
+		}
+		ch := make(chan result, 1)
+		tctx, cancel := context.WithTimeout(ctx, deps.ToolTimeout)
+		defer cancel()
+		go func() {
+			o, e := run(tctx)
+			ch <- result{o, e}
+		}()
+		select {
+		case r := <-ch:
+			out, err = r.out, r.err
+		case <-tctx.Done():
+			// Interrupted, not failed. Whatever the tool printed is real output and
+			// is already on the wire, so the result keeps it — the model needs to
+			// know how far the command got, and the user needs to keep seeing it.
+			state := "timeout"
+			if ctx.Err() != nil {
+				state = "cancelled"
+			}
+			stream.Close(state)
+			partial := stream.Text()
+			emitOutput(ctx, deps, in, stepID, callID, name, stream, map[string]any{
+				"state": state,
+				"error": fmt.Sprintf("%s after %s", state, deps.ToolTimeout),
+			})
+			note := fmt.Sprintf("[%s after %s]", state, deps.ToolTimeout)
+			if partial != "" {
+				partial = partial + "\n" + note
+			} else {
+				partial = note
+			}
+			out = ToolOutcome{Content: partial, Metadata: map[string]any{"state": state}}
+			return out, nil
+		}
 	}
-	type result struct {
-		out ToolOutcome
-		err error
+
+	// Terminal frame for the tool's own result.
+	if err != nil {
+		stream.Close("error")
+		emitError(ctx, deps, in, stepID, callID, name, err)
+		return out, err
 	}
-	ch := make(chan result, 1)
-	tctx, cancel := context.WithTimeout(ctx, deps.ToolTimeout)
-	defer cancel()
-	go func() {
-		o, e := deps.Tools.Execute(tctx, in.Tenant, in.Session, callID, name, args)
-		ch <- result{o, e}
-	}()
-	select {
-	case r := <-ch:
-		return r.out, r.err
-	case <-tctx.Done():
-		return ToolOutcome{}, fmt.Errorf("tool %q timed out after %s", name, deps.ToolTimeout)
+	// The tool's returned content IS the result: take it over the relayed lines so
+	// the final frame agrees with what the model was told, even for a tool that
+	// reported nothing on the side channel.
+	if out.Content != "" {
+		for _, line := range splitLines(out.Content) {
+			if line != "" {
+				stream.Append(line)
+			}
+		}
 	}
+	stream.Close("ok")
+	meta := map[string]any{}
+	if m, ok := out.Metadata.(map[string]any); ok {
+		for k, v := range m {
+			meta[k] = v
+		}
+	}
+	// Normalise the state a tool reports ("done" from a job, "finished" from a
+	// build) to the one vocabulary the protocol uses. Without this the console
+	// shows "stopped: done" for a job that simply finished.
+	if s, ok := meta["state"].(string); ok && isSuccessState(s) {
+		meta["state"] = "ok"
+	}
+	emitOutput(ctx, deps, in, stepID, callID, name, stream, meta)
+	return out, nil
 }
 
-// relayProgress forwards a tool's in-flight updates to the event stream.
+// isSuccessState reports whether a tool's own word for "finished" means success.
 //
-// It returns immediately; the subscription lives until the progress channel
-// closes. Relaying is best-effort by design: the tool's result is the contract,
-// and a UI that misses a frame has lost nothing that matters.
-func relayProgress(ctx context.Context, deps Deps, in Input, callID, stepID string) {
-	if deps.ToolProgress == nil || deps.Emit == nil || callID == "" {
+// Tools describe their outcome in their own vocabulary — a job says "done", a
+// build says "finished", a command may say "exited" — and the protocol has one
+// word for it. Everything else ("failed", "timeout", "cancelled") is passed
+// through, because those genuinely are different outcomes.
+func isSuccessState(s string) bool {
+	switch s {
+	case "ok", "done", "finished", "exited", "complete", "completed", "success", "succeeded":
+		return true
+	}
+	return false
+}
+
+// emitError publishes the terminal frame for a failed tool.
+func emitError(ctx context.Context, deps Deps, in Input, stepID, callID, toolName string, cause error) {
+	if deps.Emit == nil {
 		return
 	}
-	// The subscription must not die with the turn's context if the turn returns
-	// while a job keeps printing — but it must die if the session is cancelled.
-	// Deriving from ctx (not Background) keeps that guarantee; the channel closes
-	// on its own when the tool finishes.
+	_ = emitBg(deps.Emit, "tool-output-error", map[string]any{
+		"toolCallId": callID,
+		"toolName":   toolName,
+		"errorText":  cause.Error(),
+		"message_id": stepID,
+		"run_id":     in.RunID,
+	})
+}
+
+// relayInto feeds a tool's in-flight updates into the result stream and publishes
+// each new snapshot.
+//
+// The relay is what makes EVERY tool look streamed: a tool that reports progress
+// gets its lines appended as they arrive, and one that reports nothing produces a
+// single terminal frame at the end. Either way the client receives
+// `tool-output-available`, so it has one path to render and the output survives a
+// refresh (the frames are durable session events).
+//
+// Returns a stop function; safe to call once, after the tool call returns.
+func relayInto(ctx context.Context, deps Deps, in Input, callID, stepID, toolName string, stream *resultStream) func() {
+	if deps.ToolProgress == nil || deps.Emit == nil || callID == "" {
+		return func() {}
+	}
+	// Derived from ctx, not Background: the relay must stop when the turn is
+	// cancelled, and the channel closes on its own when the tool finishes.
 	ch, cancel, err := deps.ToolProgress(ctx, in.Tenant, callID)
 	if err != nil || ch == nil {
-		return
+		return func() {}
 	}
+	done := make(chan struct{})
 	go func() {
-		defer cancel()
+		defer close(done)
 		for {
 			select {
 			case <-ctx.Done():
@@ -476,28 +555,24 @@ func relayProgress(ctx context.Context, deps Deps, in Input, callID, stepID stri
 				if !ok {
 					return
 				}
-				params := map[string]any{
-					"toolCallId": upd.CallID,
-					"phase":      upd.Phase,
-					"text":       upd.Text,
-					// message_id is the routing key the console groups by. Every other
-					// event carries it; this one did not, so the client's
-					// streamMsgId() returned null and DROPPED every frame — the tool
-					// ran, the frames were published, and the UI showed nothing until
-					// the final result arrived.
-					"message_id": stepID,
-					"run_id":     in.RunID,
+				text := upd.Text
+				// A phase-only frame is NOT output. "exited" is the extension saying
+				// the process ended; rendering it as a line would put a status word in
+				// the middle of the command's stdout. Status text that a human should
+				// read ("waiting for rollout") carries it in Text, which is how the
+				// extension already expresses it.
+				if text == "" {
+					continue
 				}
-				if upd.Progress > 0 {
-					params["progress"] = upd.Progress
-				}
-				if upd.Metadata != nil {
-					params["metadata"] = upd.Metadata
-				}
-				_ = emitBg(deps.Emit, "tool-progress", params)
+				stream.Append(text)
+				emitOutput(ctx, deps, in, stepID, callID, toolName, stream, nil)
 			}
 		}
 	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // resolveToolName maps a model-emitted tool name onto an offered tool: an exact

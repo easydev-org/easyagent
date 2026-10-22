@@ -50,9 +50,12 @@ func TestPersistSinkStoresToolResults(t *testing.T) {
 		"toolCallId": "call_1", "toolName": "sandbox-job-start",
 		"input": map[string]any{"command": "echo hi"}, "message_id": "msg-1",
 	})
-	emit("tool-result", map[string]any{
+	// The terminal snapshot: same event as the provisional ones, minus the
+	// `preliminary` flag. The store takes the latest snapshot as the truth.
+	emit("tool-output-available", map[string]any{
 		"toolCallId": "call_1", "toolName": "sandbox-job-start",
-		"formatted": "line1\nline2", "message_id": "msg-1",
+		"output":     map[string]any{"content": "line1\nline2", "state": "ok"},
+		"message_id": "msg-1",
 	})
 	emit("message-added", map[string]any{
 		"message_id": "msg-1", "streaming": false, "role": "assistant",

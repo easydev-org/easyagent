@@ -613,20 +613,36 @@ func (s *persistSink) Emit(ctx context.Context, ev Event) error {
 			ID: asString(ev.Params["toolCallId"]), Name: asString(ev.Params["toolName"]),
 			Input: ev.Params["input"],
 		})
-	case "tool-result":
-		s.results[mid] = append(s.results[mid], toolResultPart{
-			ToolUseID: asString(ev.Params["toolCallId"]),
-			Content:   asString(ev.Params["formatted"]),
-		})
+	case "tool-output-available":
+		// Snapshots replace, they do not append: each frame carries the output SO
+		// FAR, so the latest one is the truth. Appending would duplicate every line
+		// a second time for every snapshot that repeated it.
+		tcid := asString(ev.Params["toolCallId"])
+		var content, state string
+		var meta map[string]any
+		if out, ok := ev.Params["output"].(map[string]any); ok {
+			content = asString(out["content"])
+			state = asString(out["state"])
+			meta = out
+		}
+		s.setResult(mid, tcid, content, state, meta)
 		// Persist NOW, not only at message-added.
 		//
-		// A tool result is emitted AFTER the step's message-added, so storing parts
+		// Tool output is emitted AFTER the step's message-added, so storing parts
 		// solely on message-added meant `results` was always empty at write time:
-		// the database kept 23 tool calls and zero tool_results, the console showed
-		// an empty Content block, and history rebuilt from the DB had the same hole.
+		// the database kept tool calls and zero results, the console showed an empty
+		// Content block, and history rebuilt from the DB had the same hole.
 		//
 		// persistStep is idempotent (it replaces the whole part set), so calling it
 		// again here simply records what has arrived so far.
+		if mid != "" {
+			if err := s.persistStep(mid); err != nil {
+				return err
+			}
+		}
+	case "tool-output-error":
+		tcid := asString(ev.Params["toolCallId"])
+		s.setResult(mid, tcid, "", "error", map[string]any{"error": asString(ev.Params["errorText"])})
 		if mid != "" {
 			if err := s.persistStep(mid); err != nil {
 				return err
@@ -647,6 +663,34 @@ func (s *persistSink) Emit(ctx context.Context, ev Event) error {
 }
 
 // textPart returns the accumulator for one step's text, creating it on first use.
+// setResult records the LATEST snapshot for one tool call.
+//
+// Snapshots replace: every `tool-output-available` frame carries the output so
+// far, so the newest one is the whole truth for that call. Appending would
+// duplicate every line once per snapshot.
+func (s *persistSink) setResult(mid, callID, content, state string, meta map[string]any) {
+	if mid == "" || callID == "" {
+		return
+	}
+	list := s.results[mid]
+	for i := range list {
+		if list[i].ToolUseID == callID {
+			list[i].Content = content
+			if state != "" {
+				list[i].State = state
+			}
+			if meta != nil {
+				list[i].Meta = meta
+			}
+			s.results[mid] = list
+			return
+		}
+	}
+	s.results[mid] = append(list, toolResultPart{
+		ToolUseID: callID, Content: content, State: state, Meta: meta,
+	})
+}
+
 func (s *persistSink) textPart(mid string) *deltaParts {
 	if s.texts[mid] == nil {
 		s.texts[mid] = &deltaParts{}
@@ -712,7 +756,17 @@ func (s *persistSink) partsOf(mid string) []store.Part {
 		add("tool", map[string]any{"id": tc.ID, "name": tc.Name, "input": tc.Input})
 	}
 	for _, tr := range s.results[mid] {
-		add("tool_result", map[string]any{"tool_use_id": tr.ToolUseID, "content": tr.Content})
+		// Persist the whole outcome, not just the text: a reconstructed history
+		// needs `state` to render "finished" vs "stopped early", and `meta` for the
+		// structured payload (files, change_id, exit code) the console shows.
+		part := map[string]any{"tool_use_id": tr.ToolUseID, "content": tr.Content}
+		if tr.State != "" {
+			part["state"] = tr.State
+		}
+		if tr.Meta != nil {
+			part["meta"] = tr.Meta
+		}
+		add("tool_result", part)
 	}
 	return out
 }

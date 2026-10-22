@@ -36,12 +36,12 @@ func TestUnknownToolYieldsErrorResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = res
-	te, ok := rec.first("tool-error")
+	te, ok := rec.first("tool-output-error")
 	if !ok {
-		t.Fatal("an unknown tool must yield a tool-error the model can self-correct from")
+		t.Fatal("an unknown tool must yield a tool-output-error the model can self-correct from")
 	}
-	if asString(te.Params["error"]) == "" {
-		t.Error("tool-error must name the available tools")
+	if asString(te.Params["errorText"]) == "" {
+		t.Error("the error must name the available tools")
 	}
 }
 
@@ -93,8 +93,19 @@ func TestToolTimeoutYieldsError(t *testing.T) {
 	if time.Since(start) > 2*time.Second {
 		t.Error("a slow tool must be bounded by ToolTimeout")
 	}
-	if _, ok := rec.first("tool-error"); !ok {
-		t.Error("a timed-out tool must yield a tool-error")
+	// A timeout is NOT an error: the tool produced whatever it produced, and that
+	// output is delivered as the terminal snapshot with state=timeout. Reporting it
+	// as an error would throw away the work the user was watching.
+	av, ok := rec.first("tool-output-available")
+	if !ok {
+		t.Fatal("a timed-out tool must still publish a terminal output frame")
+	}
+	out, _ := av.Params["output"].(map[string]any)
+	if asString(out["state"]) != "timeout" {
+		t.Errorf("state = %q, want timeout", asString(out["state"]))
+	}
+	if av.Params["preliminary"] == true {
+		t.Error("the terminal frame must not be marked preliminary")
 	}
 }
 
