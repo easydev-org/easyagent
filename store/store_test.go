@@ -30,10 +30,18 @@ func TestSessionCRUDAndCounters(t *testing.T) {
 	if s.Model != "p/m" {
 		t.Errorf("model = %q", s.Model)
 	}
-	// AppendMessageTip bumps message_seq and returns the NEW value.
+	// AppendMessageTip reports the CHAIN LENGTH at the new tip — the number the
+	// unread badge is computed from, so it must match what the reader sees.
+	if _, err := d.InsertMessage("t1", "m1", "user", nil, ""); err != nil {
+		t.Fatal(err)
+	}
 	seq, err := d.AppendMessageTip("t1", "s1", "m1")
 	if err != nil || seq != 1 {
 		t.Fatalf("append seq = %d, %v", seq, err)
+	}
+	prev := "m1"
+	if _, err := d.InsertMessage("t1", "m2", "user", &prev, ""); err != nil {
+		t.Fatal(err)
 	}
 	seq, _ = d.AppendMessageTip("t1", "s1", "m2")
 	if seq != 2 {

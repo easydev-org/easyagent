@@ -219,7 +219,19 @@ func TestUnreadDerivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := d.AppendMessageTip("t", "s", fmt.Sprintf("m%d", i)); err != nil {
+		// message_seq counts the CHAIN, so the rows have to exist: the counter is
+		// what the unread badge is derived from, and a number the reader cannot
+		// reproduce is exactly the bug this replaced.
+		id := fmt.Sprintf("m%d", i)
+		var prev *string
+		if i > 0 {
+			p := fmt.Sprintf("m%d", i-1)
+			prev = &p
+		}
+		if _, err := d.InsertMessage("t", id, "user", prev, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.AppendMessageTip("t", "s", id); err != nil {
 			t.Fatal(err)
 		}
 	}

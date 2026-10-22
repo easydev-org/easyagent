@@ -131,20 +131,53 @@ func (d *DB) AppendMessageTip(tenant, name, messageID string) (int64, error) {
 		}
 		slog.Debug("append message tip", "tenant", tenant, "session", name,
 			"from", prev, "to", messageID, "seq", s.MessageSeq)
-		// Setting the tip to the message that is ALREADY the tip must not advance the
-		// counter. persistStep runs more than once per step (each wave of parts is
-		// written as it arrives), and bumping on every write inflated message_seq far
-		// past the real number of messages — which corrupts the unread watermark,
-		// since that is what it is compared against.
-		if prev == messageID {
-			seq = s.MessageSeq
-			return nil
+		// message_seq is the CHAIN LENGTH, not a call counter.
+		//
+		// It is compared against read_seq to make the unread badge, so it has to
+		// track how many messages the session actually holds. Incrementing per call
+		// drifted in both directions: one step emits several writes while adding a
+		// single message (so the counter ran ahead), and re-setting the same tip
+		// added nothing (so two runs disagreed about the same session). Counting the
+		// chain is the definition the badge needs.
+		n, cerr := d.chainLength(tx, tenant, messageID)
+		if cerr != nil {
+			return cerr
 		}
-		seq = s.MessageSeq + 1
+		seq = n
 		return tx.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
 			Updates(map[string]any{"tip_id": messageID, "message_seq": seq, "updated_at": nowStr()}).Error
 	})
 	return seq, err
+}
+
+// chainLength counts the messages reachable from tipID by following prev_id.
+//
+// Walks the same links the reader does, so the number it returns is exactly what
+// the client will be shown — no separate bookkeeping to drift out of step.
+func (d *DB) chainLength(tx *gorm.DB, tenant, tipID string) (int64, error) {
+	if tipID == "" {
+		return 0, nil
+	}
+	var n int64
+	cur := tipID
+	seen := map[string]bool{}
+	for cur != "" && !seen[cur] && int64(len(seen)) < 10000 {
+		seen[cur] = true
+		var row struct{ PrevID *string }
+		if err := tx.Model(&Message{}).Select("prev_id").
+			Where("tenant = ? AND id = ?", tenant, cur).Take(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				break
+			}
+			return 0, err
+		}
+		n++
+		if row.PrevID == nil {
+			break
+		}
+		cur = *row.PrevID
+	}
+	return n, nil
 }
 
 // MarkRead advances the shared read watermark to at least seq, clamped to the

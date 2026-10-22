@@ -17,6 +17,11 @@ func TestAppendMessageTipIsIdempotentPerMessage(t *testing.T) {
 	}
 
 	// The same message becoming the tip three times (three waves of parts).
+	// The row must exist: message_seq counts the chain, so re-setting the same tip
+	// reports the same length rather than advancing a counter.
+	if _, err := d.InsertMessage("t1", "m1", "user", nil, ""); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
 		seq, err := d.AppendMessageTip("t1", "s1", "m1")
 		if err != nil {
@@ -27,7 +32,11 @@ func TestAppendMessageTipIsIdempotentPerMessage(t *testing.T) {
 		}
 	}
 
-	// A genuinely new tip does advance.
+	// A genuinely new tip advances the count.
+	prev := "m1"
+	if _, err := d.InsertMessage("t1", "m2", "user", &prev, ""); err != nil {
+		t.Fatal(err)
+	}
 	seq, err := d.AppendMessageTip("t1", "s1", "m2")
 	if err != nil {
 		t.Fatal(err)
