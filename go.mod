@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.1
 	github.com/disintegration/imaging v1.6.2
-	github.com/easydev-org/easybus-sdk v0.5.1
+	github.com/easydev-org/easybus-sdk v0.5.3
 	github.com/gabriel-vasile/mimetype v1.4.15
 	github.com/glebarez/sqlite v1.11.0
 	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8

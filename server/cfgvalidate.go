@@ -56,7 +56,12 @@ func looksLikeProtoValueJSON(v string) bool {
 // Deliberately narrow: it only catches shapes that are certainly wrong, so it can
 // never reject a legitimate value. A knob whose name says "url" must not hold a
 // sentence; a knob that is a bare URL must parse as one.
-func validateKnobValue(name, value string) error {
+//
+// format is the knob's DECLARED format, when the extension declares one. It is
+// the authority; the name-based rule below is only a fallback for extensions that
+// have not been taught to declare it yet (a "-url" suffix is a convention of this
+// stack, not a contract).
+func validateKnobValue(name, format, value string) error {
 	if value == "" {
 		return nil // clearing a knob is always allowed
 	}
@@ -65,13 +70,28 @@ func validateKnobValue(name, value string) error {
 			"%q looks like a serialised protobuf Value, not the value itself; "+
 				"send the plain string (e.g. \"http://host:80\")", name)
 	}
-	// A URL-ish knob must parse. Names ending in "-url"/"url" are the convention
-	// this stack uses (easyops-url, selenium-url, gateway-url).
-	lower := strings.ToLower(name)
-	if strings.HasSuffix(lower, "-url") || lower == "url" {
+	if format == "uri" || format == "host" {
 		u, err := url.Parse(value)
-		if err != nil || u.Scheme == "" || u.Host == "" {
+		if err != nil {
+			return fmt.Errorf("%q must be a URL: %v", name, err)
+		}
+		if format == "uri" && (u.Scheme == "" || u.Host == "") {
 			return fmt.Errorf("%q must be an absolute URL (scheme://host[:port]), got %q", name, value)
+		}
+		if format == "host" && u.Host == "" && u.Path == "" {
+			return fmt.Errorf("%q must be a host name, got %q", name, value)
+		}
+		return nil
+	}
+	// Fallback: no declared format, so lean on the naming convention this stack
+	// uses (easyops-url, selenium-url, gateway-url).
+	if format == "" {
+		lower := strings.ToLower(name)
+		if strings.HasSuffix(lower, "-url") || lower == "url" {
+			u, err := url.Parse(value)
+			if err != nil || u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf("%q must be an absolute URL (scheme://host[:port]), got %q", name, value)
+			}
 		}
 	}
 	return nil

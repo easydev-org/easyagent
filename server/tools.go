@@ -408,13 +408,17 @@ func (s *Server) SetExtensionConfig(ctx context.Context, req *agentv1.SetExtensi
 	// console shows it as set, the extension receives it, and the failure only
 	// surfaces later as a confusing error from inside the extension.
 	raw := valueToString(req.Value)
-	if err := validateKnobValue(req.Name, raw); err != nil {
-		return nil, connectErr(err)
-	}
 	if declared != nil {
+		if err := validateKnobValue(req.Name, declared.Format, raw); err != nil {
+			return nil, connectErr(err)
+		}
 		if err := validateStructuredKnob(*declared, raw); err != nil {
 			return nil, connectErr(err)
 		}
+	} else if err := validateKnobValue(req.Name, "", raw); err != nil {
+		// An undeclared knob still gets the name-based floor: a knob called
+		// "something-url" holding a sentence is wrong no matter what declared it.
+		return nil, connectErr(err)
 	}
 	extID := req.ExtId
 	if extID == "" {

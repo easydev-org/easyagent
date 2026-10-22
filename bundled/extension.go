@@ -50,8 +50,12 @@ func (e *Extension) Lookup(name string) (agent.ToolDef, bool) {
 
 // ConfigField is a declared config knob attached to a tool (TS `configFields`).
 type ConfigField struct {
-	Name        string
-	Type        string
+	Name string
+	Type string
+	// Format narrows a string knob: uri | host | path | email | duration | semver.
+	// The value validator uses it when present and falls back to the knob-name
+	// convention only when an extension does not declare one.
+	Format      string
 	Description string
 	Scope       string
 	Kind        string

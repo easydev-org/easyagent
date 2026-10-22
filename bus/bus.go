@@ -295,6 +295,11 @@ func manifestConfigFields(m *easybus.ExtensionManifest) []bundled.ConfigField {
 			scope = "global"
 		}
 		f := bundled.ConfigField{Name: c.Name, Type: typ, Scope: scope, Kind: kind}
+		// The declared format travels with the knob so the validator can check the
+		// value exactly. Without it the agent can only guess from the knob's name.
+		if c.Format != nil {
+			f.Format = *c.Format
+		}
 		if c.Description != nil {
 			f.Description = *c.Description
 		}

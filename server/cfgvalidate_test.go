@@ -24,7 +24,7 @@ func TestValidateKnobValueRejectsProtoWrapper(t *testing.T) {
 		`{"boolValue":true}`,
 	}
 	for _, v := range bad {
-		if err := validateKnobValue("easyops-url", v); err == nil {
+		if err := validateKnobValue("easyops-url", "", v); err == nil {
 			t.Errorf("accepted a serialised protobuf Value: %s", v)
 		}
 	}
@@ -43,7 +43,7 @@ func TestValidateKnobValueAcceptsRealValues(t *testing.T) {
 		"easyops-url(c)leared": "",
 	}
 	for name, v := range ok {
-		if err := validateKnobValue(name, v); err != nil {
+		if err := validateKnobValue(name, "", v); err != nil {
 			t.Errorf("rejected a legitimate value for %s: %v", name, err)
 		}
 	}
@@ -52,13 +52,41 @@ func TestValidateKnobValueAcceptsRealValues(t *testing.T) {
 // TestValidateKnobValueRejectsBadURL keeps a URL knob from holding a sentence.
 func TestValidateKnobValueRejectsBadURL(t *testing.T) {
 	for _, v := range []string{"not a url", "easyops.dev.svc.cluster.local", "://missing-scheme"} {
-		if err := validateKnobValue("easyops-url", v); err == nil {
+		if err := validateKnobValue("easyops-url", "", v); err == nil {
 			t.Errorf("accepted a non-URL for a -url knob: %q", v)
 		}
 	}
 }
 
 // TestValidateStructuredKnob pins the list/object contract the extension relies on.
+// TestDeclaredFormatBeatsNameGuess proves the declared format is the authority.
+//
+// The name-based rule is a fallback for extensions that have not declared one.
+// When a format IS declared it must win in both directions: a knob whose name
+// looks like a URL but is declared `host` accepts a bare host, and one declared
+// `uri` rejects a bare host even if its name says nothing about URLs.
+func TestDeclaredFormatBeatsNameGuess(t *testing.T) {
+	// Declared host: a bare host is fine even though the name says "-url".
+	if err := validateKnobValue("endpoint-url", "host", "api.internal"); err != nil {
+		t.Errorf("host format should accept a bare host: %v", err)
+	}
+	// Declared uri: an absolute URL is required, name notwithstanding.
+	if err := validateKnobValue("thing", "uri", "api.internal"); err == nil {
+		t.Error("uri format should require a scheme and host")
+	}
+	if err := validateKnobValue("thing", "uri", "http://api.internal:80"); err != nil {
+		t.Errorf("uri format should accept a real URL: %v", err)
+	}
+	// An unknown/absent format falls back to the name convention.
+	if err := validateKnobValue("endpoint-url", "", "api.internal"); err == nil {
+		t.Error("with no declared format the -url name convention should still apply")
+	}
+	// A non-URL format imposes no URL rule at all.
+	if err := validateKnobValue("namespace", "path", "dev/team"); err != nil {
+		t.Errorf("path format must not require a URL: %v", err)
+	}
+}
+
 func TestValidateStructuredKnob(t *testing.T) {
 	required := true
 	cf := bundled.ConfigField{
