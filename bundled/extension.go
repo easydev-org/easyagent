@@ -182,7 +182,10 @@ func (e *Extension) ConfigFields() []ConfigField {
 
 // Execute runs one tool (implements agent.ToolExecutor). It accepts both the
 // bare name and the extension-qualified `<id>-<name>` form.
-func (e *Extension) Execute(ctx context.Context, tenant, session, name, args string) (agent.ToolOutcome, error) {
+func (e *Extension) Execute(ctx context.Context, tenant, session, _ /*callID*/, name, args string) (agent.ToolOutcome, error) {
+	// callID is unused here: bundled tools run in-process and never report
+	// progress over the bus. The parameter exists so one interface serves both
+	// kinds of executor.
 	// Guard: only tools declared in the manifest are callable.
 	if _, ok := e.Lookup(name); !ok {
 		if bare, ok2 := e.qualToBare(name); ok2 {

@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestCfgKeyNamespacesByExtension: the stored address is
 // (tenant, extId, namespace, name). The old key was (tenant, name), one GLOBAL
@@ -14,9 +17,9 @@ func TestCfgKeyNamespacesByExtension(t *testing.T) {
 		want  string
 		panic string
 	}{
-		{"tenant-wide", []string{"acme", "", "", "locale"}, "cfg.acme.locale", ""},
-		{"extension-level", []string{"acme", "git", "", "sandboxes"}, "cfg.acme.git.sandboxes", ""},
-		{"namespaced", []string{"acme", "ops", "build", "addr"}, "cfg.acme.ops.build.addr", ""},
+		{"tenant-wide", []string{"acme", "", "", "locale"}, "t.acme.locale", ""},
+		{"extension-level", []string{"acme", "git", "", "sandboxes"}, "t.acme.git.sandboxes", ""},
+		{"namespaced", []string{"acme", "ops", "build", "addr"}, "t.acme.ops.build.addr", ""},
 	}
 	for _, c := range cases {
 		got := cfgKey(c.args[0], c.args[1], c.args[2], c.args[3])
@@ -27,6 +30,32 @@ func TestCfgKeyNamespacesByExtension(t *testing.T) {
 }
 
 // TestTwoExtensionsDoNotShareAValue: the regression that motivated all of this.
+// TestCfgKeyMatchesTheExtensionWatchPattern is the regression test for a config
+// snapshot that never arrived.
+//
+// Extensions subscribe to `t.*.<extId>.>` on this same KV bucket and parse
+// `t.<tenant>.<extId>.<name>`. The agent used to store `cfg.<tenant>...`, so the
+// pattern never matched: an extension received only the one-off push sent when a
+// value was saved, and after ANY restart it knew nothing — reporting "not
+// configured" for knobs the console showed as set.
+//
+// The key layout and the watch pattern are a contract between two processes, so
+// it is asserted rather than assumed.
+func TestCfgKeyMatchesTheExtensionWatchPattern(t *testing.T) {
+	const extID = "sandbox"
+	key := cfgKey("acme", extID, "", "sandboxes")
+
+	// t.<tenant>.<extId>.> must match, or no snapshot is ever delivered.
+	pattern := "t.*." + extID + ".>"
+	segs := strings.SplitN(key, ".", 4)
+	if len(segs) < 3 || segs[0] != "t" {
+		t.Fatalf("key %q does not start with the `t.<tenant>.` prefix that %q requires", key, pattern)
+	}
+	if segs[2] != extID {
+		t.Fatalf("key %q puts %q where the extension id belongs", key, segs[2])
+	}
+}
+
 func TestTwoExtensionsDoNotShareAValue(t *testing.T) {
 	c := NewConfig(NewMemoryKV())
 	c.SetExt("acme", "git", "", "sandboxes", `[{"name":"w1"}]`)

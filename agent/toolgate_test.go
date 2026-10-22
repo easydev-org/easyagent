@@ -69,7 +69,7 @@ func TestToolNameRepairLowercase(t *testing.T) {
 // blockingTools blocks until ctx is done.
 type blockingTools struct{}
 
-func (blockingTools) Execute(ctx context.Context, _, _, _, _ string) (ToolOutcome, error) {
+func (blockingTools) Execute(ctx context.Context, _, _, _, _, _ string) (ToolOutcome, error) {
 	<-ctx.Done()
 	return ToolOutcome{}, ctx.Err()
 }

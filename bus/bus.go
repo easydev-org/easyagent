@@ -369,7 +369,7 @@ func configFieldSpecs(in []*easybus.ConfigFieldSchema) []bundled.ConfigFieldSpec
 }
 
 // Execute calls one tool and maps the abc ToolResult to the agent's ToolOutcome.
-func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, name, args string) (agentpkg.ToolOutcome, error) {
+func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, callID, name, args string) (agentpkg.ToolOutcome, error) {
 	// The model may call the extension-QUALIFIED `<extId>-<name>` form; resolve
 	// it back to the bare name + owning extension.
 	extID, bare := e.resolve(name)
@@ -385,7 +385,14 @@ func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, name, args 
 	if args != "" {
 		_ = json.Unmarshal([]byte(args), &input)
 	}
-	res, err := e.agent.CallTool(ctx, tenant, session, extID, bare, newCallID(), input)
+	// Forward the MODEL's call id, not a fresh one: the turn subscribes to
+	// progress under the id it was given, so an invented id sends every frame into
+	// the void. A caller with no id (an internal call, a probe) still gets one
+	// generated, so the contract stays usable outside a turn.
+	if callID == "" {
+		callID = newCallID()
+	}
+	res, err := e.agent.CallTool(ctx, tenant, session, extID, bare, callID, input)
 	if err != nil {
 		return agentpkg.ToolOutcome{}, err
 	}

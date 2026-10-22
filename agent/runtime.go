@@ -651,39 +651,56 @@ func (s *persistSink) reasonPart(mid string) *deltaParts {
 // persistStep writes the assistant message + its parts under the SAME id the
 // stream used, then advances the chain tip.
 func (s *persistSink) persistStep(mid string) error {
-	created, err := s.rt.deps.DB.InsertMessage(s.tenant, mid, "assistant", strOrNil(s.prevID), "")
+	_, err := s.rt.deps.DB.InsertMessage(s.tenant, mid, "assistant", strOrNil(s.prevID), "")
 	if err != nil {
 		return err
 	}
-	if created {
-		seq := 0
-		for _, r := range s.reasonPart(mid).Texts() {
-			_ = s.rt.deps.DB.InsertPart(s.tenant, mid, "reasoning", seq, map[string]any{"text": r})
-			seq++
-		}
-		for _, t := range s.textPart(mid).Texts() {
-			_ = s.rt.deps.DB.InsertPart(s.tenant, mid, "text", seq, map[string]any{"text": t})
-			seq++
-		}
-		for _, tc := range s.tools[mid] {
-			_ = s.rt.deps.DB.InsertPart(s.tenant, mid, "tool", seq, map[string]any{
-				"id": tc.ID, "name": tc.Name, "input": tc.Input,
-			})
-			seq++
-		}
-		for _, tr := range s.results[mid] {
-			_ = s.rt.deps.DB.InsertPart(s.tenant, mid, "tool_result", seq, map[string]any{
-				"tool_use_id": tr.ToolUseID, "content": tr.Content,
-			})
-			seq++
-		}
-	}
+	// Rewrite this step's parts EVERY time, not only when the message row is new.
+	//
+	// The guard used to be `if created`: the row is created when the step's first
+	// event arrives, and the tool RESULT arrives later, at which point `created` is
+	// false for every subsequent call — so tool_result parts were never written.
+	// The console then showed a tool card with an empty Content area while the
+	// result sat in the event stream, and history rebuilt from the DB had the same
+	// hole.
+	//
+	// Replacing is safe because the sinks hold the whole step: the parts are derived
+	// from them, so a rewrite is idempotent and always complete.
+	s.rt.deps.DB.ReplaceParts(s.tenant, mid, s.partsOf(mid))
 	if _, err := s.rt.deps.DB.AppendMessageTip(s.tenant, s.session, mid); err != nil {
 		return err
 	}
 	_ = s.rt.deps.DB.SetSessionPreview(s.tenant, s.session, preview(strings.Join(s.textPart(mid).Texts(), "")))
 	s.prevID = mid
 	return nil
+}
+
+// partsOf renders the accumulated step into the ordered parts to store.
+//
+// Data is the part's JSON document (the same shape InsertPart used to marshal),
+// so a row written here is indistinguishable from one written inline.
+func (s *persistSink) partsOf(mid string) []store.Part {
+	out := make([]store.Part, 0, 8)
+	add := func(typ string, data any) {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			return // an unencodable part is dropped rather than corrupting the row
+		}
+		out = append(out, store.Part{Type: typ, Data: string(raw)})
+	}
+	for _, r := range s.reasonPart(mid).Texts() {
+		add("reasoning", map[string]any{"text": r})
+	}
+	for _, t := range s.textPart(mid).Texts() {
+		add("text", map[string]any{"text": t})
+	}
+	for _, tc := range s.tools[mid] {
+		add("tool", map[string]any{"id": tc.ID, "name": tc.Name, "input": tc.Input})
+	}
+	for _, tr := range s.results[mid] {
+		add("tool_result", map[string]any{"tool_use_id": tr.ToolUseID, "content": tr.Content})
+	}
+	return out
 }
 
 // preview renders a one-line list preview from message text.

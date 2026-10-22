@@ -87,7 +87,7 @@ func TestExecuteTodoWriteAndUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := e.Execute(context.Background(), "t1", "s1", "todo-write",
+	out, err := e.Execute(context.Background(), "t1", "s1", "c1", "todo-write",
 		`{"todos":[{"content":"a","status":"pending","priority":"high"}]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -96,11 +96,11 @@ func TestExecuteTodoWriteAndUnknown(t *testing.T) {
 		t.Error("expected a todo-write confirmation")
 	}
 	// unknown tool -> ErrUnknownTool (so a composite falls through).
-	if _, err := e.Execute(context.Background(), "t1", "s1", "ghost", "{}"); !agent.IsUnknownTool(err) {
+	if _, err := e.Execute(context.Background(), "t1", "s1", "c2", "ghost", "{}"); !agent.IsUnknownTool(err) {
 		t.Errorf("unknown tool should be ErrUnknownTool, got %v", err)
 	}
 	// qualified name accepted.
-	if _, err := e.Execute(context.Background(), "t1", "s1", "bundled-todo-write", `{"todos":[]}`); err != nil {
+	if _, err := e.Execute(context.Background(), "t1", "s1", "c3", "bundled-todo-write", `{"todos":[]}`); err != nil {
 		t.Errorf("qualified name should resolve: %v", err)
 	}
 }
@@ -111,7 +111,7 @@ func TestMailSendDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := e.Execute(context.Background(), "t1", "parent", "mail-send", `{"to":"child","text":"hi"}`)
+	out, err := e.Execute(context.Background(), "t1", "parent", "c4", "mail-send", `{"to":"child","text":"hi"}`)
 	if err != nil {
 		t.Fatal(err)
 	}

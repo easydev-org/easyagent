@@ -15,7 +15,13 @@ import (
 // the extension bus / bundled tools. args is the raw JSON argument string as
 // the model emitted it (the executor validates it).
 type ToolExecutor interface {
-	Execute(ctx context.Context, tenant, session, name, args string) (ToolOutcome, error)
+	// Execute runs one tool. callID is the MODEL's tool-call id, and it must reach
+	// the executor: an out-of-process tool addresses its progress at
+	// <tenant>.tool.progress.<callID>, and the turn subscribes with the id it got
+	// from the model. If the executor invents its own id, the two never meet and
+	// every progress frame is published to a subject nobody reads — which is
+	// indistinguishable, from the outside, from "the tool reported nothing".
+	Execute(ctx context.Context, tenant, session, callID, name, args string) (ToolOutcome, error)
 }
 
 // ToolOutcome is a tool result.
@@ -421,7 +427,7 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 func execTool(ctx context.Context, deps Deps, in Input, name, callID, args string) (ToolOutcome, error) {
 	relayProgress(ctx, deps, in, callID)
 	if deps.ToolTimeout <= 0 {
-		return deps.Tools.Execute(ctx, in.Tenant, in.Session, name, args)
+		return deps.Tools.Execute(ctx, in.Tenant, in.Session, callID, name, args)
 	}
 	type result struct {
 		out ToolOutcome
@@ -431,7 +437,7 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, args strin
 	tctx, cancel := context.WithTimeout(ctx, deps.ToolTimeout)
 	defer cancel()
 	go func() {
-		o, e := deps.Tools.Execute(tctx, in.Tenant, in.Session, name, args)
+		o, e := deps.Tools.Execute(tctx, in.Tenant, in.Session, callID, name, args)
 		ch <- result{o, e}
 	}()
 	select {

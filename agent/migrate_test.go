@@ -7,7 +7,9 @@ import "testing"
 // winner would silently empty the other.
 func TestMigrateCopiesASharedKnobToEveryDeclarer(t *testing.T) {
 	kv := NewMemoryKV()
-	kv.Put(cfgKey("acme", "", "", "sandboxes"), `[{"name":"w1"}]`)
+	// The value being migrated lives at the LEGACY address, which is the whole
+	// point of the migration: it predates the key layout extensions watch.
+	kv.Put(legacyCfgKey("acme", "", "", "sandboxes"), `[{"name":"w1"}]`)
 	c := NewConfig(kv)
 
 	moved := c.MigrateConfigNamespaces(map[string][]string{

@@ -56,6 +56,34 @@ func (d *DB) TodosReplace(tenant, session string, rows []struct {
 }
 
 // InsertPart appends one part of a message.
+// ReplaceParts swaps a message's parts for a complete set.
+//
+// Parts accumulate over the life of a step (reasoning, then text, then a tool
+// call, then its result). Writing them once — guarded by "was the message row
+// newly created?" — loses everything after the first event, which is exactly when
+// tool_results appear. Replacing the whole set on each update is idempotent and
+// cannot leave a partial message behind.
+//
+// One transaction, so a reader never sees the parts half-deleted.
+func (d *DB) ReplaceParts(tenant, messageID string, parts []Part) error {
+	return d.g.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("tenant = ? AND message_id = ?", tenant, messageID).
+			Delete(&Part{}).Error; err != nil {
+			return err
+		}
+		for i, p := range parts {
+			row := Part{
+				ID: newID(), Tenant: tenant, MessageID: messageID,
+				Type: p.Type, Seq: i, Data: p.Data,
+			}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (d *DB) InsertPart(tenant, messageID, partType string, seq int, data any) error {
 	raw, err := jsonBytes(data)
 	if err != nil {

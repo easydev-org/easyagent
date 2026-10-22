@@ -95,7 +95,7 @@ type stubTools struct {
 	err   error
 }
 
-func (s *stubTools) Execute(_ context.Context, _, _, name, args string) (ToolOutcome, error) {
+func (s *stubTools) Execute(_ context.Context, _, _, _, name, args string) (ToolOutcome, error) {
 	s.calls = append(s.calls, name+"("+args+")")
 	return s.out, s.err
 }

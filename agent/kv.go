@@ -215,7 +215,30 @@ func (c *Config) ConfigExt(tenant, extID, name string) (string, bool) {
 //
 // A knob with an empty namespace is EXTENSION-level: shared by every namespace
 // of that extension, which is what an endpoint/token knob wants.
+// cfgKey is the storage address of one config value.
+//
+// The prefix is "t." and NOT a bucket-specific word, because this KV bucket is
+// watched directly by every extension: the SDK subscribes to `t.*.<extId>.>` and
+// parses `t.<tenant>.<extId>.<name>`. Writing `cfg.<tenant>...` meant the pattern
+// never matched, so an extension NEVER received a config snapshot — it only got
+// the one-off push sent at save time, and lost everything on restart. That is why
+// a freshly restarted extension reported "not configured" for knobs the console
+// showed as set.
 func cfgKey(tenant, extID, namespace, name string) string {
+	switch {
+	case extID == "":
+		return "t." + tenant + "." + name
+	case namespace == "":
+		return "t." + tenant + "." + extID + "." + name
+	default:
+		return "t." + tenant + "." + extID + "." + namespace + "." + name
+	}
+}
+
+// legacyCfgKey is the address this table used before the prefix matched the
+// extension's watch pattern. Reads fall back to it so values saved by an older
+// build are not silently lost; the next write moves them to the new key.
+func legacyCfgKey(tenant, extID, namespace, name string) string {
 	switch {
 	case extID == "":
 		return "cfg." + tenant + "." + name
@@ -229,7 +252,10 @@ func cfgKey(tenant, extID, namespace, name string) string {
 // Get returns (value, true) or ("", false) for a TENANT-wide knob (no
 // extension). Extension knobs use GetExt.
 func (c *Config) Get(tenant, key string) (string, bool) {
-	return c.kv.Get(cfgKey(tenant, "", "", key))
+	if v, ok := c.kv.Get(cfgKey(tenant, "", "", key)); ok {
+		return v, true
+	}
+	return c.kv.Get(legacyCfgKey(tenant, "", "", key))
 }
 
 // Set writes a tenant-wide config value.
@@ -239,7 +265,10 @@ func (c *Config) Set(tenant, key, value string) {
 
 // GetExt returns an extension-scoped knob's value.
 func (c *Config) GetExt(tenant, extID, namespace, key string) (string, bool) {
-	return c.kv.Get(cfgKey(tenant, extID, namespace, key))
+	if v, ok := c.kv.Get(cfgKey(tenant, extID, namespace, key)); ok {
+		return v, true
+	}
+	return c.kv.Get(legacyCfgKey(tenant, extID, namespace, key))
 }
 
 // SetExt writes an extension-scoped knob's value.

@@ -47,15 +47,15 @@ func (c *CompositeTools) Tools() []ToolDef {
 
 // Execute routes a call to the owning executor (by name), falling through on an
 // unknown-tool error.
-func (c *CompositeTools) Execute(ctx context.Context, tenant, session, name, args string) (ToolOutcome, error) {
+func (c *CompositeTools) Execute(ctx context.Context, tenant, session, callID, name, args string) (ToolOutcome, error) {
 	owner := c.ownerOf(name)
 	if owner != nil {
-		return owner.Execute(ctx, tenant, session, name, args)
+		return owner.Execute(ctx, tenant, session, callID, name, args)
 	}
 	// No registry match (dynamic source): try each executor in order.
 	var lastErr error
 	for _, e := range c.executors {
-		out, err := e.Execute(ctx, tenant, session, name, args)
+		out, err := e.Execute(ctx, tenant, session, callID, name, args)
 		if err == nil || !IsUnknownTool(err) {
 			return out, err
 		}
