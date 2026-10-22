@@ -8,12 +8,23 @@ import (
 	"time"
 
 	"github.com/easydev-org/easybus-sdk/bus"
+	"github.com/easydev-org/easybus-sdk/protocol"
 )
 
 // KV bucket names (mirror the TS agent).
 const (
 	PresetsBucket = "easybus-presets"
-	ConfigBucket  = "easyagent-config"
+	// ConfigBucket MUST be the bucket extensions watch.
+	//
+	// Extensions subscribe to protocol.ConfigKVBucket ("cfg") and parse
+	// `t.<tenant>.<extId>.<name>`. This used to be "easyagent-config", a separate
+	// bucket that no extension ever read: the console saved a value, the agent
+	// stored it where nothing was looking, and every extension kept reporting the
+	// knob unset — most visibly after each restart, when it had no in-memory copy
+	// to fall back on.
+	//
+	// It is defined in terms of the SDK constant so the two cannot drift again.
+	ConfigBucket = protocol.ConfigKVBucket
 )
 
 // NATSKV is a JetStream-KV implementation of agent.KV: presets + tenant config

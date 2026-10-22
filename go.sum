@@ -64,6 +64,8 @@ github.com/easydev-org/easybus-sdk v0.5.1 h1:ir0x4SgrNHvovam7s0fb+dxglf4y+71iU0+
 github.com/easydev-org/easybus-sdk v0.5.1/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
 github.com/easydev-org/easybus-sdk v0.5.3 h1:+bh4g0ItB4XAWgzDn6Z8N643t9laB/oA2HN81Y0eqZc=
 github.com/easydev-org/easybus-sdk v0.5.3/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
+github.com/easydev-org/easybus-sdk v0.5.9 h1:nF8p13GLe6PDw9C9+5JgG827g0n1pX+Mho3hzgV7iQg=
+github.com/easydev-org/easybus-sdk v0.5.9/go.mod h1:0Jx5Nxc922MVvolEg/SS5coPLO1s/H6JdLz5GQGyrio=
 github.com/gabriel-vasile/mimetype v1.4.15 h1:05iP/CYtZ/w455R/KZM6rZ5ieAdh99UPtd+d3YzLmaI=
 github.com/gabriel-vasile/mimetype v1.4.15/go.mod h1:azpTcoLcDZRNgFou5j+APrqQx9HqVPWa6ijYQIIVswQ=
 github.com/glebarez/go-sqlite v1.21.2 h1:3a6LFC4sKahUunAmynQKLZceZCOzUthkRkEAl9gAXWo=
