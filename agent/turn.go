@@ -205,12 +205,24 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 			case llm.EventTextDelta:
 				text += ev.Text
 				_ = emit(ctx, deps.Emit, "text-delta", map[string]any{
-					"text": ev.Text, "message_id": stepID, "run_id": in.RunID,
+					// `id` is the PART id, and it must be stable for the whole step.
+					//
+					// The console groups deltas by it: same id, same block, appended.
+					// It had been omitted entirely, and the client's delta handler
+					// requires it — so every frame was dropped, and the text appeared
+					// only through the per-step message insert, one fragment per
+					// block. stepID is the step's own id, which is exactly the
+					// granularity a part needs.
+					"id": stepID, "text": ev.Text,
+					"message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventReasoningDelta:
 				reasoning += ev.Text
 				_ = emit(ctx, deps.Emit, "reasoning-delta", map[string]any{
-					"text": ev.Text, "message_id": stepID, "run_id": in.RunID,
+					// Same contract as text-delta; the client prefixes "r" so the
+					// reasoning block and the text block stay separate.
+					"id": stepID, "text": ev.Text,
+					"message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventToolCall:
 				calls = append(calls, *ev.ToolCall)

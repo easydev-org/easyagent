@@ -580,13 +580,15 @@ func firstNonZero(vals ...int) int {
 // step's parts + chain position, closing the seam between the turn loop (which
 // only decides WHAT to emit) and the store.
 type persistSink struct {
-	rt       *Runtime
-	tenant   string
-	session  string
-	prevID   string
-	emit     Emitter
-	texts    map[string][]string
-	reason   map[string][]string
+	rt      *Runtime
+	tenant  string
+	session string
+	prevID  string
+	emit    Emitter
+	// Grouped by PART id, not one entry per delta: a step's streamed text is one
+	// part per id, not one part per frame (see deltaParts).
+	texts    map[string]*deltaParts
+	reason   map[string]*deltaParts
 	tools    map[string][]toolPart
 	results  map[string][]toolResultPart
 	finalIDs map[string]bool
@@ -594,8 +596,8 @@ type persistSink struct {
 
 func (s *persistSink) Emit(ctx context.Context, ev Event) error {
 	if s.texts == nil {
-		s.texts = map[string][]string{}
-		s.reason = map[string][]string{}
+		s.texts = map[string]*deltaParts{}
+		s.reason = map[string]*deltaParts{}
 		s.tools = map[string][]toolPart{}
 		s.results = map[string][]toolResultPart{}
 		s.finalIDs = map[string]bool{}
@@ -603,9 +605,9 @@ func (s *persistSink) Emit(ctx context.Context, ev Event) error {
 	mid, _ := ev.Params["message_id"].(string)
 	switch ev.Name {
 	case "text-delta":
-		s.texts[mid] = append(s.texts[mid], asString(ev.Params["text"]))
+		s.textPart(mid).add(asString(ev.Params["id"]), asString(ev.Params["text"]))
 	case "reasoning-delta":
-		s.reason[mid] = append(s.reason[mid], asString(ev.Params["text"]))
+		s.reasonPart(mid).add(asString(ev.Params["id"]), asString(ev.Params["text"]))
 	case "tool-call":
 		s.tools[mid] = append(s.tools[mid], toolPart{
 			ID: asString(ev.Params["toolCallId"]), Name: asString(ev.Params["toolName"]),
@@ -630,6 +632,22 @@ func (s *persistSink) Emit(ctx context.Context, ev Event) error {
 	return nil
 }
 
+// textPart returns the accumulator for one step's text, creating it on first use.
+func (s *persistSink) textPart(mid string) *deltaParts {
+	if s.texts[mid] == nil {
+		s.texts[mid] = &deltaParts{}
+	}
+	return s.texts[mid]
+}
+
+// reasonPart is textPart for reasoning.
+func (s *persistSink) reasonPart(mid string) *deltaParts {
+	if s.reason[mid] == nil {
+		s.reason[mid] = &deltaParts{}
+	}
+	return s.reason[mid]
+}
+
 // persistStep writes the assistant message + its parts under the SAME id the
 // stream used, then advances the chain tip.
 func (s *persistSink) persistStep(mid string) error {
@@ -639,11 +657,11 @@ func (s *persistSink) persistStep(mid string) error {
 	}
 	if created {
 		seq := 0
-		for _, r := range s.reason[mid] {
+		for _, r := range s.reasonPart(mid).Texts() {
 			_ = s.rt.deps.DB.InsertPart(s.tenant, mid, "reasoning", seq, map[string]any{"text": r})
 			seq++
 		}
-		for _, t := range s.texts[mid] {
+		for _, t := range s.textPart(mid).Texts() {
 			_ = s.rt.deps.DB.InsertPart(s.tenant, mid, "text", seq, map[string]any{"text": t})
 			seq++
 		}
@@ -663,7 +681,7 @@ func (s *persistSink) persistStep(mid string) error {
 	if _, err := s.rt.deps.DB.AppendMessageTip(s.tenant, s.session, mid); err != nil {
 		return err
 	}
-	_ = s.rt.deps.DB.SetSessionPreview(s.tenant, s.session, preview(strings.Join(s.texts[mid], "")))
+	_ = s.rt.deps.DB.SetSessionPreview(s.tenant, s.session, preview(strings.Join(s.textPart(mid).Texts(), "")))
 	s.prevID = mid
 	return nil
 }
