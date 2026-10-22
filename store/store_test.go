@@ -43,8 +43,16 @@ func TestSessionCRUDAndCounters(t *testing.T) {
 	if v, _ := d.MarkRead("t1", "s1", 1); v != 1 {
 		t.Errorf("markRead 1 = %d", v)
 	}
-	if v, _ := d.MarkRead("t1", "s1", 0); v != 1 {
-		t.Errorf("markRead 0 must not lower: %d", v)
+	// seq == 0 means "mark everything read" (advance to the current tip). The
+	// console calls MarkRead with no sequence when a session is opened, and the
+	// API documents "seq omitted => the current tip"; treating 0 as a value to
+	// compare left the unread badge stuck forever.
+	if v, _ := d.MarkRead("t1", "s1", 0); v != 2 {
+		t.Errorf("markRead 0 must advance to the tip (2), got %d", v)
+	}
+	// Still monotonic: an explicit older sequence must not lower the watermark.
+	if v, _ := d.MarkRead("t1", "s1", 1); v != 2 {
+		t.Errorf("markRead must not lower the watermark: %d", v)
 	}
 	if v, _ := d.MarkRead("t1", "s1", 999); v != 2 {
 		t.Errorf("markRead clamp = %d, want 2", v)

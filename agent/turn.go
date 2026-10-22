@@ -2,10 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/easydev-org/easyagent/llm"
@@ -368,7 +369,7 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 			}
 			// call.ID is the identity the extension reports progress under, so it
 			// is what the relay subscribes to.
-			outcome, execErr := execTool(ctx, deps, in, name, call.ID, call.Args)
+			outcome, execErr := execTool(ctx, deps, in, name, call.ID, stepID, call.Args)
 			if execErr != nil {
 				// A failed tool still pairs with its call id so the provider
 				// never sees a dangling tool-call (rule 4).
@@ -424,8 +425,8 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 // session's durable event stream as `tool-progress` frames. Those frames reach
 // the UI and a reconnecting client replays them, but they never enter
 // `messages` — the model still sees only the tool's final result.
-func execTool(ctx context.Context, deps Deps, in Input, name, callID, args string) (ToolOutcome, error) {
-	relayProgress(ctx, deps, in, callID)
+func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, args string) (ToolOutcome, error) {
+	relayProgress(ctx, deps, in, callID, stepID)
 	if deps.ToolTimeout <= 0 {
 		return deps.Tools.Execute(ctx, in.Tenant, in.Session, callID, name, args)
 	}
@@ -453,7 +454,7 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, args strin
 // It returns immediately; the subscription lives until the progress channel
 // closes. Relaying is best-effort by design: the tool's result is the contract,
 // and a UI that misses a frame has lost nothing that matters.
-func relayProgress(ctx context.Context, deps Deps, in Input, callID string) {
+func relayProgress(ctx context.Context, deps Deps, in Input, callID, stepID string) {
 	if deps.ToolProgress == nil || deps.Emit == nil || callID == "" {
 		return
 	}
@@ -479,6 +480,12 @@ func relayProgress(ctx context.Context, deps Deps, in Input, callID string) {
 					"toolCallId": upd.CallID,
 					"phase":      upd.Phase,
 					"text":       upd.Text,
+					// message_id is the routing key the console groups by. Every other
+					// event carries it; this one did not, so the client's
+					// streamMsgId() returned null and DROPPED every frame — the tool
+					// ran, the frames were published, and the UI showed nothing until
+					// the final result arrived.
+					"message_id": stepID,
 					"run_id":     in.RunID,
 				}
 				if upd.Progress > 0 {
@@ -526,11 +533,23 @@ func emit(ctx context.Context, e Emitter, name string, params map[string]any) er
 	return e.Emit(ctx, Event{Name: name, Params: params})
 }
 
-// newID mints a message id. The real agent uses a UUID; the loop only needs a
-// unique, opaque id, so a monotonic counter + prefix is enough here and keeps
-// the package dependency-free. Atomic so concurrent turns cannot collide.
-var idSeq atomic.Uint64
-
+// newID returns the id for one assistant step.
+//
+// It must be unique across PROCESS RESTARTS, not just within one process: message
+// ids are primary keys, so a counter that restarts at 1 reissues ids that already
+// exist. InsertMessage ignores the collision (OnConflict DoNothing), so the new
+// message is silently not stored — while its prev_id still points at the chain,
+// which makes the session render old content and the tip advance nowhere. That is
+// exactly "the message I just sent is gone", and it looked like a revert bug.
+//
+// The old id was `msg-<counter>`; rows from before this change keep that shape,
+// which is fine — only the new ids need to be globally unique.
 func newID() string {
-	return fmt.Sprintf("msg-%d", idSeq.Add(1))
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// rand.Read from crypto/rand does not fail in practice; if it ever does,
+		// falling back to a timestamp keeps ids unique instead of colliding.
+		return fmt.Sprintf("msg-%d", time.Now().UnixNano())
+	}
+	return "msg-" + hex.EncodeToString(b[:])
 }

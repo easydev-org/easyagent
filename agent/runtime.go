@@ -618,6 +618,20 @@ func (s *persistSink) Emit(ctx context.Context, ev Event) error {
 			ToolUseID: asString(ev.Params["toolCallId"]),
 			Content:   asString(ev.Params["formatted"]),
 		})
+		// Persist NOW, not only at message-added.
+		//
+		// A tool result is emitted AFTER the step's message-added, so storing parts
+		// solely on message-added meant `results` was always empty at write time:
+		// the database kept 23 tool calls and zero tool_results, the console showed
+		// an empty Content block, and history rebuilt from the DB had the same hole.
+		//
+		// persistStep is idempotent (it replaces the whole part set), so calling it
+		// again here simply records what has arrived so far.
+		if mid != "" {
+			if err := s.persistStep(mid); err != nil {
+				return err
+			}
+		}
 	case "message-added":
 		if streaming, _ := ev.Params["streaming"].(bool); !streaming && mid != "" && !s.finalIDs[mid] {
 			s.finalIDs[mid] = true

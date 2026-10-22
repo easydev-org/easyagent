@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"log/slog"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -122,6 +123,23 @@ func (d *DB) AppendMessageTip(tenant, name, messageID string) (int64, error) {
 		if err := q.First(&s).Error; err != nil {
 			return err
 		}
+		// Trace the tip transitions: "the tip is stuck on an old message" has several
+		// possible causes and this says which one it is.
+		prev := ""
+		if s.TipID != nil {
+			prev = *s.TipID
+		}
+		slog.Debug("append message tip", "tenant", tenant, "session", name,
+			"from", prev, "to", messageID, "seq", s.MessageSeq)
+		// Setting the tip to the message that is ALREADY the tip must not advance the
+		// counter. persistStep runs more than once per step (each wave of parts is
+		// written as it arrives), and bumping on every write inflated message_seq far
+		// past the real number of messages — which corrupts the unread watermark,
+		// since that is what it is compared against.
+		if prev == messageID {
+			seq = s.MessageSeq
+			return nil
+		}
 		seq = s.MessageSeq + 1
 		return tx.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
 			Updates(map[string]any{"tip_id": messageID, "message_seq": seq, "updated_at": nowStr()}).Error
@@ -143,8 +161,16 @@ func (d *DB) MarkRead(tenant, name string, seq int64) (int64, error) {
 			return err
 		}
 		v := s.ReadSeq
+		// seq == 0 means "mark everything read", not "do nothing".
+		//
+		// The console calls MarkRead with no sequence, and the old code treated 0 as
+		// a value to compare: 0 > ReadSeq is never true, so read_seq never moved and
+		// the unread badge could not be cleared by opening a session. The API
+		// documents "seq omitted => the current tip", so honour it.
 		if seq > v {
 			v = seq
+		} else if seq <= 0 {
+			v = s.MessageSeq
 		}
 		if v > s.MessageSeq {
 			v = s.MessageSeq
