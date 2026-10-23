@@ -48,6 +48,22 @@ func (e *Extension) Lookup(name string) (agent.ToolDef, bool) {
 	return agent.ToolDef{}, false
 }
 
+// PermissionDecl is one permission an extension can require of a caller.
+//
+// A permission is a (Key, params) pair: "merge in this repository" and "merge in that one"
+// are different authorisations, so a session may hold several grants of the same Key. A
+// client renders the grant form from ParamsFields and never interprets them, which is what
+// lets one panel serve every extension.
+type PermissionDecl struct {
+	Key          string
+	Label        string
+	Descriptions map[string]string
+	// Risk is read | write | destructive. Presentation only.
+	Risk string
+	// ParamsFields types one grant's params, with the SAME shape as a config knob.
+	ParamsFields []ConfigField
+}
+
 // ConfigField is a declared config knob attached to a tool (TS `configFields`).
 type ConfigField struct {
 	Name string

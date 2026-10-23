@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"connectrpc.com/connect/v2"
 
+	"github.com/easydev-org/easyagent/bundled"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/store"
 )
@@ -101,4 +103,57 @@ func grantToMsg(r store.SessionGrant) *agentv1.Grant {
 		GrantedAt:  r.GrantedAt,
 		GrantedBy:  r.GrantedBy,
 	}
+}
+
+// ListPermissionDecls publishes what the discovered extensions can require.
+//
+// The console renders a grant form from this, which is what keeps the permission UI
+// generic: it knows nothing about repositories or sandboxes, only that a permission has a
+// key, a risk and a params shape.
+func (s *Server) ListPermissionDecls(ctx context.Context, _ *agentv1.ListPermissionDeclsRequest) (*agentv1.ListPermissionDeclsResponse, error) {
+	if s.tools == nil {
+		// No extension surface wired (a bare server): an empty list is the truth, not an
+		// error.
+		return &agentv1.ListPermissionDeclsResponse{}, nil
+	}
+	byExt := s.tools.AllPermissions()
+	// Stable order: extension id, then the author's declaration order (which reflects how
+	// the extension is used and would be lost by sorting).
+	extIDs := make([]string, 0, len(byExt))
+	for id := range byExt {
+		extIDs = append(extIDs, id)
+	}
+	sort.Strings(extIDs)
+
+	out := make([]*agentv1.PermissionDecl, 0, len(byExt))
+	for _, id := range extIDs {
+		for _, p := range byExt[id] {
+			out = append(out, &agentv1.PermissionDecl{
+				ExtId:        id,
+				Key:          p.Key,
+				Label:        p.Label,
+				Descriptions: p.Descriptions,
+				Risk:         p.Risk,
+				ParamsFields: toolConfigFields(p.ParamsFields),
+			})
+		}
+	}
+	return &agentv1.ListPermissionDeclsResponse{Decls: out}, nil
+}
+
+// toolConfigFields maps a config field onto the wire shape the console already renders.
+func toolConfigFields(in []bundled.ConfigField) []*agentv1.ToolConfigField {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*agentv1.ToolConfigField, 0, len(in))
+	for _, f := range in {
+		fld := &agentv1.ToolConfigField{
+			Name:        f.Name,
+			Type:        f.Type,
+			Description: f.Description,
+		}
+		out = append(out, fld)
+	}
+	return out
 }

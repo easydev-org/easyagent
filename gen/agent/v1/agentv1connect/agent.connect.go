@@ -66,6 +66,9 @@ const (
 	AgentServiceCreateGrantProcedure = "/agent.v1.AgentService/CreateGrant"
 	// AgentServiceRevokeGrantProcedure is the procedure name of the AgentService's RevokeGrant RPC.
 	AgentServiceRevokeGrantProcedure = "/agent.v1.AgentService/RevokeGrant"
+	// AgentServiceListPermissionDeclsProcedure is the procedure name of the AgentService's
+	// ListPermissionDecls RPC.
+	AgentServiceListPermissionDeclsProcedure = "/agent.v1.AgentService/ListPermissionDecls"
 	// AgentServiceStateProcedure is the procedure name of the AgentService's State RPC.
 	AgentServiceStateProcedure = "/agent.v1.AgentService/State"
 	// AgentServiceMailboxProcedure is the procedure name of the AgentService's Mailbox RPC.
@@ -293,6 +296,13 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("RevokeGrant"),
 			Procedure:  AgentServiceRevokeGrantProcedure,
+		}
+	})
+	agentServiceListPermissionDeclsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListPermissionDecls"),
+			Procedure:  AgentServiceListPermissionDeclsProcedure,
 		}
 	})
 	agentServiceStateSpec = sync.OnceValue(func() connect.Spec {
@@ -530,6 +540,12 @@ type AgentServiceClient interface {
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
 	CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error)
 	RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error)
+	// ListPermissionDecls publishes what the discovered extensions can require.
+	//
+	// A client needs this to render a grant form: the params shape comes from the
+	// extension, not from the console. Without it a UI could only offer permissions it was
+	// hard-coded to know about.
+	ListPermissionDecls(context.Context, *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -680,6 +696,12 @@ type AgentServiceHandler interface {
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
 	CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error)
 	RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error)
+	// ListPermissionDecls publishes what the discovered extensions can require.
+	//
+	// A client needs this to render a grant form: the params shape comes from the
+	// extension, not from the console. Without it a UI could only offer permissions it was
+	// hard-coded to know about.
+	ListPermissionDecls(context.Context, *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -733,6 +755,7 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceListGrantsSpec(), Handler: adapter.listGrants},
 		connect.Method{Spec: agentServiceCreateGrantSpec(), Handler: adapter.createGrant},
 		connect.Method{Spec: agentServiceRevokeGrantSpec(), Handler: adapter.revokeGrant},
+		connect.Method{Spec: agentServiceListPermissionDeclsSpec(), Handler: adapter.listPermissionDecls},
 		connect.Method{Spec: agentServiceStateSpec(), Handler: adapter.state},
 		connect.Method{Spec: agentServiceMailboxSpec(), Handler: adapter.mailbox},
 		connect.Method{Spec: agentServiceUpdateSettingsSpec(), Handler: adapter.updateSettings},
@@ -901,6 +924,10 @@ func (UnimplementedAgentServiceHandler) CreateGrant(context.Context, *v1.CreateG
 
 func (UnimplementedAgentServiceHandler) RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.RevokeGrant is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListPermissionDecls(context.Context, *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListPermissionDecls is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) State(context.Context, *v1.StateRequest) (*v1.StateResponse, error) {
@@ -1162,6 +1189,14 @@ func (c *agentServiceClient) CreateGrant(ctx context.Context, req *v1.CreateGran
 func (c *agentServiceClient) RevokeGrant(ctx context.Context, req *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error) {
 	var res v1.RevokeGrantResponse
 	if err := c.client.CallUnary(ctx, agentServiceRevokeGrantSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListPermissionDecls(ctx context.Context, req *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error) {
+	var res v1.ListPermissionDeclsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListPermissionDeclsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1599,6 +1634,18 @@ func (h agentServiceHandler) revokeGrant(ctx context.Context, _ connect.Spec, st
 		return err
 	}
 	res, err := h.svc.RevokeGrant(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listPermissionDecls(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListPermissionDeclsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListPermissionDecls(ctx, &req)
 	if err != nil {
 		return err
 	}

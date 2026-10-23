@@ -438,6 +438,25 @@ message RevokeGrantRequest {
 }
 message RevokeGrantResponse {}
 
+// PermissionDecl is one permission a discovered extension can require.
+message PermissionDecl {
+  string ext_id = 1;
+  string key = 2;
+  string label = 3;
+  map<string, string> descriptions = 4;
+  // read | write | destructive. Presentation only: a client uses it to warn.
+  string risk = 5;
+  // params_fields types one grant's params, using the SAME schema as a config knob so a
+  // client renders one form component for both.
+  repeated ToolConfigField params_fields = 6;
+}
+
+message ListPermissionDeclsRequest {}
+message ListPermissionDeclsResponse {
+  // Ordered by extension id, then declaration order — the author's order is meaningful.
+  repeated PermissionDecl decls = 1;
+}
+
 message StateRequest { string id = 1; }
 message StateResponse { google.protobuf.Struct state = 1; }
 
@@ -728,6 +747,12 @@ service AgentService {
   rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
   rpc CreateGrant(CreateGrantRequest) returns (CreateGrantResponse);
   rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
+  // ListPermissionDecls publishes what the discovered extensions can require.
+  //
+  // A client needs this to render a grant form: the params shape comes from the
+  // extension, not from the console. Without it a UI could only offer permissions it was
+  // hard-coded to know about.
+  rpc ListPermissionDecls(ListPermissionDeclsRequest) returns (ListPermissionDeclsResponse);
   rpc State(StateRequest) returns (StateResponse);
   rpc Mailbox(MailboxRequest) returns (MailboxResponse);
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);

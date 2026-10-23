@@ -231,6 +231,9 @@ type ToolExecutor struct {
 	extFields map[string][]bundled.ConfigField
 	// extNS maps an extension id -> its DECLARED namespaces (in author order).
 	extNS map[string][]bundled.Namespace
+	// extPerms maps an extension id -> the permissions it can require. A client renders
+	// the grant form from this, so it never has to know what any extension means.
+	extPerms map[string][]bundled.PermissionDecl
 	// grants supplies a session's authorisations. nil = no permission enforcement.
 	//
 	// Injected rather than held as a *store.DB so this package stays independent of the
@@ -246,7 +249,7 @@ type GrantSource func(ctx context.Context, tenant, session string) (map[string][
 
 // NewToolExecutor builds a tool executor over the agent role.
 func NewToolExecutor(a *abcagent.Agent) *ToolExecutor {
-	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}, extNS: map[string][]bundled.Namespace{}}
+	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}, extNS: map[string][]bundled.Namespace{}, extPerms: map[string][]bundled.PermissionDecl{}}
 }
 
 // WithGrants installs the authorisation source. Without one, permission-gated tools are
@@ -272,6 +275,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 		// The declared grouping (pvc, build, ...), so a client can lay the surface
 		// out in the author's order instead of one flat list.
 		e.extNS[m.Id] = manifestNamespaces(m)
+		// What this extension can require of a caller. A client renders the grant form
+		// from this, which is what keeps the permission UI generic.
+		e.extPerms[m.Id] = manifestPermissions(m)
 		if m.Tools == nil {
 			continue
 		}
@@ -487,6 +493,93 @@ func (e *ToolExecutor) ExtensionIDs() []string {
 		out = append(out, id)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// ExtensionPermissions returns an extension's declared permissions.
+func (e *ToolExecutor) ExtensionPermissions(extID string) []bundled.PermissionDecl {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.extPerms[extID]
+}
+
+// AllPermissions returns every extension's declared permissions, keyed by extension id.
+//
+// The whole set at once: a client showing "what can I grant this session" needs all of it,
+// and asking per extension would be one round trip per extension for a panel that shows
+// them together.
+func (e *ToolExecutor) AllPermissions() map[string][]bundled.PermissionDecl {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string][]bundled.PermissionDecl, len(e.extPerms))
+	for k, v := range e.extPerms {
+		if len(v) == 0 {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// manifestPermissions maps a discovered manifest's permission declarations.
+func manifestPermissions(m *easybus.ExtensionManifest) []bundled.PermissionDecl {
+	if m == nil || len(m.Permissions) == 0 {
+		return nil
+	}
+	out := make([]bundled.PermissionDecl, 0, len(m.Permissions))
+	for _, p := range m.Permissions {
+		out = append(out, bundled.PermissionDecl{
+			Key:          p.Key,
+			Label:        p.Label,
+			Descriptions: p.Descriptions,
+			Risk:         p.Risk,
+			ParamsFields: permFieldSpecs(p.ParamsFields),
+		})
+	}
+	return out
+}
+
+// permFieldSpecs converts declared params to the SAME shape config knobs use, so the
+// console renders one form component for both and there is no second schema dialect.
+func permFieldSpecs(in []*easybus.ConfigFieldSchema) []bundled.ConfigField {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]bundled.ConfigField, 0, len(in))
+	for _, f := range in {
+		out = append(out, bundled.ConfigField{
+			Name:        f.Name,
+			Type:        f.Type,
+			Kind:        derefStr(f.Kind),
+			Format:      derefStr(f.Format),
+			Description: derefStr(f.Description),
+			Fields:      permNestedSpecs(f.Fields),
+		})
+	}
+	return out
+}
+
+// permNestedSpecs maps a nested field list onto the config-knob sub-field shape.
+//
+// A second conversion exists because the two shapes differ in one place: a config knob's
+// Fields are ConfigFieldSpec (with defaults and enums) while the wire publishes
+// ConfigFieldSchema. Keeping them separate here is cheaper than unifying types across the
+// manifest and the tool registry for one nested level.
+func permNestedSpecs(in []*easybus.ConfigFieldSchema) []bundled.ConfigFieldSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]bundled.ConfigFieldSpec, 0, len(in))
+	for _, f := range in {
+		out = append(out, bundled.ConfigFieldSpec{
+			Name:        f.Name,
+			Type:        f.Type,
+			Kind:        derefStr(f.Kind),
+			Format:      derefStr(f.Format),
+			Description: derefStr(f.Description),
+			Fields:      permNestedSpecs(f.Fields),
+		})
+	}
 	return out
 }
 
