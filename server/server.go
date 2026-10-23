@@ -57,6 +57,10 @@ type Server struct {
 	stream StreamSource
 	// lifecycle is the lifecycle broadcaster (nil = not wired).
 	lifecycle LifecyclePublisher
+	// channels provisions each session's built-in channel subscription (nil = no broker).
+	channels ChannelProvisioner
+	// subs lists and edits channel subscriptions (nil = channels not configured).
+	subs SubscriptionStore
 	// seedTenant applies deployment-pinned defaults to a fresh tenant.
 	seedTenant func(tenant string)
 
@@ -127,6 +131,18 @@ func (s *Server) SetStreamSource(src StreamSource) { s.stream = src }
 
 // SetLifecycle installs the lifecycle publisher (created/forked/renamed/deleted).
 func (s *Server) SetLifecycle(p LifecyclePublisher) { s.lifecycle = p }
+
+// ChannelProvisioner writes the built-in channel subscription for a session.
+//
+// An interface rather than a direct call into the bus package so the in-memory server (used
+// by tests and single-process runs) can leave it nil: a session then has no default channel,
+// which is the truthful state when there is no broker to deliver on.
+type ChannelProvisioner interface {
+	EnsureDefault(ctx context.Context, tenant, session string) error
+}
+
+// SetChannelProvisioner installs the default-subscription writer.
+func (s *Server) SetChannelProvisioner(p ChannelProvisioner) { s.channels = p }
 
 // SetTenantSeeder installs the per-tenant default seeder (for CreateTenant).
 func (s *Server) SetTenantSeeder(fn func(tenant string)) { s.seedTenant = fn }

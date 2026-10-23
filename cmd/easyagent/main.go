@@ -30,6 +30,7 @@ import (
 	"github.com/easydev-org/easyagent/media"
 	"github.com/easydev-org/easyagent/server"
 	"github.com/easydev-org/easyagent/store"
+	sdkbus "github.com/easydev-org/easybus-sdk/bus"
 )
 
 func main() {
@@ -80,6 +81,10 @@ func run(cfgPath string) error {
 	}
 	var runtimeBus *bus.Bus
 	var toolExec *bus.ToolExecutor
+	// Channels: the local index, the distributor, and the cleanup for the KV watch.
+	var subIdx *bus.SubscriptionIndex
+	var dist *bus.Distributor
+	var channelStop func()
 	// Presets + tenant config: JetStream KV when NATS is available (persisted
 	// across replicas/restarts), else in-memory.
 	var kv agent.KV = agent.NewMemoryKV()
@@ -143,6 +148,29 @@ func run(cfgPath string) error {
 		// the session's durable event stream so a reconnecting client still sees it.
 		rtDeps.ToolProgress = agent.NewToolProgressSource(b.Agent())
 		toolExec = exec
+
+		// Channels: one consumer for every channel of every tenant, routed to sessions
+		// through an index mirrored from the `subs` KV bucket.
+		//
+		// The routing is local because a JetStream consumer's filter is fixed at creation:
+		// a per-subscription consumer would have to be rebuilt whenever a user changed what
+		// they follow. Here the filter is always channel.>, so subscriptions cost nothing at
+		// the broker.
+		subIdx = bus.NewSubscriptionIndex(b.Transport())
+		if stop, err := subIdx.Start(context.Background()); err != nil {
+			slog.Error("channel subscriptions unavailable", "err", err)
+		} else {
+			channelStop = stop
+			slog.Info("channel subscriptions watching")
+		}
+		dist = bus.NewDistributor(subIdx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+			return b.PublishMailbox(ctx, tenant, session, typ, payload, source)
+		}).WithLogger(slog.Default())
+		if _, err := dist.Start(context.Background(), sdkbus.NewChannels(b.Transport()), "agent-channels"); err != nil {
+			slog.Error("channel consumer unavailable", "err", err)
+		} else {
+			slog.Info("channel consumer started", "queue", "agent-channels")
+		}
 	} else {
 		rtDeps.Tools = bundledExt
 		rtDeps.Registry = bundledExt
@@ -169,6 +197,11 @@ func run(cfgPath string) error {
 	})
 	if runtimeBus != nil {
 		srv.SetStreamSource(runtimeBus)
+		// Every session gets a default channel so anything can reach it by name.
+		if subIdx != nil {
+			srv.SetChannelProvisioner(bus.NewDefaultChannelProvisioner(runtimeBus.Transport()))
+			srv.SetSubscriptions(bus.NewSubscriptionStore(runtimeBus.Transport(), subIdx))
+		}
 	}
 	// Durable file bytes live in S3 when configured (AGENT_BLOB_BACKEND=s3).
 	if strings.EqualFold(cfg.Blob.Backend, "s3") {
@@ -273,6 +306,11 @@ func run(cfgPath string) error {
 	select {
 	case s := <-stop:
 		slog.Info("shutting down", "signal", s.String())
+		// Stop the channel KV watch so the shutdown does not leave a goroutine pulling
+		// from a closed connection.
+		if channelStop != nil {
+			channelStop()
+		}
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err

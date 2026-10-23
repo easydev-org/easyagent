@@ -79,6 +79,14 @@ func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRe
 	if err := s.db.CreateSession(tenant, in); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// Give the session its built-in channel so anything can reach it by name.
+	//
+	// A failure here does NOT fail the session: the session exists and works, it is just
+	// not reachable on its channel until the subscription is written. Killing the creation
+	// would be worse — the user asked for a session, and a broker hiccup should not lose it.
+	if s.channels != nil {
+		_ = s.channels.EnsureDefault(ctx, tenant, req.Name)
+	}
 	s.lifecycleFire(ctx, tenant, "created", req.Name, map[string]any{"kind": "created", "tenant": tenant, "session_name": req.Name})
 	return &agentv1.CreateSessionResponse{Ok: true, SessionName: req.Name}, nil
 }
@@ -277,6 +285,12 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	// A failure here is not fatal: the session exists and simply starts with no grants,
 	// which is the safe direction for a permission problem.
 	_, _ = s.db.CopyGrantsFrom(tenant, req.Id, req.Name)
+	// A fork is a NEW session, so it needs its OWN default channel. It does not inherit the
+	// parent's: a message addressed to the parent must not reach the child, and a child that
+	// was unreachable by name would be a strange kind of session.
+	if s.channels != nil {
+		_ = s.channels.EnsureDefault(ctx, tenant, req.Name)
+	}
 	s.publish(tenant, req.Name, "session-changed", map[string]any{"session_name": req.Name})
 	s.lifecycleFire(ctx, tenant, "forked", req.Name, map[string]any{"kind": "forked", "tenant": tenant, "parent": req.Id})
 	row, _, _ := s.db.GetSession(tenant, req.Name)

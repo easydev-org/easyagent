@@ -234,6 +234,9 @@ type ToolExecutor struct {
 	// extPerms maps an extension id -> the permissions it can require. A client renders
 	// the grant form from this, so it never has to know what any extension means.
 	extPerms map[string][]bundled.PermissionDecl
+	// extChans maps an extension id -> the channels it publishes to. A client offers a
+	// subscription from this instead of asking the user to invent a pattern.
+	extChans map[string][]bundled.ChannelDecl
 	// grants supplies a session's authorisations. nil = no permission enforcement.
 	//
 	// Injected rather than held as a *store.DB so this package stays independent of the
@@ -249,7 +252,7 @@ type GrantSource func(ctx context.Context, tenant, session string) (map[string][
 
 // NewToolExecutor builds a tool executor over the agent role.
 func NewToolExecutor(a *abcagent.Agent) *ToolExecutor {
-	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}, extNS: map[string][]bundled.Namespace{}, extPerms: map[string][]bundled.PermissionDecl{}}
+	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}, extNS: map[string][]bundled.Namespace{}, extPerms: map[string][]bundled.PermissionDecl{}, extChans: map[string][]bundled.ChannelDecl{}}
 }
 
 // WithGrants installs the authorisation source. Without one, permission-gated tools are
@@ -278,6 +281,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 		// What this extension can require of a caller. A client renders the grant form
 		// from this, which is what keeps the permission UI generic.
 		e.extPerms[m.Id] = manifestPermissions(m)
+		// What this extension publishes, so a client can suggest a subscription instead of
+		// asking the user to invent a pattern.
+		e.extChans[m.Id] = manifestChannels(m)
 		if m.Tools == nil {
 			continue
 		}
@@ -517,6 +523,41 @@ func (e *ToolExecutor) AllPermissions() map[string][]bundled.PermissionDecl {
 			continue
 		}
 		out[k] = v
+	}
+	return out
+}
+
+// AllChannels returns every extension's published channels, keyed by extension id.
+func (e *ToolExecutor) AllChannels() map[string][]bundled.ChannelDecl {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string][]bundled.ChannelDecl, len(e.extChans))
+	for k, v := range e.extChans {
+		if len(v) == 0 {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// manifestChannels maps a discovered manifest's channel declarations.
+func manifestChannels(m *easybus.ExtensionManifest) []bundled.ChannelDecl {
+	if m == nil || len(m.Channels) == 0 {
+		return nil
+	}
+	out := make([]bundled.ChannelDecl, 0, len(m.Channels))
+	for _, c := range m.Channels {
+		topics := make([]bundled.ChannelTopicDecl, 0, len(c.Topics))
+		for _, t := range c.Topics {
+			topics = append(topics, bundled.ChannelTopicDecl{
+				Pattern: t.Pattern, Description: t.Description, Descriptions: t.Descriptions,
+			})
+		}
+		out = append(out, bundled.ChannelDecl{
+			Name: c.Name, Description: c.Description,
+			Descriptions: c.Descriptions, Topics: topics,
+		})
 	}
 	return out
 }

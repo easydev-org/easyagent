@@ -457,6 +457,55 @@ message ListPermissionDeclsResponse {
   repeated PermissionDecl decls = 1;
 }
 
+// Subscription is one channel a session follows.
+message Subscription {
+  // id identifies this subscription for removal.
+  string id = 1;
+  string channel = 2;
+  // pattern is a NATS subject filter within the channel, e.g. "tag.agentdev/mrflow.>".
+  string pattern = 3;
+  // wake=true makes a matching message start a turn; false only lands it in the context.
+  bool wake = 4;
+  // system marks the built-in subscription every session has, which cannot be removed.
+  bool system = 5;
+}
+
+message ListSubscriptionsRequest { string id = 1; }
+message ListSubscriptionsResponse { repeated Subscription subscriptions = 1; }
+
+message SubscribeChannelRequest {
+  string id = 1;       // session name
+  string channel = 2;
+  string pattern = 3;
+  bool wake = 4;
+}
+message SubscribeChannelResponse { Subscription subscription = 1; }
+
+message UnsubscribeChannelRequest {
+  string id = 1;       // session name
+  string subscription_id = 2;
+}
+message UnsubscribeChannelResponse {}
+
+// ChannelDecl is one channel a discovered extension publishes to.
+message ChannelDecl {
+  string ext_id = 1;
+  string name = 2;
+  string description = 3;
+  map<string, string> descriptions = 4;
+  repeated ChannelTopicDecl topics = 5;
+}
+
+message ChannelTopicDecl {
+  // pattern documents the topic shape, e.g. "tag.<owner>/<repo>.<tag>".
+  string pattern = 1;
+  string description = 2;
+  map<string, string> descriptions = 3;
+}
+
+message ListChannelsRequest {}
+message ListChannelsResponse { repeated ChannelDecl channels = 1; }
+
 message StateRequest { string id = 1; }
 message StateResponse { google.protobuf.Struct state = 1; }
 
@@ -753,6 +802,21 @@ service AgentService {
   // extension, not from the console. Without it a UI could only offer permissions it was
   // hard-coded to know about.
   rpc ListPermissionDecls(ListPermissionDeclsRequest) returns (ListPermissionDeclsResponse);
+
+  // ── channel subscriptions ────────────────────────────────────────────────
+  //
+  // What a session LISTENS TO. A subscription is (channel, pattern, wake): the pattern is a
+  // NATS subject filter within the channel, and wake decides whether a matching message
+  // starts a turn or only lands in the session's context.
+  //
+  // Every session carries a built-in subscription to `session-channel.<its name>.>` which
+  // cannot be removed: that is how anything reaches a session by name.
+  rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  rpc SubscribeChannel(SubscribeChannelRequest) returns (SubscribeChannelResponse);
+  rpc UnsubscribeChannel(UnsubscribeChannelRequest) returns (UnsubscribeChannelResponse);
+  // ListChannels publishes which channels the discovered extensions publish to, so a client
+  // can offer "follow this repository's tags" instead of asking for a pattern.
+  rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
   rpc State(StateRequest) returns (StateResponse);
   rpc Mailbox(MailboxRequest) returns (MailboxResponse);
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);

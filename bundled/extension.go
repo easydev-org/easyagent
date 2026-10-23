@@ -48,6 +48,25 @@ func (e *Extension) Lookup(name string) (agent.ToolDef, bool) {
 	return agent.ToolDef{}, false
 }
 
+// ChannelDecl is one channel an extension publishes to.
+//
+// Topics are documentation: the agent forwards what the extension publishes and never
+// parses a topic pattern. They exist so a client can offer "follow this repository's tags"
+// instead of asking a user to invent a pattern.
+type ChannelDecl struct {
+	Name         string
+	Description  string
+	Descriptions map[string]string
+	Topics       []ChannelTopicDecl
+}
+
+// ChannelTopicDecl documents one kind of message within a channel.
+type ChannelTopicDecl struct {
+	Pattern      string
+	Description  string
+	Descriptions map[string]string
+}
+
 // PermissionDecl is one permission an extension can require of a caller.
 //
 // A permission is a (Key, params) pair: "merge in this repository" and "merge in that one"

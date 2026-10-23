@@ -69,6 +69,17 @@ const (
 	// AgentServiceListPermissionDeclsProcedure is the procedure name of the AgentService's
 	// ListPermissionDecls RPC.
 	AgentServiceListPermissionDeclsProcedure = "/agent.v1.AgentService/ListPermissionDecls"
+	// AgentServiceListSubscriptionsProcedure is the procedure name of the AgentService's
+	// ListSubscriptions RPC.
+	AgentServiceListSubscriptionsProcedure = "/agent.v1.AgentService/ListSubscriptions"
+	// AgentServiceSubscribeChannelProcedure is the procedure name of the AgentService's
+	// SubscribeChannel RPC.
+	AgentServiceSubscribeChannelProcedure = "/agent.v1.AgentService/SubscribeChannel"
+	// AgentServiceUnsubscribeChannelProcedure is the procedure name of the AgentService's
+	// UnsubscribeChannel RPC.
+	AgentServiceUnsubscribeChannelProcedure = "/agent.v1.AgentService/UnsubscribeChannel"
+	// AgentServiceListChannelsProcedure is the procedure name of the AgentService's ListChannels RPC.
+	AgentServiceListChannelsProcedure = "/agent.v1.AgentService/ListChannels"
 	// AgentServiceStateProcedure is the procedure name of the AgentService's State RPC.
 	AgentServiceStateProcedure = "/agent.v1.AgentService/State"
 	// AgentServiceMailboxProcedure is the procedure name of the AgentService's Mailbox RPC.
@@ -303,6 +314,34 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListPermissionDecls"),
 			Procedure:  AgentServiceListPermissionDeclsProcedure,
+		}
+	})
+	agentServiceListSubscriptionsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListSubscriptions"),
+			Procedure:  AgentServiceListSubscriptionsProcedure,
+		}
+	})
+	agentServiceSubscribeChannelSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("SubscribeChannel"),
+			Procedure:  AgentServiceSubscribeChannelProcedure,
+		}
+	})
+	agentServiceUnsubscribeChannelSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("UnsubscribeChannel"),
+			Procedure:  AgentServiceUnsubscribeChannelProcedure,
+		}
+	})
+	agentServiceListChannelsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListChannels"),
+			Procedure:  AgentServiceListChannelsProcedure,
 		}
 	})
 	agentServiceStateSpec = sync.OnceValue(func() connect.Spec {
@@ -546,6 +585,20 @@ type AgentServiceClient interface {
 	// extension, not from the console. Without it a UI could only offer permissions it was
 	// hard-coded to know about.
 	ListPermissionDecls(context.Context, *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error)
+	// ── channel subscriptions ────────────────────────────────────────────────
+	//
+	// What a session LISTENS TO. A subscription is (channel, pattern, wake): the pattern is a
+	// NATS subject filter within the channel, and wake decides whether a matching message
+	// starts a turn or only lands in the session's context.
+	//
+	// Every session carries a built-in subscription to `session-channel.<its name>.>` which
+	// cannot be removed: that is how anything reaches a session by name.
+	ListSubscriptions(context.Context, *v1.ListSubscriptionsRequest) (*v1.ListSubscriptionsResponse, error)
+	SubscribeChannel(context.Context, *v1.SubscribeChannelRequest) (*v1.SubscribeChannelResponse, error)
+	UnsubscribeChannel(context.Context, *v1.UnsubscribeChannelRequest) (*v1.UnsubscribeChannelResponse, error)
+	// ListChannels publishes which channels the discovered extensions publish to, so a client
+	// can offer "follow this repository's tags" instead of asking for a pattern.
+	ListChannels(context.Context, *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -702,6 +755,20 @@ type AgentServiceHandler interface {
 	// extension, not from the console. Without it a UI could only offer permissions it was
 	// hard-coded to know about.
 	ListPermissionDecls(context.Context, *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error)
+	// ── channel subscriptions ────────────────────────────────────────────────
+	//
+	// What a session LISTENS TO. A subscription is (channel, pattern, wake): the pattern is a
+	// NATS subject filter within the channel, and wake decides whether a matching message
+	// starts a turn or only lands in the session's context.
+	//
+	// Every session carries a built-in subscription to `session-channel.<its name>.>` which
+	// cannot be removed: that is how anything reaches a session by name.
+	ListSubscriptions(context.Context, *v1.ListSubscriptionsRequest) (*v1.ListSubscriptionsResponse, error)
+	SubscribeChannel(context.Context, *v1.SubscribeChannelRequest) (*v1.SubscribeChannelResponse, error)
+	UnsubscribeChannel(context.Context, *v1.UnsubscribeChannelRequest) (*v1.UnsubscribeChannelResponse, error)
+	// ListChannels publishes which channels the discovered extensions publish to, so a client
+	// can offer "follow this repository's tags" instead of asking for a pattern.
+	ListChannels(context.Context, *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -756,6 +823,10 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceCreateGrantSpec(), Handler: adapter.createGrant},
 		connect.Method{Spec: agentServiceRevokeGrantSpec(), Handler: adapter.revokeGrant},
 		connect.Method{Spec: agentServiceListPermissionDeclsSpec(), Handler: adapter.listPermissionDecls},
+		connect.Method{Spec: agentServiceListSubscriptionsSpec(), Handler: adapter.listSubscriptions},
+		connect.Method{Spec: agentServiceSubscribeChannelSpec(), Handler: adapter.subscribeChannel},
+		connect.Method{Spec: agentServiceUnsubscribeChannelSpec(), Handler: adapter.unsubscribeChannel},
+		connect.Method{Spec: agentServiceListChannelsSpec(), Handler: adapter.listChannels},
 		connect.Method{Spec: agentServiceStateSpec(), Handler: adapter.state},
 		connect.Method{Spec: agentServiceMailboxSpec(), Handler: adapter.mailbox},
 		connect.Method{Spec: agentServiceUpdateSettingsSpec(), Handler: adapter.updateSettings},
@@ -928,6 +999,22 @@ func (UnimplementedAgentServiceHandler) RevokeGrant(context.Context, *v1.RevokeG
 
 func (UnimplementedAgentServiceHandler) ListPermissionDecls(context.Context, *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListPermissionDecls is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListSubscriptions(context.Context, *v1.ListSubscriptionsRequest) (*v1.ListSubscriptionsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListSubscriptions is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) SubscribeChannel(context.Context, *v1.SubscribeChannelRequest) (*v1.SubscribeChannelResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.SubscribeChannel is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) UnsubscribeChannel(context.Context, *v1.UnsubscribeChannelRequest) (*v1.UnsubscribeChannelResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.UnsubscribeChannel is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListChannels(context.Context, *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListChannels is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) State(context.Context, *v1.StateRequest) (*v1.StateResponse, error) {
@@ -1197,6 +1284,38 @@ func (c *agentServiceClient) RevokeGrant(ctx context.Context, req *v1.RevokeGran
 func (c *agentServiceClient) ListPermissionDecls(ctx context.Context, req *v1.ListPermissionDeclsRequest) (*v1.ListPermissionDeclsResponse, error) {
 	var res v1.ListPermissionDeclsResponse
 	if err := c.client.CallUnary(ctx, agentServiceListPermissionDeclsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListSubscriptions(ctx context.Context, req *v1.ListSubscriptionsRequest) (*v1.ListSubscriptionsResponse, error) {
+	var res v1.ListSubscriptionsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListSubscriptionsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) SubscribeChannel(ctx context.Context, req *v1.SubscribeChannelRequest) (*v1.SubscribeChannelResponse, error) {
+	var res v1.SubscribeChannelResponse
+	if err := c.client.CallUnary(ctx, agentServiceSubscribeChannelSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) UnsubscribeChannel(ctx context.Context, req *v1.UnsubscribeChannelRequest) (*v1.UnsubscribeChannelResponse, error) {
+	var res v1.UnsubscribeChannelResponse
+	if err := c.client.CallUnary(ctx, agentServiceUnsubscribeChannelSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error) {
+	var res v1.ListChannelsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListChannelsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1646,6 +1765,54 @@ func (h agentServiceHandler) listPermissionDecls(ctx context.Context, _ connect.
 		return err
 	}
 	res, err := h.svc.ListPermissionDecls(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listSubscriptions(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListSubscriptionsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListSubscriptions(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) subscribeChannel(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SubscribeChannelRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SubscribeChannel(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) unsubscribeChannel(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UnsubscribeChannelRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UnsubscribeChannel(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listChannels(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListChannelsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListChannels(ctx, &req)
 	if err != nil {
 		return err
 	}
