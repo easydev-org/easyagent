@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/easydev-org/easyagent/llm"
@@ -456,6 +457,10 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, ar
 			// stored and handed to the model exactly like a finished one, so a job that
 			// printed 100k lines before timing out must not smuggle them into either.
 			partial := stream.TrimToLimit(deps.Locale)
+			// Stop the relay before the terminal frame, for the same reason as the
+			// success path: a delta published after it would be appended to output the
+			// client had already been given in full.
+			stopRelay()
 			emitOutput(ctx, deps, in, stepID, callID, name, stream, map[string]any{
 				"state": state,
 				"error": fmt.Sprintf("%s after %s", state, deps.ToolTimeout),
@@ -477,15 +482,19 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, ar
 		emitError(ctx, deps, in, stepID, callID, name, err)
 		return out, err
 	}
-	// The tool's returned content IS the result: take it over the relayed lines so
-	// the final frame agrees with what the model was told, even for a tool that
-	// reported nothing on the side channel.
+	// The tool's returned content is the RESULT; the relayed lines are only its live
+	// preview. They are usually the same text, so the result REPLACES the stream rather
+	// than extending it.
+	//
+	// Appending was a real defect: a streaming tool had already put 900 lines into the
+	// stream, the returned Content was those same 900, and the sum (1800) was then
+	// trimmed to 250 + 250 — taking the head of one copy and the tail of the other. The
+	// card showed two overlapping runs of line numbers.
+	//
+	// Replacing is also what makes the model and the console agree: the model is given
+	// out.Content, so that is what the card must show.
 	if out.Content != "" {
-		for _, line := range splitLines(out.Content) {
-			if line != "" {
-				stream.Append(line)
-			}
-		}
+		stream.SetText(out.Content)
 	}
 	// TRIM before anything is stored, sent, or shown again.
 	//
@@ -503,6 +512,16 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, ar
 		// would reason about lines no reader can see.
 		out.Content = trimmed
 	}
+	// STOP the relay BEFORE the terminal frame, not after.
+	//
+	// `defer stopRelay()` runs when execTool returns, which is AFTER emitOutput below.
+	// In that window the relay goroutine could still be draining the progress channel
+	// and publishing deltas — so the client accumulated MORE lines after the terminal
+	// frame had already replaced them, and the card showed the output twice.
+	//
+	// Stopping here also makes the sequence deterministic: every delta is published
+	// before the terminal frame, never after.
+	stopRelay()
 	stream.Close("ok")
 	meta := map[string]any{}
 	if m, ok := out.Metadata.(map[string]any); ok {
@@ -569,6 +588,7 @@ func relayInto(ctx context.Context, deps Deps, in Input, callID, stepID, toolNam
 		return func() {}
 	}
 	done := make(chan struct{})
+	var stopped sync.Once
 	go func() {
 		defer close(done)
 		// A trickle must still appear promptly: without this ticker a job that prints
@@ -606,8 +626,13 @@ func relayInto(ctx context.Context, deps Deps, in Input, callID, stepID, toolNam
 		}
 	}()
 	return func() {
-		cancel()
-		<-done
+		// Idempotent: execTool stops the relay explicitly before the terminal frame
+		// and also defers a stop, so this runs twice on the success path. cancel is
+		// safe to call repeatedly and `done` is already closed the second time.
+		stopped.Do(func() {
+			cancel()
+			<-done
+		})
 	}
 }
 

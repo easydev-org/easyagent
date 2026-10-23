@@ -5,7 +5,10 @@
 # runner and a developer laptop build the same image; whatever a given
 # environment needs (a proxy, a corporate module mirror) is passed as a
 # build-arg by whoever builds it, and never baked in.
-FROM golang:1.27-alpine AS build
+# Pinned to the version go.mod declares. `1.27` does not exist on Docker Hub, and an
+# unpinned tag would let the toolchain drift away from what the module requires — the
+# build would then accept syntax the declared minimum rejects.
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

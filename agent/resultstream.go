@@ -145,6 +145,32 @@ func (r *resultStream) PendingFull() bool {
 	return len(r.pending) >= liveFlushLines || r.pendingChar >= liveFlushChars
 }
 
+// SetText REPLACES the accumulated output with text.
+//
+// Used when the tool returns its result: the relayed lines were only a live preview of
+// that same text, so extending the stream with it would double the output — and the
+// trim would then keep the head of one copy and the tail of the other.
+//
+// Any pending (unsent) lines are dropped with the rest: they are preview material, and
+// the terminal frame carries the authoritative text anyway.
+func (r *resultStream) SetText(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	lines := splitLines(text)
+	out := lines[:0]
+	for _, l := range lines {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	r.lines = out
+	r.pending = nil
+	r.pendingChar = 0
+}
+
 // Snapshot returns the output accumulated so far.
 func (r *resultStream) Snapshot() []string {
 	r.mu.Lock()
