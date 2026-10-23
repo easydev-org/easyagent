@@ -509,6 +509,22 @@ func (e *ToolExecutor) ExtensionPermissions(extID string) []bundled.PermissionDe
 	return e.extPerms[extID]
 }
 
+// HasTools reports whether an extension declared at least one tool.
+//
+// Used to decide whether an extension with no config knobs and no permissions is still worth
+// listing: one that has tools is, and hiding it would hide its tools too.
+func (e *ToolExecutor) HasTools(extID string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for name, owner := range e.owner {
+		_ = name
+		if owner == extID {
+			return true
+		}
+	}
+	return false
+}
+
 // AllPermissions returns every extension's declared permissions, keyed by extension id.
 //
 // The whole set at once: a client showing "what can I grant this session" needs all of it,

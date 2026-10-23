@@ -210,9 +210,17 @@ func (s *Server) ListExtensions(ctx context.Context, _ *agentv1.ListExtensionsRe
 	}
 	// Discovered NATS extensions (each with its declared config surface).
 	if s.tools != nil {
+		// Same reasoning as ListPermissionDecls: discovery is a boot-time snapshot, and an
+		// extension that restarts gets a new replica id, so without a refresh it stays invisible
+		// until the agent restarts too.
+		_ = s.tools.Refresh(ctx, 500)
 		for _, extID := range s.tools.ExtensionIDs() {
 			fields := s.tools.ExtensionConfigFields(extID)
-			if len(fields) == 0 {
+			// An extension with NO config knobs is still an extension: it has tools, and it may
+			// declare permissions. Skipping it here hid it from the console entirely, so a user
+			// could not grant anything for it and could not see its tools. The original
+			// `continue` assumed "config fields" was the reason to list an extension at all.
+			if len(fields) == 0 && len(s.tools.ExtensionPermissions(extID)) == 0 && !s.tools.HasTools(extID) {
 				continue
 			}
 			info := &agentv1.ExtensionInfo{ExtId: extID}

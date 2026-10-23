@@ -116,6 +116,16 @@ func (s *Server) ListPermissionDecls(ctx context.Context, _ *agentv1.ListPermiss
 		// error.
 		return &agentv1.ListPermissionDeclsResponse{}, nil
 	}
+	// Refresh before answering, exactly as Execute does when it cannot resolve a tool.
+	//
+	// The discovery set is a snapshot taken at boot, and an extension that RESTARTS gets a new
+	// replica id: its old presence key expires on TTL and a new one appears. Without this
+	// refresh the console showed whatever was running when the agent started, so a restarted or
+	// later-started extension was invisible — no permissions to grant, no tools to call — until
+	// someone restarted the agent itself.
+	// Short bound: this is a cheap KV read from the presence cache, and a client asking "what
+	// can I grant" should not wait a second for an extension that is not there.
+	_ = s.tools.Refresh(ctx, 500)
 	byExt := s.tools.AllPermissions()
 	// Stable order: extension id, then the author's declaration order (which reflects how
 	// the extension is used and would be lost by sorting).
