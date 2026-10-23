@@ -18,6 +18,13 @@ type ToolDef struct {
 	// Namespace groups this tool with siblings that do the same kind of job
 	// (pvc, build, storage, ...). Organisational: the name is unchanged.
 	Namespace string
+	// Requires names the permission keys a session must hold to invoke this tool.
+	//
+	// The agent checks only that the session holds SOME grant for each key — it never
+	// looks at the params, because whether a grant covers THIS call depends on the
+	// call's target and only the extension can resolve that. The extension re-checks
+	// in its own tool and is the real boundary.
+	Requires []string
 }
 
 // ToolRegistry supplies the tools a session may call. The production impl

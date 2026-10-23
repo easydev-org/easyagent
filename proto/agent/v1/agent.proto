@@ -402,6 +402,42 @@ message UndoResponse { Session session = 1; }
 message MarkReadRequest { string id = 1; int32 seq = 2; }
 message MarkReadResponse { Session session = 1; }
 
+message Grant {
+  // id is the handle RevokeGrant takes; stable for the life of the grant.
+  string id = 1;
+  string ext_id = 2;
+  string capability = 3;
+  // params is the JSON text whose shape the EXTENSION declared. Opaque here: the
+  // agent stores and forwards it, and never reads it.
+  string params = 4;
+  // risk is read | write | destructive, copied from the declaration so a client can
+  // warn without fetching every manifest.
+  string risk = 5;
+  string granted_at = 6;
+  // granted_by records provenance: "user", "auto:fork:<parent>", "auto:preset:<name>".
+  // A permission a user does not remember adding should say where it came from.
+  string granted_by = 7;
+}
+
+message ListGrantsRequest { string id = 1; }
+message ListGrantsResponse { repeated Grant grants = 1; }
+
+message CreateGrantRequest {
+  string id = 1;           // session name
+  string ext_id = 2;
+  string capability = 3;
+  // params is the JSON text for THIS instance. Empty for a boolean capability.
+  string params = 4;
+  string risk = 5;
+}
+message CreateGrantResponse { Grant grant = 1; }
+
+message RevokeGrantRequest {
+  string id = 1;           // session name
+  string grant_id = 2;
+}
+message RevokeGrantResponse {}
+
 message StateRequest { string id = 1; }
 message StateResponse { google.protobuf.Struct state = 1; }
 
@@ -678,6 +714,20 @@ service AgentService {
   rpc SetModel(SetModelRequest) returns (SetModelResponse);
   rpc Undo(UndoRequest) returns (UndoResponse);
   rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
+
+  // ── session permissions ──────────────────────────────────────────────────
+  //
+  // A session's authorisations. An extension declares what it can require
+  // (PermissionDecl in its manifest); these RPCs record which of those a particular
+  // session holds.
+  //
+  // `params` is OPAQUE: its shape is whatever the extension declared, and neither the
+  // agent nor this API interprets it. A session may hold several grants of the same
+  // capability with different params — "merge in this repository" and "merge in that
+  // one" are two authorisations, not one.
+  rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
+  rpc CreateGrant(CreateGrantRequest) returns (CreateGrantResponse);
+  rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
   rpc State(StateRequest) returns (StateResponse);
   rpc Mailbox(MailboxRequest) returns (MailboxResponse);
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);

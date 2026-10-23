@@ -18,6 +18,7 @@ import (
 
 	agentpkg "github.com/easydev-org/easyagent/agent"
 	"github.com/easydev-org/easyagent/bundled"
+	"github.com/easydev-org/easyagent/store"
 	easybus "github.com/easydev-org/easybus-sdk"
 	abcagent "github.com/easydev-org/easybus-sdk/agent"
 	"github.com/easydev-org/easybus-sdk/bus"
@@ -230,11 +231,30 @@ type ToolExecutor struct {
 	extFields map[string][]bundled.ConfigField
 	// extNS maps an extension id -> its DECLARED namespaces (in author order).
 	extNS map[string][]bundled.Namespace
+	// grants supplies a session's authorisations. nil = no permission enforcement.
+	//
+	// Injected rather than held as a *store.DB so this package stays independent of the
+	// storage layer, and so a test can hand in a fixed set.
+	grants GrantSource
 }
+
+// GrantSource supplies a session's authorisations, grouped by extension.
+//
+// It returns the OPAQUE params text; the executor never looks inside. Whether a grant
+// covers a particular call is the extension's decision.
+type GrantSource func(ctx context.Context, tenant, session string) (map[string][]store.GrantSnapshot, error)
 
 // NewToolExecutor builds a tool executor over the agent role.
 func NewToolExecutor(a *abcagent.Agent) *ToolExecutor {
 	return &ToolExecutor{agent: a, owner: map[string]string{}, defs: map[string]agentpkg.ToolDef{}, extFields: map[string][]bundled.ConfigField{}, extNS: map[string][]bundled.Namespace{}}
+}
+
+// WithGrants installs the authorisation source. Without one, permission-gated tools are
+// refused rather than silently allowed: a deployment that has not wired the store must not
+// hand out capability it cannot check.
+func (e *ToolExecutor) WithGrants(g GrantSource) *ToolExecutor {
+	e.grants = g
+	return e
 }
 
 // Refresh discovers extensions and records tool -> extension ownership.
@@ -268,6 +288,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 			if t.Namespace != nil {
 				def.Namespace = *t.Namespace
 			}
+			// Permission keys the tool needs. Kept as declared: the agent only tests
+			// presence, and matching against a call's target happens in the extension.
+			def.Requires = t.Requires
 			e.defs[t.Name] = def
 		}
 	}
@@ -392,7 +415,24 @@ func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, callID, nam
 	if callID == "" {
 		callID = newCallID()
 	}
-	res, err := e.agent.CallTool(ctx, tenant, session, extID, bare, callID, input)
+
+	// Permission gate. Shallow on purpose: it answers "does this session hold ANY grant for
+	// each key the tool requires", never "is this call covered". Coverage needs the target,
+	// which only the extension can resolve from the arguments.
+	//
+	// Refusing here is an optimisation with a better message — the extension re-checks and
+	// is the real boundary. Erring towards allowing is deliberate: a false positive costs
+	// one refused call, while a false negative would block work the user authorised.
+	grants := e.sessionGrants(ctx, tenant, session, extID)
+	if needs := e.requiresOf(name); len(needs) > 0 {
+		if missing, ok := store.HasAnyCapability(grants, needs); !ok {
+			return agentpkg.ToolOutcome{}, &PermissionDeniedError{
+				Tool: name, ExtID: extID, Capability: missing,
+			}
+		}
+	}
+
+	res, err := e.agent.CallToolWithGrants(ctx, tenant, session, extID, bare, callID, input, grantsToWire(grants))
 	if err != nil {
 		return agentpkg.ToolOutcome{}, err
 	}

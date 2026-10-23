@@ -125,6 +125,11 @@ func run(cfgPath string) error {
 		hub.SetBackplane(b)
 		rtDeps.Lease = b
 		exec := bus.NewToolExecutor(b.Agent())
+		// Permissions: the executor asks this for a session's grants on every gated call.
+		// Injected as a function so the executor stays free of the storage layer.
+		exec.WithGrants(func(ctx context.Context, tenant, session string) (map[string][]store.GrantSnapshot, error) {
+			return db.GrantsByExt(tenant, session)
+		})
 		_ = exec.Refresh(context.Background(), 500)
 		// Composite: bundled (in-process) + NATS extensions (out-of-process).
 		composite := agent.NewCompositeTools(

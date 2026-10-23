@@ -266,6 +266,17 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	if err := s.db.CreateSession(tenant, in); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// A fork inherits the parent's permissions.
+	//
+	// Otherwise forking — the normal way to try a different approach — would silently strip
+	// every capability the session had, and the model would start failing on tools that
+	// worked a moment earlier. The copies are INDEPENDENT rows tagged "auto:fork:<parent>",
+	// so revoking one in the child leaves the parent intact and a user can see where each
+	// permission came from.
+	//
+	// A failure here is not fatal: the session exists and simply starts with no grants,
+	// which is the safe direction for a permission problem.
+	_, _ = s.db.CopyGrantsFrom(tenant, req.Id, req.Name)
 	s.publish(tenant, req.Name, "session-changed", map[string]any{"session_name": req.Name})
 	s.lifecycleFire(ctx, tenant, "forked", req.Name, map[string]any{"kind": "forked", "tenant": tenant, "parent": req.Id})
 	row, _, _ := s.db.GetSession(tenant, req.Name)

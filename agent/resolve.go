@@ -77,7 +77,25 @@ type PlanInput struct {
 	SessionSystem string
 	SessionMax    int
 	DeniedTools   []string
-	Now           time.Time
+	// Grants summarises what this session may do, for the model's own benefit.
+	//
+	// Without it the model discovers its limits by trying and failing, which costs a turn
+	// each time and reads to the user as the agent flailing. The summary is rendered by
+	// the CALLER (which knows how to read the stored form); this layer only inserts it.
+	Grants []GrantLine
+	Now    time.Time
+}
+
+// GrantLine is one permission, rendered for the prompt.
+//
+// Text, not a structured value: the params are the extension's vocabulary ("repo:
+// agentdev/*"), so the agent shows them verbatim rather than trying to explain them. A
+// model that can read "repo: agentdev/*" needs nothing more from this layer.
+type GrantLine struct {
+	ExtID      string
+	Capability string
+	// Params is the human-readable form of the stored params, e.g. "repo: agentdev/*".
+	Params string
 }
 
 // Plan resolves the effective turn configuration, mirroring the TS agent:
@@ -116,7 +134,9 @@ func Plan(ctx context.Context, deps RuntimeDeps, in PlanInput) (TurnPlan, error)
 	if system == "" {
 		system = "You are a helpful assistant."
 	}
-	system = system + "\n\n" + BuildEnvBlock(locale, in.Now)
+	// The grants ride in the env block so the model plans within them instead of
+	// discovering its limits one refusal at a time.
+	system = system + "\n\n" + BuildEnvBlockWithGrants(locale, in.Now, in.Grants)
 	if maxTurns == 0 {
 		maxTurns = firstNonZero(deps.MaxTurns, 8)
 	}
