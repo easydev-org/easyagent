@@ -504,8 +504,11 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		// Relay a tool's in-flight progress onto the session's durable event
 		// stream. The frames reach clients (and replay on reconnect) but never
 		// enter the model's context — see relayProgress in turn.go.
-		ToolProgress:       r.deps.ToolProgress,
-		ToolTimeout:        r.deps.ToolTimeout,
+		ToolProgress: r.deps.ToolProgress,
+		ToolTimeout:  r.deps.ToolTimeout,
+		// The agent's own prose (the "output omitted" marker in a trimmed result)
+		// follows the same locale the tools and the env block already use.
+		Locale:             plan.Locale,
 		SystemTokens:       EstimateTokens(plan.System),
 		ContextLimit:       r.contextLimit(tenant, s.Model),
 		CompactAtFraction:  r.deps.CompactAtFraction,

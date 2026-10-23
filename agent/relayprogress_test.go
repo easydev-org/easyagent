@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,24 +33,29 @@ func (c *captureEmitter) snapshot() []Event {
 	return out
 }
 
-// TestRelayPublishesOutputSnapshots is the regression test for tool output the
-// console could not see, and for the shape it now arrives in.
+// TestRelayPublishesOutputDeltas is the regression test for tool output the console
+// could not see, and for the shape it now arrives in.
 //
-// Two things had to be true and neither was:
+// Three things have to hold:
 //
-//   - the frame must carry `message_id`, because the console routes every stream
-//     event by it and silently drops anything without one;
-//   - the content must be a SNAPSHOT of the output so far, not a delta, because a
-//     dropped delta corrupts the result permanently while a dropped snapshot does
-//     not. The AI SDK expresses this as repeated `tool-output-available` frames
-//     with `preliminary: true`, followed by one without the flag.
-func TestRelayPublishesOutputSnapshots(t *testing.T) {
+//   - the frame carries `message_id`, because the console routes every stream event by
+//     it and silently drops anything without one;
+//   - a LIVE frame carries only the NEW lines (`output.delta`). Sending the whole
+//     output every time is O(n²) in bytes — a 50k-line build sent gigabytes — which is
+//     why the relay batches;
+//   - the TERMINAL frame carries the complete `output.content`, so a client that
+//     missed intermediate frames still converges on the real result.
+func TestRelayPublishesOutputDeltas(t *testing.T) {
 	em := &captureEmitter{}
 
+	// Exactly one full batch. A partial batch is flushed by the ticker, so using one
+	// would make this test timing-dependent; the ticker's own behaviour is separate.
+	n := liveFlushLines
 	src := func(ctx context.Context, tenant, callID string) (<-chan ToolProgressUpdate, func(), error) {
-		ch := make(chan ToolProgressUpdate, 2)
-		ch <- ToolProgressUpdate{CallID: callID, Phase: "running", Text: "line1"}
-		ch <- ToolProgressUpdate{CallID: callID, Phase: "running", Text: "line2"}
+		ch := make(chan ToolProgressUpdate, n)
+		for i := 0; i < n; i++ {
+			ch <- ToolProgressUpdate{CallID: callID, Phase: "running", Text: fmt.Sprintf("line%d", i+1)}
+		}
 		close(ch)
 		return ch, func() {}, nil
 	}
@@ -64,15 +71,15 @@ func TestRelayPublishesOutputSnapshots(t *testing.T) {
 		select {
 		case <-time.After(10 * time.Millisecond):
 		}
-		if len(em.snapshot()) >= 2 {
+		if len(em.snapshot()) >= 1 {
 			break
 		}
 	}
 	stop()
 
 	got := em.snapshot()
-	if len(got) < 2 {
-		t.Fatalf("emitted %d frames, want at least 2", len(got))
+	if len(got) == 0 {
+		t.Fatal("emitted no frames")
 	}
 	for i, ev := range got {
 		if ev.Name != "tool-output-available" {
@@ -88,13 +95,29 @@ func TestRelayPublishesOutputSnapshots(t *testing.T) {
 		if ev.Params["preliminary"] != true {
 			t.Errorf("frame %d is not marked preliminary", i)
 		}
+		out, _ := ev.Params["output"].(map[string]any)
+		if _, ok := out["delta"]; !ok {
+			t.Errorf("frame %d carries no delta; live frames must send only the new lines", i)
+		}
+		if _, ok := out["content"]; ok {
+			t.Errorf("frame %d carries full content; that is O(n^2) and belongs only on the terminal frame", i)
+		}
 	}
 
-	// The last snapshot holds BOTH lines: snapshots accumulate, they do not
-	// replace the content with the newest fragment.
-	lastOut, _ := got[len(got)-1].Params["output"].(map[string]any)
-	content := asString(lastOut["content"])
-	if content != "line1\nline2" {
-		t.Errorf("final snapshot content = %q, want both lines", content)
+	// The deltas, concatenated, must add up to the whole output — that is what makes
+	// the live view correct without ever resending anything.
+	var all []string
+	for _, ev := range got {
+		out, _ := ev.Params["output"].(map[string]any)
+		if d := asString(out["delta"]); d != "" {
+			all = append(all, d)
+		}
+	}
+	joined := strings.Join(all, "\n")
+	if !strings.Contains(joined, "line1") || !strings.Contains(joined, fmt.Sprintf("line%d", n)) {
+		t.Errorf("deltas do not cover the output: %q", joined)
+	}
+	if len(all) != 1 {
+		t.Errorf("expected ONE batched frame for %d lines, got %d", n, len(all))
 	}
 }

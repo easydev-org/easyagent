@@ -63,6 +63,11 @@ type Deps struct {
 	//
 	// nil disables relaying (the tool still runs; only the live view is missing).
 	ToolProgress func(ctx context.Context, tenant, callID string) (<-chan ToolProgressUpdate, func(), error)
+	// Locale selects the language of text the AGENT generates for the model and the
+	// transcript — currently only the "output omitted" marker inside a trimmed tool
+	// result. It is not the model's reply language (that comes from the env block);
+	// this is the agent's own prose.
+	Locale string
 	// Compact, when set, is invoked on a CONTEXT-OVERFLOW error: it folds the
 	// session and returns the REBUILT history + the new chain tip. The step is
 	// then retried ONCE with the trimmed context (transparent to the caller).
@@ -447,7 +452,10 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, ar
 				state = "cancelled"
 			}
 			stream.Close(state)
-			partial := stream.Text()
+			// Same size policy as a normal result: an interrupted tool's output is
+			// stored and handed to the model exactly like a finished one, so a job that
+			// printed 100k lines before timing out must not smuggle them into either.
+			partial := stream.TrimToLimit(deps.Locale)
 			emitOutput(ctx, deps, in, stepID, callID, name, stream, map[string]any{
 				"state": state,
 				"error": fmt.Sprintf("%s after %s", state, deps.ToolTimeout),
@@ -478,6 +486,22 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, ar
 				stream.Append(line)
 			}
 		}
+	}
+	// TRIM before anything is stored, sent, or shown again.
+	//
+	// Everything above ran while the tool was live, where every line matters and the
+	// user is watching them arrive. From here the output goes into three places that
+	// pay for it forever: the database, the model's context, and the transcript a
+	// client rebuilds.
+	//
+	// The STREAM is trimmed, not just the value returned: emitOutput reads the stream's
+	// lines, so trimming only the return value would leave the terminal SNAPSHOT
+	// carrying the full output — and that snapshot is what the console stores.
+	trimmed := stream.TrimToLimit(deps.Locale)
+	if trimmed != stream.Text() {
+		// The model gets exactly what the console gets. If they disagreed, the model
+		// would reason about lines no reader can see.
+		out.Content = trimmed
 	}
 	stream.Close("ok")
 	meta := map[string]any{}
@@ -547,10 +571,17 @@ func relayInto(ctx context.Context, deps Deps, in Input, callID, stepID, toolNam
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// A trickle must still appear promptly: without this ticker a job that prints
+		// one line per second would sit invisible until 64 of them accumulated.
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-tick.C:
+				// Send whatever has accumulated, even if the batch is not full.
+				emitOutput(ctx, deps, in, stepID, callID, toolName, stream, nil)
 			case upd, ok := <-ch:
 				if !ok {
 					return
@@ -565,7 +596,12 @@ func relayInto(ctx context.Context, deps Deps, in Input, callID, stepID, toolNam
 					continue
 				}
 				stream.Append(text)
-				emitOutput(ctx, deps, in, stepID, callID, toolName, stream, nil)
+				// Flush on a BATCH BOUND, not on every line. One frame per line with the
+				// whole output is O(n²) bytes and was making large jobs heavy; this sends
+				// each byte once.
+				if stream.PendingFull() {
+					emitOutput(ctx, deps, in, stepID, callID, toolName, stream, nil)
+				}
 			}
 		}
 	}()
