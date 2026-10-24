@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"github.com/easydev-org/easybus-sdk/bus"
 )
@@ -111,6 +113,18 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 			"source":  msg.Source,
 			"payload": msg.Payload,
 		}
+		// A `trigger` becomes a USER MESSAGE, and the runtime builds it from `text`. Without this
+		// the trigger folded to an empty text part, so a session with no history sent the model an
+		// empty `messages` array and the request was rejected outright:
+		//
+		//   llm: the parameter `messages` ... an array with minimum length 1, but got an empty array
+		//
+		// The event is therefore rendered into words. It is a SUMMARY, not a re-encoding: the full
+		// payload rides alongside under "payload", so nothing is lost for a tool that wants to read
+		// it structurally.
+		if wake {
+			body["text"] = channelEventText(msg)
+		}
 		if err := d.publish(ctx, msg.Tenant, session, typ, body, "channel:"+msg.Channel); err != nil {
 			// One failed delivery must not stop the others: a session whose mailbox is
 			// temporarily unavailable should not silence every other subscriber.
@@ -126,6 +140,40 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 		n++
 	}
 	return n, nil
+}
+
+// channelEventText renders a channel event as the prompt a woken session receives.
+//
+// A `trigger` becomes a USER MESSAGE, and the runtime builds that message from `text`. Leaving it
+// empty produced a user turn with no text part, so a session with no history sent the model an
+// empty `messages` array and the request was refused:
+//
+//	llm: the parameter `messages` ... an array with minimum length 1, but got an empty array
+//
+// This is a SUMMARY, not a re-encoding: the authoritative body still travels under "payload", so a
+// tool that wants to inspect the event structurally reads that instead of parsing prose.
+func channelEventText(msg bus.ChannelMessage) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "A %s event arrived on the %q channel", msg.Source, msg.Channel)
+	if msg.Source == "" {
+		fmt.Fprintf(&b, "A channel event arrived on the %q channel", msg.Channel)
+	}
+	fmt.Fprintf(&b, " (topic %s).", msg.Topic)
+
+	// Payload keys, sorted: map order is random in Go, and a prompt that changes order between two
+	// identical events would defeat any prompt-level caching and make logs hard to compare.
+	if m, ok := msg.Payload.(map[string]any); ok && len(m) > 0 {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		b.WriteString("\n")
+		for _, k := range keys {
+			fmt.Fprintf(&b, "\n- %s: %v", k, m[k])
+		}
+	}
+	return b.String()
 }
 
 // Start begins consuming channels and distributing to mailboxes.
