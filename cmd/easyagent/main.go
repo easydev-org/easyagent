@@ -93,7 +93,10 @@ func run(cfgPath string) error {
 		if err != nil {
 			return fmt.Errorf("nats: %w", err)
 		}
-		runtimeBus = b
+		// The queue PublishMailbox writes to before it signals. Set here so no code path can
+		// signal a wake for a message the runtime cannot read: PublishMailbox refuses outright
+		// when this is missing.
+		runtimeBus = b.WithMailboxQueue(db)
 		defer b.Close()
 		// Work around an abc-protocol-go bug: pre-create the extension presence
 		// bucket so the library's presence watch does not error (and panic).
@@ -119,12 +122,22 @@ func run(cfgPath string) error {
 	seedPresets(presets, tenantConfig, db, cfg)
 	// The in-process bundled extension (Go rewrite of the TS bundled-extension):
 	// it supplies the memory/history/file/web/vision/generation/subsession tools.
-	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub))
+	// Bound AFTER the bus exists (below): the bundled tools must publish through the SAME path
+	// the channel distributor uses, and the bus is created later in this function. A nil check
+	// here would reintroduce the split this variable exists to remove, so the closure refuses
+	// loudly instead.
+	var mailboxPublish func(tenant, session, typ string, payload any, source string) error
+	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub, &mailboxPublish))
 	if err != nil {
 		return fmt.Errorf("bundled extension: %w", err)
 	}
 	if runtimeBus != nil {
 		b := runtimeBus
+		// THE single mailbox path: enqueue (durable) then signal (cross-replica). Wired here
+		// because the bus is created after the bundled extension, which needs the publisher.
+		mailboxPublish = func(tenant, session, typ string, payload any, source string) error {
+			return b.PublishMailbox(context.Background(), tenant, session, typ, payload, source)
+		}
 		// Mirror every published event onto the durable session-events stream
 		// so other replicas' watchers receive it (cross-replica WatchSession).
 		hub.SetBackplane(b)
@@ -411,7 +424,7 @@ func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c con
 
 // bundledDeps builds the host-capability adapter the in-process bundled
 // extension needs (the Go equivalent of the TS `BundledDeps` injection).
-func bundledDeps(db *store.DB, cfg *agent.Config, hub *server.EventHub) *bundled.StoreDeps {
+func bundledDeps(db *store.DB, cfg *agent.Config, hub *server.EventHub, mailboxPublish *func(string, string, string, any, string) error) *bundled.StoreDeps {
 	d := &bundled.StoreDeps{DB: db}
 	d.ConfigFn = func(tenant, key string) (string, bool) { return cfg.Get(tenant, key) }
 	d.SessionVarFn = func(tenant, session, name string) (string, bool) {
@@ -439,12 +452,16 @@ func bundledDeps(db *store.DB, cfg *agent.Config, hub *server.EventHub) *bundled
 		return fileBlobPut(ctx, code, data)
 	}
 	d.MailFn = func(tenant, session, typ string, payload any, source string) error {
-		if _, err := db.Enqueue(tenant, session, typ, payload, source); err != nil {
-			return err
+		// THE SAME PATH the channel distributor takes.
+		//
+		// It used to enqueue and stop, relying on the caller to nudge the runtime — so a message
+		// from a bundled tool woke nothing unless the tool happened to do it itself, while a
+		// message from a channel did the opposite (signalled, never enqueued). One entry point
+		// means there is no second combination to get wrong.
+		if mailboxPublish == nil || *mailboxPublish == nil {
+			return fmt.Errorf("publish mailbox: bus not wired yet (this is a startup ordering bug)")
 		}
-		// Nudge the runtime (single-replica path; the NATS consumer handles the
-		// cross-replica case when wired).
-		return nil
+		return (*mailboxPublish)(tenant, session, typ, payload, source)
 	}
 	d.OnIngestFn = func(ctx context.Context, tenant, code, name, mime string, data []byte) {
 		facts := media.Probe(data)

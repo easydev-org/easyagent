@@ -62,7 +62,10 @@ func TestLeaseMutualExclusion(t *testing.T) {
 }
 
 func TestMailboxPublishConsume(t *testing.T) {
-	b := startBus(t)
+	// The queue PublishMailbox writes to before signalling. PublishMailbox refuses to run without
+	// one, deliberately: a signal-only publish looks like success from every angle except the
+	// session waking up.
+	b := startBus(t).WithMailboxQueue(newMemQueue())
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

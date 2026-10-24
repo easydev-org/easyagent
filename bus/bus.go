@@ -35,9 +35,33 @@ type Bus struct {
 	transport *nats.Bus
 	agent     *abcagent.Agent
 	url       string
+	// db is the mailbox queue PublishMailbox appends to before signalling.
+	//
+	// An interface, not *store.DB: this package must not depend on the storage layer, and a test
+	// needs to supply its own. nil means "no local queue" — a bare bus used only for transport.
+	db MailboxQueue
 
 	mu   sync.Mutex
 	held map[string]int64 // session key -> KV revision
+}
+
+// MailboxQueue is the durable queue a mailbox message is written to.
+//
+// Declared here (rather than taking *store.DB) so this package stays independent of storage:
+// PublishMailbox needs exactly one method, and saying so is more honest than accepting the whole
+// database handle.
+type MailboxQueue interface {
+	Enqueue(tenant, session, typ string, payload any, source string) (string, error)
+}
+
+// WithMailboxQueue installs the durable queue PublishMailbox writes to.
+//
+// Without it PublishMailbox would only SIGNAL — which is the defect this method exists to make
+// impossible to configure by accident: a bus with no queue panics on the first publish rather
+// than silently delivering nothing.
+func (b *Bus) WithMailboxQueue(q MailboxQueue) *Bus {
+	b.db = q
+	return b
 }
 
 // Connect dials NATS and builds the agent-side role.
@@ -711,9 +735,31 @@ func (b *Bus) ConsumeMailbox(ctx context.Context, handler func(MailboxMessage) e
 	}, 1000)
 }
 
-// PublishMailbox publishes a durable mailbox message (used by the Prompt route
-// and subsession hand-off tools).
+// PublishMailbox delivers one mailbox message to a session. THE single entry point.
+//
+// A mailbox message has to exist in TWO places, and they are not interchangeable:
+//
+//   - the DATABASE is the execution queue. `Wake` drains it, and a drained row is what a turn
+//     actually reads. Anything not in the table is, to the runtime, a message that never arrived.
+//   - NATS is the WAKE SIGNAL. The database alone would sit there unread until something nudged
+//     a runtime, and the nudge has to reach whichever replica ends up holding the lease.
+//
+// They drifted apart once, with exactly that consequence: the channel distributor called the
+// NATS-only path, so a channel event reached the mailbox stream, a consumer acked it, `Wake` ran,
+// found an empty table, and returned. Routing said `matches=2` and no session ever woke.
+//
+// So both happen here, in this order: enqueue first (durable), then signal. If the signal is lost
+// the row is still there and the boot backstop drains it; the reverse order would signal a wake
+// for a message that is not yet readable.
 func (b *Bus) PublishMailbox(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	if b.db == nil {
+		// Refusing is deliberate. Falling through to signal-only would look like success from
+		// every angle except the session waking up, which is exactly how this took a day to find.
+		return fmt.Errorf("publish mailbox: no queue configured (call WithMailboxQueue)")
+	}
+	if _, err := b.db.Enqueue(tenant, session, typ, payload, source); err != nil {
+		return fmt.Errorf("enqueue mailbox: %w", err)
+	}
 	return b.agent.PublishMailbox(ctx, tenant, session, typ, payload, source)
 }
 
