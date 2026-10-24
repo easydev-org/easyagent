@@ -60,6 +60,27 @@ func (s *Server) hydrate(tenant string, msgs []storeMessage) ([]*agentv1.Message
 	return messagesToProto(msgs, parts), nil
 }
 
+// publishMailbox sends one mailbox message through the single authoritative path.
+//
+// The server used to enqueue and then call rt.Wake directly, which is correct only while THIS
+// replica holds the session lease. A prompt arriving when another replica holds it enqueued and
+// woke nobody; the 60-second boot backstop was the only thing that eventually ran it.
+func (s *Server) publishMailbox(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	if s.runtimeBus != nil {
+		// Enqueue + cross-replica signal. The bus owns both halves so no caller can do one.
+		return s.runtimeBus.PublishMailbox(ctx, tenant, session, typ, payload, source)
+	}
+	// In-memory mode: no bus, so no other replica to notify and no signal to send. Enqueue and
+	// wake THIS runtime — the only one there is.
+	if _, err := s.db.Enqueue(tenant, session, typ, payload, source); err != nil {
+		return err
+	}
+	if s.rt != nil {
+		go func() { _ = s.rt.Wake(context.WithoutCancel(ctx), tenant, session) }()
+	}
+	return nil
+}
+
 // Prompt enqueues a user prompt (the mailbox is the single writer of the
 // chain) and streams the run's events. The first frame is `accepted` with the
 // logical message id.
@@ -77,7 +98,11 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 			Code: a.Code, Name: a.Name, Size: int(a.Size),
 		})
 	}
-	if _, err := s.db.Enqueue(tenant, req.Id, "trigger", payload, "user"); err != nil {
+	// The same publish path every other producer uses: enqueue (durable) then signal
+	// (cross-replica). Calling db.Enqueue + rt.Wake here would be correct only while the lease
+	// happens to be on THIS replica — a prompt that arrives when another replica holds it would
+	// enqueue and then wake nobody, and only the 60s boot backstop would notice.
+	if err := s.publishMailbox(ctx, tenant, req.Id, "trigger", payload, "user"); err != nil {
 		return connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if err := stream.Send(&agentv1.PromptResponse{
@@ -88,9 +113,6 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 	// Subscribe BEFORE waking so no early event is missed.
 	ch, cancel := s.hub.Subscribe(tenant, req.Id)
 	defer cancel()
-	if s.rt != nil {
-		go func() { _ = s.rt.Wake(ctx, tenant, req.Id) }()
-	}
 	for {
 		select {
 		case <-ctx.Done():
