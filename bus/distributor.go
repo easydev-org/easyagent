@@ -43,10 +43,33 @@ func (d *Distributor) WithLogger(l *slog.Logger) *Distributor {
 // Returns the number of sessions it reached, so the caller can log a message that reached
 // nobody — which is normal (nobody subscribed) but worth being able to see.
 func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (int, error) {
+	if msg.UnparseableSubject != "" {
+		// The transport could not read the subject. It still acked the message, so without this
+		// the drop was invisible: the consumer reported delivered-and-acked while nothing was
+		// routed anywhere.
+		if d.log != nil {
+			d.log.Warn("channel subject unparseable; event dropped",
+				"subject", msg.UnparseableSubject)
+		}
+		return 0, nil
+	}
 	if d.index == nil || d.publish == nil {
+		if d.log != nil {
+			d.log.Warn("channel distributor not wired; event dropped",
+				"index_nil", d.index == nil, "publish_nil", d.publish == nil,
+				"tenant", msg.Tenant, "channel", msg.Channel, "topic", msg.Topic)
+		}
 		return 0, nil
 	}
 	matches := d.index.Match(msg.Tenant, msg.Channel, msg.Topic)
+	if d.log != nil {
+		// Logged at INFO on every message: the previous silence here is why "delivered but never
+		// distributed" took a day to find. The index size separates "nothing subscribed" from
+		// "the watch is not feeding the index", which look identical from outside.
+		d.log.Info("channel event routing",
+			"tenant", msg.Tenant, "channel", msg.Channel, "topic", msg.Topic,
+			"matches", len(matches), "subscriptions_known", d.index.Len(msg.Tenant))
+	}
 	if len(matches) == 0 {
 		// Logged at debug: a channel nobody follows is normal, but "nobody follows" and
 		// "the index is empty" look identical from here, and that ambiguity hid a real bug
@@ -91,6 +114,13 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 		if err := d.publish(ctx, msg.Tenant, session, typ, body, "channel:"+msg.Channel); err != nil {
 			// One failed delivery must not stop the others: a session whose mailbox is
 			// temporarily unavailable should not silence every other subscriber.
+			//
+			// Logged, not swallowed: a silent continue here is indistinguishable from "nobody
+			// subscribed", and that ambiguity is exactly what hid this failure.
+			if d.log != nil {
+				d.log.Warn("channel delivery failed",
+					"tenant", msg.Tenant, "session", session, "channel", msg.Channel, "err", err)
+			}
 			continue
 		}
 		n++
