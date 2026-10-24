@@ -155,8 +155,16 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 		return err
 	}
 	if !ok {
-		return nil // another replica owns the session
+		// Not an error: another replica holds the lease and will run the turn. Logged at debug
+		// because the interesting case for a missing wake is the opposite one — this replica got
+		// the lease and still ran nothing.
+		slog.Debug("wake skipped: lease held elsewhere", "tenant", tenant, "session", session)
+		return nil
 	}
+	// INFO, not debug: "a wake arrived" is the single fact that separates "the message never got
+	// here" from "the message arrived and the turn did not run", and those two look identical from
+	// outside the process. It is one line per wake, not per message.
+	slog.Info("wake", "tenant", tenant, "session", session)
 
 	runCtx, cancel := context.WithCancel(ctx)
 	r.setActive(tenant, session, cancel)
@@ -227,8 +235,12 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 			return derr
 		}
 		if len(items) == 0 {
+			// The queue is empty. Logged because a wake that found nothing is exactly what a
+			// signal-without-enqueue produces, and nothing else distinguishes it.
+			slog.Info("wake found no queued messages", "tenant", tenant, "session", session)
 			break
 		}
+		slog.Info("wake draining", "tenant", tenant, "session", session, "messages", len(items))
 		if !r.handleBatch(runCtx, tenant, session, items, cancel) {
 			break
 		}
