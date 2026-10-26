@@ -56,6 +56,40 @@ func TestStreamingChunksAreNotPersisted(t *testing.T) {
 			ev:   agent.Event{Name: "compacted", Params: map[string]any{"reason": "auto"}},
 			want: false,
 		},
+		// The per-token deltas. An earlier version of the filter covered only `tool-output-*` and
+		// let every one of these through, which is the largest volume of all on a turn that does
+		// not call tools.
+		{
+			name: "text-delta",
+			ev:   agent.Event{Name: "text-delta", Params: map[string]any{"text": "ok"}},
+			want: true,
+		},
+		{
+			name: "reasoning-delta",
+			ev:   agent.Event{Name: "reasoning-delta", Params: map[string]any{"text": "thinking"}},
+			want: true,
+		},
+		{
+			name: "tool-input-delta",
+			ev:   agent.Event{Name: "tool-input-delta", Params: map[string]any{"delta": "{"}},
+			want: true,
+		},
+		// Structural frames stay: a replay needs the step boundaries to assemble what it gets.
+		{
+			name: "start-step",
+			ev:   agent.Event{Name: "start-step", Params: map[string]any{"message_id": "m"}},
+			want: false,
+		},
+		{
+			name: "finish-step",
+			ev:   agent.Event{Name: "finish-step", Params: map[string]any{"message_id": "m"}},
+			want: false,
+		},
+		{
+			name: "turn-complete",
+			ev:   agent.Event{Name: "turn-complete", Params: map[string]any{}},
+			want: false,
+		},
 	}
 	for _, c := range cases {
 		if got := isEphemeralFrame(c.ev); got != c.want {

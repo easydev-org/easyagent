@@ -387,26 +387,41 @@ func (h *EventHub) Publish(tenant, session string, ev agent.Event) {
 	}
 }
 
-// isEphemeralFrame reports whether an event is a STREAMING CHUNK whose only value is being read
-// live by a client that is already connected.
+// streamDeltaNames are the per-token frames a turn emits while a model or tool is producing
+// output. They exist to make the answer appear gradually.
 //
-// Measured on a real turn: `tool-output-available` chunks with `preliminary: true` were **95% of
-// the bytes** in the events stream, and every one of them is superseded by the final
-// `message-added` (and by the message itself, which the DATABASE stores authoritatively). Replaying
-// them to a reconnecting client would deliver a half-rendered answer it must then discard.
+// They are NOT retained, because their only consumer is a client that is connected RIGHT NOW:
 //
-// The distinction is not "tool output" but `preliminary`: the LAST chunk of a streamed tool call is
-// not preliminary, and it is the one a replay should see.
+//   - the finished message supersedes every one of them, and the DATABASE stores it authoritatively
+//     (that is what a reconnecting client reads);
+//   - replaying them delivers a half-rendered answer that must immediately be discarded, at the
+//     cost of the entire stream.
+//
+// Measured on a real turn before filtering: the stream held 11 frames of which 5 were per-token
+// deltas; on a turn that calls tools, `tool-output-available` preliminary frames were 95% of the
+// BYTES. The names matter — an earlier version of this filter covered only `tool-output-*` and
+// therefore missed `text-delta`, which is the most frequent frame of all.
+var streamDeltaNames = map[string]bool{
+	"text-delta":       true, // model output, token by token
+	"reasoning-delta":  true, // reasoning output, token by token
+	"tool-input-delta": true, // tool arguments, token by token
+}
+
+// isEphemeralFrame reports whether an event is a STREAMING CHUNK, durable copy unnecessary.
+//
+// Structural frames (start-step / finish-step) are KEPT: they are few, and they carry the step
+// boundaries a replay needs to assemble what it does receive.
 func isEphemeralFrame(ev agent.Event) bool {
-	if ev.Name != "tool-output-available" && ev.Name != "tool-output-error" {
-		return false
+	if streamDeltaNames[ev.Name] {
+		return true
 	}
-	v, ok := ev.Params["preliminary"]
-	if !ok {
-		return false
+	// Tool output is streamed as a series of preliminary chunks, each superseded by the next; the
+	// LAST one is not preliminary and is kept.
+	if ev.Name == "tool-output-available" || ev.Name == "tool-output-error" {
+		b, _ := ev.Params["preliminary"].(bool)
+		return b
 	}
-	b, _ := v.(bool)
-	return b
+	return false
 }
 
 // listAffecting are the events that change a session's list row (preview, seq,
