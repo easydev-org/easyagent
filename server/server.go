@@ -362,7 +362,7 @@ func (h *EventHub) Subscribe(tenant, session string) (<-chan agent.Event, func()
 // Publish delivers one event to every subscriber of the session (non-blocking:
 // a slow subscriber drops, matching a best-effort live stream).
 func (h *EventHub) Publish(tenant, session string, ev agent.Event) {
-	if h.backplane != nil {
+	if h.backplane != nil && !isEphemeralFrame(ev) {
 		frame := Frame{Event: ev.Name, Params: ev.Params, Eid: newUUID(), Seq: h.NextSeq()}
 		_ = h.backplane.PublishSessionEvent(context.Background(), tenant, session, frame.Eid, frame)
 	}
@@ -385,6 +385,28 @@ func (h *EventHub) Publish(tenant, session string, ev agent.Event) {
 			}
 		}
 	}
+}
+
+// isEphemeralFrame reports whether an event is a STREAMING CHUNK whose only value is being read
+// live by a client that is already connected.
+//
+// Measured on a real turn: `tool-output-available` chunks with `preliminary: true` were **95% of
+// the bytes** in the events stream, and every one of them is superseded by the final
+// `message-added` (and by the message itself, which the DATABASE stores authoritatively). Replaying
+// them to a reconnecting client would deliver a half-rendered answer it must then discard.
+//
+// The distinction is not "tool output" but `preliminary`: the LAST chunk of a streamed tool call is
+// not preliminary, and it is the one a replay should see.
+func isEphemeralFrame(ev agent.Event) bool {
+	if ev.Name != "tool-output-available" && ev.Name != "tool-output-error" {
+		return false
+	}
+	v, ok := ev.Params["preliminary"]
+	if !ok {
+		return false
+	}
+	b, _ := v.(bool)
+	return b
 }
 
 // listAffecting are the events that change a session's list row (preview, seq,
