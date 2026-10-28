@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -703,19 +704,35 @@ func decodeToolInput(args string) any {
 		// and it means the model sent something that is not JSON, which is worth seeing.
 		return args
 	}
-	// Two extra unwraps cover the observed triple encoding; the bound stops a pathological input
-	// from looping.
-	for i := 0; i < 2; i++ {
+	// Unwrap while the value is still a STRING whose content parses as JSON. Each provider adds a
+	// different number of layers, so the count is discovered rather than assumed; the bound stops a
+	// pathological input from looping.
+	//
+	// Stopping on "no longer a string" is what makes a genuine string argument survive: a tool whose
+	// argument really is `"hello"` yields `hello`, which does not parse as JSON, so it is returned
+	// as-is below.
+	const maxUnwrap = 4
+	layers := 0
+	for layers < maxUnwrap {
 		s, ok := v.(string)
 		if !ok {
-			return v
+			break
 		}
 		var next any
 		if err := json.Unmarshal([]byte(s), &next); err != nil {
-			return v
+			break
 		}
 		v = next
+		layers++
 	}
+	// A card renders empty when this returns a string instead of an object, and nothing anywhere
+	// reports an error — so the shape that actually arrived has to be visible somewhere. Kept short
+	// and at Info: one line per tool call, and only the head of the payload.
+	raw := args
+	if len(raw) > 160 {
+		raw = raw[:160] + "…"
+	}
+	slog.Info("decodeToolInput", "layers", layers, "type", fmt.Sprintf("%T", v), "raw", raw)
 	return v
 }
 
