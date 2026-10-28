@@ -239,8 +239,7 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 				})
 			case llm.EventToolCall:
 				calls = append(calls, *ev.ToolCall)
-				var input any
-				_ = json.Unmarshal([]byte(ev.ToolCall.Args), &input)
+				input := decodeToolInput(ev.ToolCall.Args)
 				_ = emit(ctx, deps.Emit, "tool-call", map[string]any{
 					// BOTH keys carry the same value, on purpose.
 					//
@@ -681,6 +680,43 @@ func emit(ctx context.Context, e Emitter, name string, params map[string]any) er
 		return nil
 	}
 	return e.Emit(ctx, Event{Name: name, Params: params})
+}
+
+/**
+ * decodeToolInput turns a provider's tool-call argument text into the OBJECT a client can read
+ * fields from.
+ *
+ * Providers disagree about how many times arguments are encoded. The stream spec says `input` is a
+ * JSON *string*, but some send an object; and at least one wraps its JSON in a string inside that
+ * string. Each extra layer survives `json.Unmarshal` as a `string` — which is not an error, so
+ * nothing complains, and every client that reads `input.todos` (or any other field) finds nothing
+ * and renders an empty card.
+ *
+ * So: decode until the result is no longer a string, with a small bound. Returning a string after
+ * that is the honest answer — a tool whose arguments really are a bare string exists — but the
+ * common case is an object, and this makes it one.
+ */
+func decodeToolInput(args string) any {
+	var v any
+	if err := json.Unmarshal([]byte(args), &v); err != nil {
+		// Not JSON at all. Hand it over as text rather than dropping it: a card can still show it,
+		// and it means the model sent something that is not JSON, which is worth seeing.
+		return args
+	}
+	// Two extra unwraps cover the observed triple encoding; the bound stops a pathological input
+	// from looping.
+	for i := 0; i < 2; i++ {
+		s, ok := v.(string)
+		if !ok {
+			return v
+		}
+		var next any
+		if err := json.Unmarshal([]byte(s), &next); err != nil {
+			return v
+		}
+		v = next
+	}
+	return v
 }
 
 // newID returns the id for one assistant step.
