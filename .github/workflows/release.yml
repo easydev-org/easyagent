@@ -124,13 +124,22 @@ jobs:
           set -euo pipefail
           # `imagetools inspect` prints a table of the manifest's entries; counting the two
           # platform lines is enough and needs no jq schema knowledge.
+          # A merge that silently produced a single-arch manifest would still exit 0, so the result
+          # is checked rather than assumed — this is the failure mode the whole split can introduce.
+          #
+          # Matched by PLATFORM NAME, not by number of entries: `provenance` and `sbom` each add an
+          # `unknown/unknown` attestation manifest, so a correct multi-arch image lists FOUR entries.
+          # An equality check on the count fails on a perfectly good image, which is what it did.
           first_tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
           docker buildx imagetools inspect "$first_tag"
-          n="$(docker buildx imagetools inspect "$first_tag" | grep -cE '^\s+Platform:\s+linux/(amd64|arm64)')"
-          if [ "$n" -lt 2 ]; then
-            echo "::error::$first_tag lists $n platform(s); a multi-arch release needs 2"
-            exit 1
-          fi
-          echo "two platforms present in $first_tag"
+          got="$(docker buildx imagetools inspect "$first_tag" \
+            | grep -oE '^ +Platform: +linux/[a-z0-9]+' | awk '{print $2}' | sort -u | tr '\n' ' ')"
+          for want in linux/amd64 linux/arm64; do
+            case " $got " in
+              *" $want "*) ;;
+              *) echo "::error::$first_tag is missing $want (has: ${got:-none})"; exit 1 ;;
+            esac
+          done
+          echo "both architectures present in $first_tag: $got"
         env:
           DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
