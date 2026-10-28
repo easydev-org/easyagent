@@ -17,14 +17,26 @@ permissions:
   packages: write
 
 jobs:
+  # One job PER ARCHITECTURE, each on a runner of that architecture.
+  #
+  # This used to be a single job with `platforms: linux/amd64,linux/arm64` under QEMU. Emulation is
+  # 5-20x slower than native for anything CPU-bound, and the arm64 half of this image is built by
+  # real arm64 hardware on GitHub's runners — so there was never anything to emulate.
   image:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      # QEMU + buildx so the image is multi-arch without a second runner. The
-      # extension image is pure Go, so arm64 costs almost nothing to add.
-      - uses: docker/setup-qemu-action@v3
+      # No setup-qemu: there is nothing to emulate. buildx is still needed for the push-by-digest
+      # flow that lets the two architectures be assembled into one manifest afterwards.
       - uses: docker/setup-buildx-action@v3
 
       - name: log in to GHCR
@@ -32,12 +44,61 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          # GITHUB_TOKEN is scoped to this repository and expires with the job:
-          # no long-lived registry credential exists anywhere.
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Derive the tags from the git ref. `latest` follows the highest semver tag
-      # only, so a v0.x pre-release does not silently become the default.
+      # Pushed BY DIGEST, not by tag. Two jobs writing the same tag would race, and whichever
+      # finished last would silently replace the other's architecture with a single-platform image.
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          # Scoped per architecture: a cache written by the arm64 runner is useless to the amd64 one.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          provenance: true
+          sbom: true
+
+      - name: record the digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+          echo "built ${{ matrix.platform }} -> $digest"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Assemble the per-architecture digests into ONE multi-arch manifest, and apply the tags there.
+  #
+  # Tagging here rather than in the build jobs is what makes a tag point at a COMPLETE image:
+  # applying it earlier would briefly publish a tag resolving to a single architecture.
+  merge:
+    runs-on: ubuntu-24.04
+    needs: image
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -48,18 +109,28 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-          # The Dockerfile carries no proxy or mirror; the build cache is what
-          # makes repeat builds fast, and it lives in the registry rather than in
-          # an environment-specific daemon.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
+      - name: create the manifest
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
+
+      - name: verify both architectures are present
+        run: |
+          set -euo pipefail
+          # `imagetools inspect` prints a table of the manifest's entries; counting the two
+          # platform lines is enough and needs no jq schema knowledge.
+          first_tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          docker buildx imagetools inspect "$first_tag"
+          n="$(docker buildx imagetools inspect "$first_tag" | grep -cE '^\s+Platform:\s+linux/(amd64|arm64)')"
+          if [ "$n" -lt 2 ]; then
+            echo "::error::$first_tag lists $n platform(s); a multi-arch release needs 2"
+            exit 1
+          fi
+          echo "two platforms present in $first_tag"
+        env:
+          DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
