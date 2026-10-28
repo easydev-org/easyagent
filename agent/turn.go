@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/easydev-org/easyagent/llm"
 )
@@ -725,15 +726,33 @@ func decodeToolInput(args string) any {
 		v = next
 		layers++
 	}
-	// A card renders empty when this returns a string instead of an object, and nothing anywhere
-	// reports an error — so the shape that actually arrived has to be visible somewhere. Kept short
-	// and at Info: one line per tool call, and only the head of the payload.
-	raw := args
-	if len(raw) > 160 {
-		raw = raw[:160] + "…"
+	// Silence on the normal path: most calls are one layer and need no comment.
+	//
+	// What IS worth a line is a value that is STILL a string after unwrapping, because a client that
+	// reads a field off it will render an empty card and nothing anywhere reports an error. Also
+	// worth a line: a call that needed more than one unwrap, since that means the provider changed
+	// shape and the bound is now doing real work.
+	if s, stillString := v.(string); stillString {
+		slog.Warn("tool arguments are not an object; cards that read fields of them will be empty",
+			"layers", layers, "head", truncateHead(s))
+	} else if layers > 1 {
+		slog.Warn("tool arguments needed extra unwrapping", "layers", layers)
 	}
-	slog.Error("decodeToolInput", "layers", layers, "type", fmt.Sprintf("%T", v), "raw", raw)
 	return v
+}
+
+// truncateHead keeps a log line readable without hiding which payload it was about.
+func truncateHead(s string) string {
+	const max = 160
+	if len(s) <= max {
+		return s
+	}
+	// Cut on a rune boundary so the log does not contain a broken UTF-8 sequence.
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // newID returns the id for one assistant step.

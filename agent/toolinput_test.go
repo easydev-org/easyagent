@@ -2,7 +2,9 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // The client reads fields off `input` (`input.todos`, `input.repo`, …). Every encoding layer the
@@ -61,5 +63,32 @@ func TestDecodeToolInputRoundTripsAsObject(t *testing.T) {
 	}
 	if len(back.Input) == 0 || back.Input[0] != '{' {
 		t.Fatalf("input on the wire is not an object: %s", back.Input)
+	}
+}
+
+// truncateHead must not split a multi-byte rune in half — a broken sequence in a log line makes the
+// surrounding output unreadable, and this is the path that reports the failure being investigated.
+func TestTruncateHeadCutsOnRuneBoundary(t *testing.T) {
+	// Every rune here is 3 bytes, so byte 160 is guaranteed to land mid-rune.
+	s := strings.Repeat("工", 200)
+	got := truncateHead(s)
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected an ellipsis, got %q", got)
+	}
+	body := strings.TrimSuffix(got, "…")
+	// utf8.ValidString is the direct check: a cut mid-rune leaves an invalid sequence, which is
+	// exactly what shows up as a replacement character in a terminal or a log viewer.
+	if !utf8.ValidString(body) {
+		t.Fatalf("truncated on a non-rune boundary: %q", body)
+	}
+	if len(body) > 160 {
+		t.Fatalf("kept %d bytes, over the 160 limit", len(body))
+	}
+}
+
+// Short values pass through untouched — the ellipsis is for long payloads only.
+func TestTruncateHeadLeavesShortValues(t *testing.T) {
+	if got := truncateHead("hello"); got != "hello" {
+		t.Errorf("truncateHead(hello) = %q", got)
 	}
 }
