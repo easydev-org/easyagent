@@ -326,6 +326,11 @@ func emitOutput(ctx context.Context, deps Deps, in Input, stepID, callID, toolNa
 	}
 	params := map[string]any{
 		"toolCallId": callID,
+		// The same identifier under the other name a client may look for. A card is created from
+		// `tool-input-start` (which carries `id`) and updated by this frame (which carries
+		// `toolCallId`); if the two handlers read different keys and only one is present, the update
+		// lands on a DIFFERENT card — the arguments stay on one and the output appears on another.
+		"id":         callID,
 		"toolName":   toolName,
 		"output":     output,
 		"message_id": stepID,

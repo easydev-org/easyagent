@@ -189,6 +189,10 @@ func (c *Client) decode(ctx context.Context, r io.Reader, out chan<- Event) {
 				return
 			}
 		case "tool-input-start":
+			// `id` is the ONLY identifier a tool-input part carries — verified against a live
+			// stream: tool-input-start has `id` and no `toolCallId`, while tool-call has the reverse.
+			// Both hold the same VALUE, which is why reading them from different fields still pairs
+			// up correctly on the client.
 			if !send(out, ctx, Event{Type: EventToolInputStart, ToolCall: &ToolCall{ID: p.ID, Name: p.ToolName}}) {
 				return
 			}

@@ -242,22 +242,36 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 				var input any
 				_ = json.Unmarshal([]byte(ev.ToolCall.Args), &input)
 				_ = emit(ctx, deps.Emit, "tool-call", map[string]any{
-					"toolCallId": ev.ToolCall.ID, "toolName": ev.ToolCall.Name,
+					// BOTH keys carry the same value, on purpose.
+					//
+					// The client keys a tool card on `toolCallId` in one handler and `id` in another,
+					// and an event that has only the OTHER key makes those handlers disagree about
+					// which CARD a result belongs to. The result was one card holding the arguments
+					// with an empty body, plus a second card named "tool" holding the output: the
+					// same call, split in two.
+					//
+					// Sending both removes the disagreement at the source, instead of leaving each
+					// client to fall back between field names and hope.
+					"toolCallId": ev.ToolCall.ID, "id": ev.ToolCall.ID,
+					"toolName": ev.ToolCall.Name,
 					"input": input, "message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventToolInputStart:
 				_ = emit(ctx, deps.Emit, "tool-input-start", map[string]any{
 					"id": ev.ToolCall.ID, "toolName": ev.ToolCall.Name,
+					"toolCallId": ev.ToolCall.ID,
 					"message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventToolInputDelta:
 				_ = emit(ctx, deps.Emit, "tool-input-delta", map[string]any{
 					"id": ev.ToolCall.ID, "delta": ev.Text,
+					"toolCallId": ev.ToolCall.ID,
 					"message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventToolInputEnd:
 				_ = emit(ctx, deps.Emit, "tool-input-end", map[string]any{
-					"id": ev.ToolCall.ID, "message_id": stepID, "run_id": in.RunID,
+					"id": ev.ToolCall.ID, "toolCallId": ev.ToolCall.ID,
+					"message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventFinishStep:
 				finish = ev.FinishReason
