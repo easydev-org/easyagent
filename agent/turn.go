@@ -732,7 +732,7 @@ func decodeToolInput(args string) any {
 	if len(raw) > 160 {
 		raw = raw[:160] + "…"
 	}
-	slog.Info("decodeToolInput", "layers", layers, "type", fmt.Sprintf("%T", v), "raw", raw)
+	slog.Error("decodeToolInput", "layers", layers, "type", fmt.Sprintf("%T", v), "raw", raw)
 	return v
 }
 
