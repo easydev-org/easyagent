@@ -295,6 +295,21 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// REBUILD, DO NOT ACCUMULATE. Every map here describes "what is present NOW", and Discover reports
+	// exactly that — but writing into maps that are never cleared makes them describe "what has EVER
+	// been present". Stopping an extension then left its tools in the agent for the lifetime of the
+	// process: the console still listed it, the model still believed it could call those tools, and
+	// every call went to a subject with no responder.
+	//
+	// A refresh that cannot forget is not a refresh. The three lines below are the whole fix.
+	e.owner = make(map[string]string, len(e.owner))
+	e.defs = make(map[string]agentpkg.ToolDef, len(e.defs))
+	e.extFields = make(map[string][]bundled.ConfigField, len(e.extFields))
+	e.extNS = make(map[string][]bundled.Namespace, len(e.extNS))
+	e.extPerms = make(map[string][]bundled.PermissionDecl, len(e.extPerms))
+	e.extChans = make(map[string][]bundled.ChannelDecl, len(e.extChans))
+	// NOT CLEARED HERE: the bundled extension is registered separately and never appears in Discover,
+	// so wiping these would erase it. It is added by the caller after this returns.
 	for _, m := range manifests {
 		// Record the extension's declared config surface (for the config page),
 		// independent of whether it declares any tool.
