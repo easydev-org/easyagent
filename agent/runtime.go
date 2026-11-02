@@ -430,7 +430,18 @@ func (r *Runtime) foldUserMessage(tenant, session string, it store.Mailbox) erro
 	if err != nil {
 		return err
 	}
-	created, err := r.deps.DB.InsertMessage(tenant, id, "user", strOrNil(tip), "user")
+	/**
+	 * THE MESSAGE'S ORIGIN IS CARRIED, NOT ASSUMED.
+	 *
+	 * This used to write `source: "user"` for every trigger, which told the console the reader had
+	 * typed the message themselves: a job's completion notice rendered as their own prompt,
+	 * right-aligned and indistinguishable from something they said.
+	 *
+	 * `it.Source` already says where it came from — `session:<name>` for a subsession hand-off,
+	 * `system:<name>` for automation, empty for a human prompt submitted through the API. Passing it
+	 * through is the whole fix; the console has always known how to render each kind.
+	 */
+	created, err := r.deps.DB.InsertMessage(tenant, id, "user", strOrNil(tip), messageSource(it.Source))
 	if err != nil {
 		return err
 	}
@@ -451,8 +462,30 @@ func (r *Runtime) foldUserMessage(tenant, session string, it store.Mailbox) erro
 		return err
 	}
 	return emitBg(r.emitterFor(tenant, session), "message-added", map[string]any{
-		"message_id": id, "prev_id": tip, "role": "user", "streaming": false, "source": "user",
+		// THE LIVE EVENT CARRIES THE SAME ORIGIN THE ROW DID, or the message renders one way when it
+		// arrives and another way after a reload — and the difference is exactly the attribution this
+		// change is about.
+		"message_id": id, "prev_id": tip, "role": "user", "streaming": false,
+		"source": messageSource(it.Source),
 	})
+}
+
+/**
+ * messageSource maps a mailbox row's producer onto the row's origin.
+ *
+ * THE CONSOLE BRANCHES ON THIS STRING, and the branches are not cosmetic: `system:<name>` renders as a
+ * centred notice, `session:<name>` as another conversation's message with its avatar, and anything
+ * else as the reader's own prompt. Writing `user` for a job's completion notice therefore does not
+ * make it look slightly wrong — it makes it look like something the reader said.
+ *
+ * EMPTY MEANS THE READER. A prompt submitted through the API carries no sender, which is the
+ * difference between "nobody named an author" and "an author was named".
+ */
+func messageSource(mailboxSource string) string {
+	if mailboxSource == "" {
+		return "user"
+	}
+	return mailboxSource
 }
 
 // foldEvent persists a context-only event as an `event` message.
