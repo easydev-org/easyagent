@@ -223,7 +223,7 @@ func (s *Server) ListExtensions(ctx context.Context, _ *agentv1.ListExtensionsRe
 			if len(fields) == 0 && len(s.tools.ExtensionPermissions(extID)) == 0 && !s.tools.HasTools(extID) {
 				continue
 			}
-			info := &agentv1.ExtensionInfo{ExtId: extID}
+			info := &agentv1.ExtensionInfo{ExtId: extID, Version: s.tools.ExtensionVersion(extID)}
 			for _, cf := range fields {
 				info.ConfigFields = append(info.ConfigFields, configFieldToProto(cf))
 			}
