@@ -319,6 +319,12 @@ type ToolExecutor struct {
 	// extChans maps an extension id -> the channels it publishes to. A client offers a
 	// subscription from this instead of asking the user to invent a pattern.
 	extChans map[string][]bundled.ChannelDecl
+	// extVersions maps an extension id -> the version its manifest declares.
+	//
+	// RECORDED BECAUSE THE CONSOLE SHOWS IT. The version is part of what an extension announces, and
+	// `ListExtensions` left it empty for every discovered extension — the field existed on the proto,
+	// so a client displayed nothing and nobody noticed, because "no version" is not an error.
+	extVersions map[string]string
 	// grants supplies a session's authorisations. nil = no permission enforcement.
 	//
 	// Injected rather than held as a *store.DB so this package stays independent of the
@@ -393,6 +399,7 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 	e.extNS = make(map[string][]bundled.Namespace, len(e.extNS))
 	e.extPerms = make(map[string][]bundled.PermissionDecl, len(e.extPerms))
 	e.extChans = make(map[string][]bundled.ChannelDecl, len(e.extChans))
+	e.extVersions = make(map[string]string, len(e.extVersions))
 	// NOT CLEARED HERE: the bundled extension is registered separately and never appears in Discover,
 	// so wiping these would erase it. It is added by the caller after this returns.
 	for _, m := range manifests {
@@ -408,6 +415,7 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 		// What this extension publishes, so a client can suggest a subscription instead of
 		// asking the user to invent a pattern.
 		e.extChans[m.Id] = manifestChannels(m)
+		e.extVersions[m.Id] = m.Version
 		if m.Tools == nil {
 			continue
 		}
@@ -631,6 +639,13 @@ func (e *ToolExecutor) ExtensionConfigFields(extID string) []bundled.ConfigField
 }
 
 // ExtensionIDs returns the discovered extension ids (sorted for stability).
+// ExtensionVersion returns the version an extension's manifest declares, or "".
+func (e *ToolExecutor) ExtensionVersion(extID string) string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.extVersions[extID]
+}
+
 func (e *ToolExecutor) ExtensionIDs() []string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
