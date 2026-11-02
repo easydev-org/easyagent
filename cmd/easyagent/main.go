@@ -183,6 +183,24 @@ func run(cfgPath string) error {
 		// so other replicas' watchers receive it (cross-replica WatchSession).
 		hub.SetBackplane(b)
 		rtDeps.Lease = b
+		/**
+		 * MAILBOX MESSAGES FROM EXTENSIONS REACH THE TABLE THROUGH HERE.
+		 *
+		 * `extension.PublishMailboxEvent` publishes onto a NATS subject; this agent's `Wake` drains
+		 * a POSTGRES table. Those are two different places, and a message in only the first is one
+		 * the runtime never sees — the wake fires, finds nothing, and the turn does not happen.
+		 *
+		 * An extension cannot enqueue, because it has no database handle. The bridge reads the
+		 * subject they already publish to and does the enqueue, which is why the extensions needed
+		 * no change: they announce, and this side makes it durable.
+		 */
+		//
+		// THE SUBSCRIPTION OUTLIVES NOTHING IT NEEDS TO: it lives until the process does, and the
+		// bus closes with the process. A failure here is fatal rather than logged, because an agent
+		// that cannot receive extension mail is an agent whose background jobs never report back.
+		if _, berr := b.BridgeExtensionMail(context.Background()); berr != nil {
+			return fmt.Errorf("mailbox bridge: %w", berr)
+		}
 		exec := bus.NewToolExecutor(b.Agent())
 		// Permissions: the executor asks this for a session's grants on every gated call.
 		// Injected as a function so the executor stays free of the storage layer.
