@@ -25,6 +25,11 @@ type ToolDef struct {
 	// call's target and only the extension can resolve that. The extension re-checks
 	// in its own tool and is the real boundary.
 	Requires []string
+	// ReadOnly means the tool only looks; the turn loop may run several of these at once.
+	//
+	// Absent is false, and false means "run alone, in model order". See ToolSpec.ReadOnly in
+	// the SDK for why the default is the slow one.
+	ReadOnly bool
 }
 
 // ToolRegistry supplies the tools a session may call. The production impl

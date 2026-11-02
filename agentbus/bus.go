@@ -41,6 +41,10 @@ type Bus struct {
 	// needs to supply its own. nil means "no local queue" — a bare bus used only for transport.
 	db MailboxQueue
 
+	// replicas is the JetStream replica count this bus was built with (0 = server default).
+	// Kept so the startup audit can compare it against what the broker actually has.
+	replicas int
+
 	mu   sync.Mutex
 	held map[string]int64 // session key -> KV revision
 }
@@ -73,12 +77,32 @@ func (b *Bus) WithMailboxQueue(q MailboxQueue) *Bus {
 }
 
 // Connect dials NATS and builds the agent-side role.
-func Connect(url string) (*Bus, error) {
-	t, err := nats.Connect(url)
+//
+// NO REPLICATION, DELIBERATELY, AND THIS IS THE DEPLOYMENT'S DECISION TO MAKE. A zero replica count
+// means "server default", which on a single-node broker is R1. A clustered broker does NOT change it:
+// JetStream asks for the replica count per stream/bucket at creation, and the SDK only sets it when
+// told to.
+//
+// That mattered in practice. A three-replica NATS StatefulSet was taken to mean "the data has three
+// copies", while every stream and KV bucket — mailbox included — was still created at R1. The
+// topology promised redundancy the storage did not have, which is the worst shape of that mistake
+// because it only surfaces when a broker is lost.
+//
+// Use ConnectWithReplicas when the deployment actually wants replication.
+func Connect(url string) (*Bus, error) { return ConnectWithReplicas(url, 0) }
+
+// ConnectWithReplicas is Connect with an explicit JetStream replica count for every stream and
+// KV/object bucket this bus CREATES.
+//
+// replicas <= 0 keeps the server default (R1 on a single node). It applies at creation only: an
+// existing object keeps its own count, which is why AuditReplicas exists — to report the difference
+// instead of letting the setting quietly do nothing.
+func ConnectWithReplicas(url string, replicas int) (*Bus, error) {
+	t, err := nats.ConnectWithOptions(url, nats.Options{Replicas: replicas})
 	if err != nil {
 		return nil, err
 	}
-	return &Bus{transport: t, agent: abcagent.New(t), url: url, held: map[string]int64{}}, nil
+	return &Bus{transport: t, agent: abcagent.New(t), url: url, replicas: replicas, held: map[string]int64{}}, nil
 }
 
 // Close shuts the transport down.
@@ -92,6 +116,31 @@ func (b *Bus) Agent() *abcagent.Agent { return b.agent }
 
 // Transport exposes the raw bus (advanced callers).
 func (b *Bus) Transport() bus.Bus { return b.transport }
+
+// AuditReplicas reports every stream and KV/object bucket whose replica count is below what this bus
+// was configured with.
+//
+// A STARTUP CHECK, NOT AN ERROR PATH. Raising the replica count does not raise anything already on
+// disk, and this is how a deployment finds that out at boot instead of during an outage. A bus with no
+// requirement reports nothing.
+func (b *Bus) AuditReplicas() ([]string, error) {
+	if b.replicas <= 0 {
+		return nil, nil
+	}
+	auditor, ok := b.transport.(nats.ReplicaAuditor)
+	if !ok {
+		return nil, nil
+	}
+	held, err := auditor.AuditReplicas()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(held))
+	for _, a := range held {
+		out = append(out, a.String())
+	}
+	return out, nil
+}
 
 // ---- Lease (implements agentpkg.Lease) ----
 
@@ -377,6 +426,10 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 			// Permission keys the tool needs. Kept as declared: the agent only tests
 			// presence, and matching against a call's target happens in the extension.
 			def.Requires = t.Requires
+			// Absent means "may change something", which is also the turn loop's safe default.
+			if t.ReadOnly != nil && *t.ReadOnly {
+				def.ReadOnly = true
+			}
 			e.defs[t.Name] = def
 		}
 	}
@@ -483,12 +536,20 @@ func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, callID, nam
 	// it back to the bare name + owning extension.
 	extID, bare := e.resolve(name)
 	if extID == "" {
-		// Fall back to a discovery refresh (a tool may have appeared since boot).
-		_ = e.Refresh(ctx, 500)
-		extID, bare = e.resolve(name)
-		if extID == "" {
-			return agentpkg.ToolOutcome{}, &UnknownToolError{Name: name}
-		}
+		/**
+		 * AN UNKNOWN TOOL IS AN ANSWER, NOT A REASON TO GO ASKING.
+		 *
+		 * This used to call Refresh here — a full discovery rebuild, up to 500ms — on the tool-call
+		 * path. It was justified as "a tool may have appeared since boot", but the model hallucinating
+		 * a name is far more common than a brand-new extension, so the usual effect was to make every
+		 * miss cost half a second inside a turn, and the model often misses several times in a row.
+		 *
+		 * Tools appearing later are handled where they actually appear: discovery is refreshed before
+		 * the console lists extensions, before permissions are rendered, and after a call that found
+		 * an owner but a missing tool. A miss here is reported immediately, which is also what lets the
+		 * model self-correct within the same step instead of waiting.
+		 */
+		return agentpkg.ToolOutcome{}, &UnknownToolError{Name: name}
 	}
 	var input map[string]any
 	if args != "" {

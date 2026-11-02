@@ -40,6 +40,7 @@ tools:
       required: [todos]
 
   - name: history-search
+    read_only: true
     description: >-
       Search this session's chat history by keyword (case-insensitive substring over
       parts(type=text) text, tool names and change ids), optionally constrained to a time
@@ -102,6 +103,7 @@ tools:
       required: [query]
 
   - name: history-range
+    read_only: true
     description: >-
       Read this session's chat history by position (depth) window. depth 0 = the newest
       message; positive numbers go back in time; negative numbers count from the newest side
@@ -147,6 +149,7 @@ tools:
               单条永不截断；加上下一条会超预算时，仍完整输出该条并停止。
 
   - name: file-info
+    read_only: true
     description: >-
       Return metadata (name, mime type, size, sha256) for a previously uploaded file
       referenced as file:<code>. Use this first to learn a file's type and size before
@@ -165,6 +168,7 @@ tools:
       required: [code]
 
   - name: file-read
+    read_only: true
     description: >-
       Read the TEXT content of a previously uploaded file referenced as file:<code>,
       line-numbered, windowed by offset/limit. Only plain-text formats are supported
@@ -196,6 +200,7 @@ tools:
       required: [code]
 
   - name: image-read
+    read_only: true
     description: >-
       Understand a previously uploaded image referenced as file:<code> using a vision model.
       Pass a question (prompt); the model returns a natural-language description/answer
@@ -535,6 +540,7 @@ tools:
       required: [to, text]
 
   - name: job-list
+    read_only: true
     description: >-
       List the background jobs this conversation started, newest first. A job is
       work that outlived the tool call that began it — a long shell command, a

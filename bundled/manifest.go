@@ -22,6 +22,8 @@ type manifestTool struct {
 	Descriptions   map[string]string `yaml:"descriptions"`
 	InputSchema    map[string]any    `yaml:"input_schema"`
 	RequiredConfig []string          `yaml:"required_config"`
+	// ReadOnly lets the turn loop run several of these at once. Absent = false = run alone.
+	ReadOnly bool `yaml:"read_only"`
 }
 
 type manifestConfig struct {
@@ -76,6 +78,7 @@ func ParseManifest() (Manifest, error) {
 			Descriptions:   t.Descriptions,
 			InputSchema:    t.InputSchema,
 			RequiredConfig: t.RequiredConfig,
+			ReadOnly:       t.ReadOnly,
 		})
 	}
 	for _, c := range doc.Config {

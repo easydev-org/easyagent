@@ -72,6 +72,16 @@ type NATS struct {
 	ServerBin string `yaml:"server_bin"`
 	// ReplicaID identifies this instance among replicas. Empty = os.Hostname().
 	ReplicaID string `yaml:"replica_id"`
+	// Replicas is the JetStream replica count for every stream and KV/object bucket the agent CREATES.
+	//
+	// ZERO IS NOT "AUTO": it is the broker's default, which on a single node is 1. A clustered broker
+	// does not raise it — JetStream takes the replica count per stream at creation, so a three-node
+	// cluster with replicas: 0 still stores one copy of everything, including the mailbox.
+	//
+	// IT APPLIES AT CREATION ONLY. Raising this on a running cluster changes nothing for objects that
+	// already exist; the agent logs one warning per such object at boot (see AuditReplicas) rather
+	// than pretending the setting took effect.
+	Replicas int `yaml:"replicas"`
 }
 
 // Agent tunes the turn loop.

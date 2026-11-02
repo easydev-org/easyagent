@@ -30,6 +30,13 @@ nats:
   # url: nats://nats:4222
   server_bin: ""               # embedded broker binary (empty = PATH)
   replica_id: ""               # empty = os.Hostname()
+  # Replica count for every stream and KV/object bucket the agent CREATES.
+  # 0 = the broker's default, which on a single node is 1 — a clustered broker does
+  # NOT raise it, so a 3-node cluster with 0 still keeps one copy of everything,
+  # the mailbox included. Set this whenever the deployment expects real redundancy.
+  # It only applies at creation; existing objects keep their count (the agent logs
+  # a warning for each one it finds below this value).
+  replicas: 0
 
 agent:
   default_max_turns: 8

@@ -366,47 +366,57 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 			return res, nil
 		}
 
-		// Append the assistant's tool-call message, then run tools IN MODEL
-		// ORDER (sequential: a side-effecting tool must not be overtaken).
+		// Append the assistant's tool-call message, then run them.
+		//
+		// ORDER IS A PROPERTY OF THE TOOL, NOT OF THE SCHEDULER. A side-effecting tool must not
+		// be overtaken, but a lookup can run beside another lookup — and applying the strict rule
+		// to everything made a step with three reads cost three round trips. So the batch is
+		// SPLIT INTO RUNS of consecutive read-only calls: within a run everything goes at once,
+		// runs themselves still execute in model order, and a write is always alone between them.
+		//
+		// This preserves the original guarantee exactly: a write is never concurrent with
+		// anything, and no write is reordered relative to another write or to a read that
+		// preceded it.
 		messages = append(messages, llm.Message{
 			Role: llm.RoleAssistant, Content: text, ToolCalls: calls,
 		})
-		for _, call := range calls {
-			// D1: repair a tool name the model got wrong (lowercase) — otherwise
-			// hand the model an error result naming the available tools so it can
-			// self-correct in the SAME turn instead of the turn dying.
-			name := resolveToolName(call.Name, tools)
-			if name == "" {
-				execErr := fmt.Errorf("unknown tool %q (available: %s)", call.Name, toolNames(tools))
+		for _, run := range planToolRuns(calls, tools) {
+			results := runToolCalls(ctx, deps, in, stepID, tools, run)
+			// SAME ORDER AS CALLS, because the provider pairs results by toolCallId but a
+			// reader (and the console) expects the transcript to read in model order.
+			for _, fresh := range results {
+				// call.ID is the identity the extension reports progress under, so it
+				// is what the relay subscribes to.
+				name := resolveToolName(fresh.call.Name, tools)
+				if name == "" {
+					execErr := fmt.Errorf("unknown tool %q (available: %s)", fresh.call.Name, toolNames(tools))
+					messages = append(messages, llm.Message{
+						Role: llm.RoleTool, ToolCallID: fresh.call.ID, Name: fresh.call.Name, Content: execErr.Error(),
+					})
+					emitError(ctx, deps, in, stepID, fresh.call.ID, fresh.call.Name, execErr)
+					continue
+				}
+				if fresh.execErr != nil {
+					// A failed tool still pairs with its call id so the provider
+					// never sees a dangling tool-call (rule 4).
+					// The terminal `tool-output-error` frame was already published by
+					// execTool; emitting a second error event here would make the client
+					// render the same failure twice.
+					messages = append(messages, llm.Message{
+						Role: llm.RoleTool, ToolCallID: fresh.call.ID, Name: fresh.call.Name,
+						Content: fresh.execErr.Error(),
+					})
+					continue
+				}
 				messages = append(messages, llm.Message{
-					Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name, Content: execErr.Error(),
+					Role: llm.RoleTool, ToolCallID: fresh.call.ID, Name: fresh.call.Name,
+					Content: fresh.outcome.Content,
 				})
-				emitError(ctx, deps, in, stepID, call.ID, call.Name, execErr)
-				continue
+				// No separate result event: execTool already published the terminal
+				// `tool-output-available` for this call. Emitting the old `tool-result`
+				// alongside it would give the client two sources for one result, and
+				// they would have to agree.
 			}
-			// call.ID is the identity the extension reports progress under, so it
-			// is what the relay subscribes to.
-			outcome, execErr := execTool(ctx, deps, in, name, call.ID, stepID, call.Args)
-			if execErr != nil {
-				// A failed tool still pairs with its call id so the provider
-				// never sees a dangling tool-call (rule 4).
-				// The terminal `tool-output-error` frame was already published by
-				// execTool; emitting a second error event here would make the client
-				// render the same failure twice.
-				messages = append(messages, llm.Message{
-					Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
-					Content: execErr.Error(),
-				})
-				continue
-			}
-			messages = append(messages, llm.Message{
-				Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
-				Content: outcome.Content,
-			})
-			// No separate result event: execTool already published the terminal
-			// `tool-output-available` for this call. Emitting the old `tool-result`
-			// alongside it would give the client two sources for one result, and
-			// they would have to agree.
 		}
 	}
 
@@ -675,6 +685,103 @@ func toolNames(tools []llm.ToolDef) string {
 		names[i] = t.Name
 	}
 	return strings.Join(names, ", ")
+}
+
+// toolResult pairs a call with what running it produced.
+type toolResult struct {
+	call    llm.ToolCall
+	outcome ToolOutcome
+	execErr error
+}
+
+/**
+ * planToolRuns splits a step's tool calls into execution runs.
+ *
+ * A RUN IS A MAXIMAL STRETCH OF CONSECUTIVE READ-ONLY CALLS. Everything inside a run may execute
+ * concurrently; the runs themselves run one after another, in model order.
+ *
+ * WHY THIS SHAPE rather than "reads in parallel, then writes in parallel": a write that follows a
+ * read must observe it. `git-file-read` then `git-file-patch` is the common case, and batching all
+ * reads before all writes would let the patch run against content the model never saw. Keeping runs
+ * contiguous means the ONLY thing that changes is that adjacent reads overlap — no ordering
+ * guarantee the old sequential loop provided is lost.
+ *
+ * A CALL WE CANNOT IDENTIFY (a name the model got wrong) is treated as a WRITE, because it runs
+ * alone and its error is reported in order. That is also what makes the unknown-tool path safe.
+ *
+ * Read-only-ness comes from the OFFERED tool list, which was built from the discovered manifests.
+ */
+func planToolRuns(calls []llm.ToolCall, tools []llm.ToolDef) [][]llm.ToolCall {
+	readOnly := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		if t.ReadOnly {
+			readOnly[t.Name] = true
+		}
+	}
+	var runs [][]llm.ToolCall
+	var current []llm.ToolCall
+	flush := func() {
+		if len(current) > 0 {
+			runs = append(runs, current)
+			current = nil
+		}
+	}
+	for _, c := range calls {
+		name := resolveToolName(c.Name, tools)
+		if name != "" && readOnly[name] {
+			current = append(current, c)
+			continue
+		}
+		// A write (or an unrecognised name) ends any open run and occupies one of its own, so it
+		// is always alone and always in model order.
+		flush()
+		runs = append(runs, []llm.ToolCall{c})
+	}
+	flush()
+	return runs
+}
+
+/**
+ * runToolCalls executes one run and returns the results in CALL ORDER.
+ *
+ * A RUN OF ONE just calls through — no goroutine, no channel, so the common sequential path stays
+ * as cheap and as easy to read in a stack trace as it was.
+ *
+ * CONCURRENCY IS BOUNDED BY THE RUN'S LENGTH, which the model decides. There is no extra semaphore:
+ * a step's tool count is small (the provider caps parallel calls) and adding a second limit here
+ * would make the latency claim false for exactly the case it was made for.
+ */
+func runToolCalls(ctx context.Context, deps Deps, in Input, stepID string, tools []llm.ToolDef, run []llm.ToolCall) []toolResult {
+	out := make([]toolResult, len(run))
+	if len(run) == 1 {
+		name := resolveToolName(run[0].Name, tools)
+		if name == "" {
+			out[0] = toolResult{call: run[0]}
+			return out
+		}
+		o, err := execTool(ctx, deps, in, name, run[0].ID, stepID, run[0].Args)
+		out[0] = toolResult{call: run[0], outcome: o, execErr: err}
+		return out
+	}
+	var wg sync.WaitGroup
+	for i, c := range run {
+		wg.Add(1)
+		go func(i int, c llm.ToolCall) {
+			defer wg.Done()
+			// The name was resolved when the run was planned, so it must resolve here too;
+			// a miss is handled by the caller as an unknown tool.
+			name := resolveToolName(c.Name, tools)
+			if name == "" {
+				out[i] = toolResult{call: c}
+				return
+			}
+			o, err := execTool(ctx, deps, in, name, c.ID, stepID, c.Args)
+			// Each index is written by exactly one goroutine, so no lock is needed.
+			out[i] = toolResult{call: c, outcome: o, execErr: err}
+		}(i, c)
+	}
+	wg.Wait()
+	return out
 }
 
 func emit(ctx context.Context, e Emitter, name string, params map[string]any) error {
