@@ -227,7 +227,7 @@ func TurnPlanToLLMTools(tools []ToolDef, locale string) []llm.ToolDef {
 			schema = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
 		out = append(out, llm.ToolDef{
-			Name: LLMToolName(t), Description: desc, Parameters: schema,
+			Name: LLMToolName(t), Description: desc, Parameters: schema, ReadOnly: t.ReadOnly,
 		})
 	}
 	return out

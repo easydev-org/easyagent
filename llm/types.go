@@ -38,6 +38,13 @@ type ToolDef struct {
 	// Parameters is a JSON Schema object (map[string]any / json.RawMessage).
 	Parameters any
 	Strict     bool
+	// ReadOnly means this tool only looks; the turn loop may run several of these concurrently.
+	//
+	// IT NEVER REACHES THE PROVIDER — request bodies are built field by field in prompt.go, so a field
+	// added here is not serialised unless that code names it. It lives on this type because this is
+	// the tool list the turn loop actually iterates: the alternative was a second parallel list of
+	// names, which is a second thing to keep in step.
+	ReadOnly bool
 }
 
 // Message is one entry of the model conversation.
