@@ -62,6 +62,8 @@ const (
 	AgentServiceMarkReadProcedure = "/agent.v1.AgentService/MarkRead"
 	// AgentServiceListGrantsProcedure is the procedure name of the AgentService's ListGrants RPC.
 	AgentServiceListGrantsProcedure = "/agent.v1.AgentService/ListGrants"
+	// AgentServiceListJobsProcedure is the procedure name of the AgentService's ListJobs RPC.
+	AgentServiceListJobsProcedure = "/agent.v1.AgentService/ListJobs"
 	// AgentServiceCreateGrantProcedure is the procedure name of the AgentService's CreateGrant RPC.
 	AgentServiceCreateGrantProcedure = "/agent.v1.AgentService/CreateGrant"
 	// AgentServiceRevokeGrantProcedure is the procedure name of the AgentService's RevokeGrant RPC.
@@ -293,6 +295,13 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListGrants"),
 			Procedure:  AgentServiceListGrantsProcedure,
+		}
+	})
+	agentServiceListJobsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListJobs"),
+			Procedure:  AgentServiceListJobsProcedure,
 		}
 	})
 	agentServiceCreateGrantSpec = sync.OnceValue(func() connect.Spec {
@@ -577,6 +586,18 @@ type AgentServiceClient interface {
 	// capability with different params — "merge in this repository" and "merge in that
 	// one" are two authorisations, not one.
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
+	//*
+	// ListJobs reports the background jobs a conversation started.
+	//
+	// A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
+	// answer from a tool result. This is how a page shows what is still running — and how a reader sees
+	// what finished while they were looking elsewhere.
+	//
+	// THE LIST IS NOT THE TRUTH ABOUT THE WORK: it is a cache every extension writes to, and a job
+	// whose owner stopped renewing is recorded as `lost` by a sweeper rather than reported as running
+	// forever. `cancel_mode` says whether the action is worth offering at all — `kill` ends a process,
+	// `request` only asks a remote system, and empty means there is nothing to stop.
+	ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error)
 	CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error)
 	RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error)
 	// ListPermissionDecls publishes what the discovered extensions can require.
@@ -747,6 +768,18 @@ type AgentServiceHandler interface {
 	// capability with different params — "merge in this repository" and "merge in that
 	// one" are two authorisations, not one.
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
+	//*
+	// ListJobs reports the background jobs a conversation started.
+	//
+	// A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
+	// answer from a tool result. This is how a page shows what is still running — and how a reader sees
+	// what finished while they were looking elsewhere.
+	//
+	// THE LIST IS NOT THE TRUTH ABOUT THE WORK: it is a cache every extension writes to, and a job
+	// whose owner stopped renewing is recorded as `lost` by a sweeper rather than reported as running
+	// forever. `cancel_mode` says whether the action is worth offering at all — `kill` ends a process,
+	// `request` only asks a remote system, and empty means there is nothing to stop.
+	ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error)
 	CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error)
 	RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error)
 	// ListPermissionDecls publishes what the discovered extensions can require.
@@ -820,6 +853,7 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceUndoSpec(), Handler: adapter.undo},
 		connect.Method{Spec: agentServiceMarkReadSpec(), Handler: adapter.markRead},
 		connect.Method{Spec: agentServiceListGrantsSpec(), Handler: adapter.listGrants},
+		connect.Method{Spec: agentServiceListJobsSpec(), Handler: adapter.listJobs},
 		connect.Method{Spec: agentServiceCreateGrantSpec(), Handler: adapter.createGrant},
 		connect.Method{Spec: agentServiceRevokeGrantSpec(), Handler: adapter.revokeGrant},
 		connect.Method{Spec: agentServiceListPermissionDeclsSpec(), Handler: adapter.listPermissionDecls},
@@ -987,6 +1021,10 @@ func (UnimplementedAgentServiceHandler) MarkRead(context.Context, *v1.MarkReadRe
 
 func (UnimplementedAgentServiceHandler) ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListGrants is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListJobs is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error) {
@@ -1260,6 +1298,14 @@ func (c *agentServiceClient) MarkRead(ctx context.Context, req *v1.MarkReadReque
 func (c *agentServiceClient) ListGrants(ctx context.Context, req *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error) {
 	var res v1.ListGrantsResponse
 	if err := c.client.CallUnary(ctx, agentServiceListGrantsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListJobs(ctx context.Context, req *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
+	var res v1.ListJobsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListJobsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1729,6 +1775,18 @@ func (h agentServiceHandler) listGrants(ctx context.Context, _ connect.Spec, str
 		return err
 	}
 	res, err := h.svc.ListGrants(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listJobs(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListJobsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListJobs(ctx, &req)
 	if err != nil {
 		return err
 	}
