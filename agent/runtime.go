@@ -289,6 +289,12 @@ func (r *Runtime) releaseIfHeld(ctx context.Context, tenant, session string, los
 func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items []store.Mailbox, cancel context.CancelFunc) bool {
 	hasTrigger := false
 	for _, it := range items {
+		/**
+		 * WHAT THE BATCH ACTUALLY CONTAINS, at the level the dispatch reads. The drain's own log
+		 * counts rows; this one names their types, which is the difference between "two messages
+		 * arrived" and "a trigger arrived" — and only the second one runs a turn.
+		 */
+		slog.Info("batch item", "tenant", tenant, "session", session, "msg", it.ID, "type", it.MsgType)
 		switch it.MsgType {
 		case "trigger":
 			hasTrigger = true
