@@ -326,6 +326,16 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 		return true // context-only batch: keep draining
 	}
 	if ctx.Err() != nil {
+		/**
+		 * THE LAST SILENT RETURN, AND THE ONE THAT FIT EVERY OBSERVATION.
+		 *
+		 * A trigger was drained, its type was right, the fold succeeded — and no turn ran. This
+		 * branch explains all three: the busy period's context had already ended, so the turn was
+		 * skipped and nothing said so. Typically that is a wake whose lease was lost, or a wake that
+		 * raced a replica handover.
+		 */
+		slog.Warn("trigger dropped: the busy period ended first",
+			"tenant", tenant, "session", session, "err", ctx.Err())
 		return false
 	}
 	res, err := r.runTurn(ctx, tenant, session)
