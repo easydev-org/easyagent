@@ -25,6 +25,10 @@ import (
 	"github.com/easydev-org/easybus-sdk/events"
 	"github.com/easydev-org/easybus-sdk/protocol"
 	"github.com/easydev-org/easybus-sdk/transport/nats"
+	// The raw client, for the startup replica audit only. The SDK does not expose the JetStream
+	// handle it keeps, and widening its surface for one diagnostic would make every consumer of the
+	// library carry it.
+	natsgo "github.com/nats-io/nats.go"
 )
 
 // LeaseTTL is the session run-lease TTL (matches the protocol constant).
@@ -123,22 +127,64 @@ func (b *Bus) Transport() bus.Bus { return b.transport }
  * disagree on any cluster that already holds data. This is how a deployment finds that out at boot
  * instead of when a broker is lost.
  *
+ * IT OPENS ITS OWN CONNECTION, ONCE, AT STARTUP. The SDK does not expose the JetStream handle it
+ * keeps (by design — it is a protocol library, not a cluster admin tool), and adding an accessor that
+ * exists for one diagnostic would widen its surface for every consumer. A second short-lived
+ * connection at boot costs nothing and keeps the dependency on the RELEASED SDK.
+ *
  * Returns nil for a bus with no requirement: it never promised redundancy, so there is nothing to be
  * wrong about.
  */
-func (b *Bus) AuditReplicas() ([]string, error) {
+func (b *Bus) AuditReplicas(ctx context.Context) ([]string, error) {
 	if b.replicas <= 0 {
 		return nil, nil
 	}
-	// The transport is transport/nats.Bus, which IS the auditor — no type assertion needed. The
-	// optional interface exists for callers holding a bus.Bus; here the concrete type is at hand.
-	short, err := b.transport.AuditReplicas()
+	nc, err := natsgo.Connect(b.url, natsgo.Timeout(5*time.Second))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("audit: connect: %w", err)
 	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		return nil, fmt.Errorf("audit: jetstream: %w", err)
+	}
+
+	type finding struct {
+		kind, name string
+		have       int
+	}
+	var short []finding
+
+	// KV buckets are streams named KV_<bucket>; the object store is OBJ_<bucket>. Enumerating the
+	// stream list is the only way to see them without a second, drifting list of bucket names.
+	for name := range js.StreamNames() {
+		info, ierr := js.StreamInfo(name)
+		if ierr != nil {
+			continue // deleted between listing and lookup
+		}
+		if info.Config.Replicas == b.replicas {
+			continue
+		}
+		kind := "stream"
+		switch {
+		case strings.HasPrefix(name, "KV_"):
+			kind, name = "bucket", strings.TrimPrefix(name, "KV_")
+		case strings.HasPrefix(name, "OBJ_"):
+			kind, name = "bucket", strings.TrimPrefix(name, "OBJ_")
+		}
+		short = append(short, finding{kind: kind, name: name, have: info.Config.Replicas})
+	}
+	// Stable order, so two audits of the same cluster read the same.
+	sort.Slice(short, func(i, j int) bool {
+		if short[i].kind != short[j].kind {
+			return short[i].kind < short[j].kind
+		}
+		return short[i].name < short[j].name
+	})
+
 	out := make([]string, 0, len(short))
-	for _, a := range short {
-		out = append(out, a.String())
+	for _, f := range short {
+		out = append(out, fmt.Sprintf("%s %s has %d replica(s), wanted %d", f.kind, f.name, f.have, b.replicas))
 	}
 	return out, nil
 }
