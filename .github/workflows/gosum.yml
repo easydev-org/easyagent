@@ -1,0 +1,61 @@
+name: gosum
+
+# Resolves `go.sum` in CI when `go.mod` names a module version that has no entry yet.
+#
+# WHY THIS EXISTS: `go.sum` can only be produced by resolving the module — hashing the zip the proxy
+# serves. That needs network access a contributor's sandbox may not have. Without it, a dependency bump
+# fails `go build` with "missing go.sum entry" and the author has no way to unblock themselves except
+# by hand-editing hashes they cannot compute.
+#
+# Deliberately narrow: it runs only for a PR that touches go.mod, and all it can do is `go mod tidy` +
+# commit go.mod/go.sum. It cannot change source.
+on:
+  pull_request:
+    paths:
+      - 'go.mod'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gosum-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tidy:
+    runs-on: ubuntu-latest
+    # A fork cannot be pushed to with the repo token; there the contributor runs `go mod tidy` with
+    # whatever proxy they have, and ci.yml still reports the missing entry as the actionable failure.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go mod tidy
+        run: |
+          set -euo pipefail
+          go mod tidy
+
+      - name: Commit if go.sum or go.mod changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- go.sum go.mod; then
+            echo "go.sum already resolves every module — nothing to commit"
+            exit 0
+          fi
+          git --no-pager diff --stat -- go.sum go.mod
+          git config user.name  "easyagent"
+          git config user.email "agent@easyagent.local"
+          git add go.sum go.mod
+          git commit -m "build: resolve go.sum for the pinned easybus-sdk version
+
+          Produced by .github/workflows/gosum.yml — hashes can only be computed by resolving the
+          module, which needs the proxy."
+          git push
