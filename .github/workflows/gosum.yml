@@ -1,0 +1,59 @@
+name: gosum
+
+# Fills in `go.sum` for a module version that has no tag yet, then commits it.
+#
+# WHY THIS EXISTS: `go.sum` can only be produced by resolving the module (hashing the zip the proxy
+# serves). That needs network access to the module proxy, which a contributor's sandbox may not have —
+# and in this case the dependency is a pseudo-version pinning an untagged commit of a sibling repo, so
+# it is invisible to every ordinary `go mod tidy` that ran before that commit existed.
+#
+# Deliberately narrow: it runs on demand or on a pull request that touches go.mod, and all it can do
+# is `go mod tidy` + commit. It cannot change source.
+on:
+  pull_request:
+    paths:
+      - 'go.mod'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gosum-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tidy:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go mod tidy
+        run: |
+          set -euo pipefail
+          go mod tidy
+
+      - name: Commit if go.sum changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- go.sum go.mod; then
+            echo "go.sum already resolves every module — nothing to commit"
+            exit 0
+          fi
+          git --no-pager diff --stat -- go.sum go.mod
+          git config user.name  "easyagent"
+          git config user.email "agent@easyagent.local"
+          git add go.sum go.mod
+          git commit -m "build: resolve go.sum for the pinned easybus-sdk commit
+
+          Produced by .github/workflows/gosum.yml — a pseudo-version cannot be hashed without
+          reaching the module proxy, which the authoring sandbox cannot do."
+          git push
