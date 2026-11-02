@@ -30,6 +30,7 @@ import (
 	"github.com/easydev-org/easyagent/media"
 	"github.com/easydev-org/easyagent/server"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/denial"
 	"github.com/easydev-org/easybus-sdk/job"
 	sdkbus "github.com/easydev-org/easybus-sdk/bus"
 )
@@ -206,6 +207,23 @@ func run(cfgPath string) error {
 		// Injected as a function so the executor stays free of the storage layer.
 		exec.WithGrants(func(ctx context.Context, tenant, session string) (map[string][]store.GrantSnapshot, error) {
 			return db.GrantsByExt(tenant, session)
+		})
+		/**
+		 * REMEMBER REFUSALS, so a reader can grant what was missing.
+		 *
+		 * A REFUSAL IS CORRECT AND INVISIBLE TO THE PERSON WHO COULD FIX IT. The model reads it at the
+		 * moment it happens; the person is looking at the panel, minutes later, with the refusal several
+		 * tool calls back in a transcript. Without this list, granting a permission means already knowing
+		 * which one — which is the state the reader is in precisely because they do not.
+		 *
+		 * BEST-EFFORT: the gate has already decided, and a failed note must not change the answer.
+		 */
+		denials := denial.NewRegistry(b.Transport())
+		exec.WithDenialRecorder(func(ctx context.Context, tenant, session, extID, capability, tool string) {
+			if err := denials.Record(ctx, tenant, session, extID, capability, tool); err != nil {
+				slog.Warn("cannot record a permission refusal",
+					"tenant", tenant, "session", session, "ext", extID, "capability", capability, "err", err)
+			}
 		})
 		_ = exec.Refresh(context.Background(), 500)
 		// Composite: bundled (in-process) + NATS extensions (out-of-process).

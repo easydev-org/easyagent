@@ -62,6 +62,8 @@ const (
 	AgentServiceMarkReadProcedure = "/agent.v1.AgentService/MarkRead"
 	// AgentServiceListGrantsProcedure is the procedure name of the AgentService's ListGrants RPC.
 	AgentServiceListGrantsProcedure = "/agent.v1.AgentService/ListGrants"
+	// AgentServiceListDenialsProcedure is the procedure name of the AgentService's ListDenials RPC.
+	AgentServiceListDenialsProcedure = "/agent.v1.AgentService/ListDenials"
 	// AgentServiceListJobsProcedure is the procedure name of the AgentService's ListJobs RPC.
 	AgentServiceListJobsProcedure = "/agent.v1.AgentService/ListJobs"
 	// AgentServiceCreateGrantProcedure is the procedure name of the AgentService's CreateGrant RPC.
@@ -295,6 +297,13 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListGrants"),
 			Procedure:  AgentServiceListGrantsProcedure,
+		}
+	})
+	agentServiceListDenialsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListDenials"),
+			Procedure:  AgentServiceListDenialsProcedure,
 		}
 	})
 	agentServiceListJobsSpec = sync.OnceValue(func() connect.Spec {
@@ -587,6 +596,16 @@ type AgentServiceClient interface {
 	// one" are two authorisations, not one.
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
 	//*
+	// ListDenials reports the capabilities this session was REFUSED in the last day.
+	//
+	// A REFUSAL IS CORRECT AND INVISIBLE TO THE PERSON WHO COULD FIX IT. The model reads the error at
+	// the moment it happens; the person reads the panel minutes later, with the refusal several tool
+	// calls back. This is the list that turns "I cannot do that" into a button.
+	//
+	// IT IS A REMINDER, NOT A LOG: entries aggregate by capability, and they expire after a day. A list
+	// that keeps complaining about something already granted teaches the reader that it is noise.
+	ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error)
+	//*
 	// ListJobs reports the background jobs a conversation started.
 	//
 	// A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
@@ -769,6 +788,16 @@ type AgentServiceHandler interface {
 	// one" are two authorisations, not one.
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
 	//*
+	// ListDenials reports the capabilities this session was REFUSED in the last day.
+	//
+	// A REFUSAL IS CORRECT AND INVISIBLE TO THE PERSON WHO COULD FIX IT. The model reads the error at
+	// the moment it happens; the person reads the panel minutes later, with the refusal several tool
+	// calls back. This is the list that turns "I cannot do that" into a button.
+	//
+	// IT IS A REMINDER, NOT A LOG: entries aggregate by capability, and they expire after a day. A list
+	// that keeps complaining about something already granted teaches the reader that it is noise.
+	ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error)
+	//*
 	// ListJobs reports the background jobs a conversation started.
 	//
 	// A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
@@ -853,6 +882,7 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceUndoSpec(), Handler: adapter.undo},
 		connect.Method{Spec: agentServiceMarkReadSpec(), Handler: adapter.markRead},
 		connect.Method{Spec: agentServiceListGrantsSpec(), Handler: adapter.listGrants},
+		connect.Method{Spec: agentServiceListDenialsSpec(), Handler: adapter.listDenials},
 		connect.Method{Spec: agentServiceListJobsSpec(), Handler: adapter.listJobs},
 		connect.Method{Spec: agentServiceCreateGrantSpec(), Handler: adapter.createGrant},
 		connect.Method{Spec: agentServiceRevokeGrantSpec(), Handler: adapter.revokeGrant},
@@ -1021,6 +1051,10 @@ func (UnimplementedAgentServiceHandler) MarkRead(context.Context, *v1.MarkReadRe
 
 func (UnimplementedAgentServiceHandler) ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListGrants is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListDenials is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
@@ -1298,6 +1332,14 @@ func (c *agentServiceClient) MarkRead(ctx context.Context, req *v1.MarkReadReque
 func (c *agentServiceClient) ListGrants(ctx context.Context, req *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error) {
 	var res v1.ListGrantsResponse
 	if err := c.client.CallUnary(ctx, agentServiceListGrantsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListDenials(ctx context.Context, req *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error) {
+	var res v1.ListDenialsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListDenialsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1775,6 +1817,18 @@ func (h agentServiceHandler) listGrants(ctx context.Context, _ connect.Spec, str
 		return err
 	}
 	res, err := h.svc.ListGrants(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listDenials(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListDenialsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListDenials(ctx, &req)
 	if err != nil {
 		return err
 	}

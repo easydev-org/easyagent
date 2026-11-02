@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/easydev-org/easyagent/bundled"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/denial"
 )
 
 // Session permission RPCs.
@@ -67,6 +69,21 @@ func (s *Server) CreateGrant(ctx context.Context, req *agentv1.CreateGrantReques
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	/**
+	 * THE REFUSAL THAT PROMPTED THIS GRANT IS NOW HISTORY.
+	 *
+	 * A list that keeps complaining about a permission the reader just granted teaches them the list is
+	 * noise, and then they stop reading it — which costs the next refusal the attention it deserves.
+	 *
+	 * BEST-EFFORT: the grant has already landed, and a failure to tidy up must not undo it.
+	 */
+	if s.runtimeBus != nil {
+		if derr := denial.NewRegistry(s.runtimeBus.Transport()).
+			Clear(ctx, tenant, req.GetId(), req.GetExtId(), req.GetCapability()); derr != nil {
+			slog.Warn("cannot clear the refusal record", "tenant", tenant,
+				"session", req.GetId(), "ext", req.GetExtId(), "capability", req.GetCapability(), "err", derr)
+		}
 	}
 	return &agentv1.CreateGrantResponse{Grant: grantToMsg(row)}, nil
 }

@@ -422,6 +422,28 @@ message Grant {
 message ListGrantsRequest { string id = 1; }
 message ListGrantsResponse { repeated Grant grants = 1; }
 
+message ListDenialsRequest { string id = 1; }
+message ListDenialsResponse { repeated Denial denials = 1; }
+
+/**
+ * Denial is one capability a session was refused, aggregated.
+ *
+ * THE SAME CAPABILITY IS ONE ROW, however many times it was refused. `count` keeps the repetition
+ * legible without turning the list into a log a reader has to scan.
+ */
+message Denial {
+  string ext_id = 1;
+  // The capability key the extension declared — the thing a grant is made against.
+  string capability = 2;
+  // One tool that was refused for it, most recently. A reader recognises a tool name faster than a
+  // capability key.
+  string tool = 3;
+  // Unix milliseconds. First is kept rather than advanced: "when did this start" is the question.
+  int64 first_at = 4;
+  int64 last_at = 5;
+  int32 count = 6;
+}
+
 message ListJobsRequest {
   // The conversation whose jobs to report. A job belongs to the session that started it — the
   // worker address lives in the extension, but the QUESTION "what did I start" belongs here.
@@ -830,6 +852,18 @@ service AgentService {
   // capability with different params — "merge in this repository" and "merge in that
   // one" are two authorisations, not one.
   rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
+
+  /**
+   * ListDenials reports the capabilities this session was REFUSED in the last day.
+   *
+   * A REFUSAL IS CORRECT AND INVISIBLE TO THE PERSON WHO COULD FIX IT. The model reads the error at
+   * the moment it happens; the person reads the panel minutes later, with the refusal several tool
+   * calls back. This is the list that turns "I cannot do that" into a button.
+   *
+   * IT IS A REMINDER, NOT A LOG: entries aggregate by capability, and they expire after a day. A list
+   * that keeps complaining about something already granted teaches the reader that it is noise.
+   */
+  rpc ListDenials(ListDenialsRequest) returns (ListDenialsResponse);
 
   /**
    * ListJobs reports the background jobs a conversation started.

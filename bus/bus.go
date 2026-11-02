@@ -266,6 +266,9 @@ type ToolExecutor struct {
 	// Injected rather than held as a *store.DB so this package stays independent of the
 	// storage layer, and so a test can hand in a fixed set.
 	grants GrantSource
+
+	// denials notes refusals so a reader can find and grant them. nil = nobody is listening.
+	denials DenialRecorder
 }
 
 // GrantSource supplies a session's authorisations, grouped by extension.
@@ -286,6 +289,30 @@ func (e *ToolExecutor) WithGrants(g GrantSource) *ToolExecutor {
 	e.grants = g
 	return e
 }
+
+/**
+ * WithDenialRecorder installs a note-taker for refusals.
+ *
+ * A FUNCTION, LIKE GrantSource, so this package keeps knowing nothing about NATS: the executor's job is
+ * to decide, and where the decision is remembered is the deployment's business.
+ *
+ * NIL MEANS NOBODY IS LISTENING, and that is a valid configuration — the refusal still happens and the
+ * model still reads it. A deployment that has not wired this simply has no list to show a reader, which
+ * is what it had before the list existed.
+ */
+func (e *ToolExecutor) WithDenialRecorder(r DenialRecorder) *ToolExecutor {
+	e.denials = r
+	return e
+}
+
+/**
+ * DenialRecorder notes that a session was refused a capability.
+ *
+ * IT CANNOT FAIL THE CALL. The gate has already decided; turning "you may not do this" into "something
+ * broke" is a worse answer for everybody. An implementation that cannot write should log and return
+ * nil, and this type says so by returning no error at all.
+ */
+type DenialRecorder func(ctx context.Context, tenant, session, extID, capability, tool string)
 
 // Refresh discovers extensions and records tool -> extension ownership.
 func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
@@ -477,6 +504,15 @@ func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, callID, nam
 	grants := e.sessionGrants(ctx, tenant, session, extID)
 	if needs := e.requiresOf(name); len(needs) > 0 {
 		if missing, ok := store.HasAnyCapability(grants, needs); !ok {
+			// NOTE IT WHERE SOMEBODY CAN FIND IT. The refusal is correct and the model reads it, but
+			// the person who could grant the permission is not looking at this turn — and by the time
+			// they are, this is several tool calls back in a transcript.
+			//
+			// BEST-EFFORT, DELIBERATELY: the gate has already decided, and an error from the note-taker
+			// must not turn "you may not do this" into "something broke".
+			if e.denials != nil {
+				e.denials(ctx, tenant, session, extID, missing, name)
+			}
 			return agentpkg.ToolOutcome{}, &PermissionDeniedError{
 				Tool: name, ExtID: extID, Capability: missing,
 			}
