@@ -293,16 +293,25 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 		case "trigger":
 			hasTrigger = true
 			if err := r.foldUserMessage(tenant, session, it); err != nil {
+				// LOGGED, BECAUSE RETURNING FALSE HERE ENDS THE BUSY PERIOD SILENTLY. The drain
+				// already reported the message as delivered; without this line the only evidence
+				// that it was then dropped is that no turn ran.
+				slog.Warn("fold user message failed", "tenant", tenant, "session", session,
+					"msg", it.ID, "type", it.MsgType, "err", err)
 				return false
 			}
 		case "interrupt":
 			r.markCancel(tenant, session, "interrupted")
 		case "compact":
 			if _, err := r.CompactSession(context.WithoutCancel(ctx), tenant, session, "manual"); err != nil {
+				slog.Warn("compact failed", "tenant", tenant, "session", session, "err", err)
 				return false
 			}
 		default:
 			if err := r.foldEvent(tenant, session, it); err != nil {
+				// THE SAME SILENT PATH AS foldUserMessage: the batch stops and nothing says why.
+				slog.Warn("fold event failed", "tenant", tenant, "session", session,
+					"msg", it.ID, "type", it.MsgType, "err", err)
 				return false
 			}
 		}
