@@ -95,9 +95,30 @@ func run(cfgPath string) error {
 	// across replicas/restarts), else in-memory.
 	var kv agent.KV = agent.NewMemoryKV()
 	if cfg.NATS.URL != "" {
-		b, err := agentbus.Connect(cfg.NATS.URL)
+		b, err := agentbus.ConnectWithReplicas(cfg.NATS.URL, cfg.NATS.Replicas)
 		if err != nil {
 			return fmt.Errorf("nats: %w", err)
+		}
+		/**
+		 * SAY SO WHEN THE REDUNDANCY THAT WAS ASKED FOR IS NOT THERE.
+		 *
+		 * nats.replicas only applies when a stream or bucket is CREATED — JetStream cannot raise the
+		 * count of something already on disk. A deployment that adds the setting to an existing cluster
+		 * therefore gets nothing, silently, and believes its mailbox has three copies when it has one.
+		 *
+		 * LOGGED RATHER THAN FATAL: a mismatch is survivable and often temporary (a bucket created
+		 * before the setting was added), and refusing to start would turn a warning into an outage.
+		 * The remediation is in the message, because the operator reading it is the only one who can
+		 * act on it.
+		 */
+		if stale, aerr := b.AuditReplicas(); aerr != nil {
+			slog.Warn("cannot audit JetStream replica counts", "err", aerr)
+		} else {
+			for _, s := range stale {
+				slog.Warn("JetStream object has fewer replicas than configured; replication applies at "+
+					"creation only, so it must be deleted and recreated to pick up nats.replicas",
+					"detail", s)
+			}
 		}
 		// The queue PublishMailbox writes to before it signals. Set here so no code path can
 		// signal a wake for a message the runtime cannot read: PublishMailbox refuses outright
