@@ -285,7 +285,10 @@ func run(cfgPath string) error {
 		Config: server.Config{
 			AuthMode: cfg.Auth.Mode, AdminToken: cfg.Auth.AdminToken, AdminUsername: cfg.Auth.AdminUsername, DefaultTenant: cfg.Tenant.Default,
 		},
-		Presets: presets, ConfigKV: tenantConfig, Bus: runtimeBus,
+		// THE SAME QUEUE THE RUNTIME DRAINS. A prompt is written by the server and taken by the runtime, so
+		// two instances would each look correct and deliver nothing — the failure reads as "the turn never
+		// ran", which is exactly how this was first wired.
+		Presets: presets, ConfigKV: tenantConfig, Bus: runtimeBus, Mailbox: queue,
 	})
 	server.SetDefaultTenant(cfg.Tenant.Default)
 	if toolExec != nil {
