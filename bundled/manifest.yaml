@@ -534,6 +534,50 @@ tools:
             zh: 要投递的消息内容。
       required: [to, text]
 
+  - name: job-list
+    description: >-
+      List the background jobs this conversation started, newest first. A job is
+      work that outlived the tool call that began it — a long shell command, a
+      build, a CI run. Filter by `kind` to see one sort ("sandbox-job", ...).
+      Exited jobs are included for a day, so a finished job is still listed.
+    descriptions:
+      zh: >-
+        列出本会话启动的后台任务（最新在前）。后台任务是比发起它的工具调用活得更久的工作——
+        长时间的命令、构建、CI 运行。可用 `kind` 只筛选某一类（如 "sandbox-job"）。
+        已结束的任务会保留一天，所以结束的任务仍然能看到。
+    input_schema:
+      type: object
+      properties:
+        kind:
+          type: string
+          description: >-
+            Optional kind filter, e.g. "sandbox-job". Omit for every kind.
+          descriptions:
+            zh: 可选的类别筛选，如 "sandbox-job"。省略则列出全部。
+      required: []
+
+  - name: job-wait
+    description: >-
+      Wait for one background job to finish, up to 60 seconds. Returns the
+      job's state and exit code as soon as it ends, or says it is still running
+      when the time is up — which is an answer, not a failure, and you may call
+      again. It does NOT return the job's output: read that with the output tool
+      of the extension that ran it (e.g. sandbox-job-output).
+    descriptions:
+      zh: >-
+        等待一个后台任务结束，最多 60 秒。任务一结束就返回其状态与退出码；时间到仍
+        未结束则说明它仍在运行——这是答案而非失败，可以再次调用。本工具不返回任务的
+        输出：请用运行它的扩展自带的输出工具读取（如 sandbox-job-output）。
+    input_schema:
+      type: object
+      properties:
+        job-id:
+          type: string
+          description: The job id from job-list, or from the tool that started it.
+          descriptions:
+            zh: 任务 id，来自 job-list 或发起它的工具。
+      required: [job-id]
+
 config:
   # Model-reference knobs. `kind: model` + `capability` let the UI render a
   # picker scoped to the registered modality instead of a free-form text field

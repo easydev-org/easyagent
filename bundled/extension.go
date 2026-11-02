@@ -269,6 +269,11 @@ func (e *Extension) register() {
 	e.handlers["audio-transcribe"] = e.audioTranscribe
 	e.handlers["subsession-create"] = e.subsessionCreate
 	e.handlers["mail-send"] = e.mailSend
+	// THE TWO GENERIC JOB TOOLS. Everything else about a job belongs to the extension that runs it;
+	// what is generic is "what is running" and "wait for this one", and both are answered from the
+	// shared job list rather than from the work itself.
+	e.handlers["job-list"] = e.jobList
+	e.handlers["job-wait"] = e.jobWait
 }
 
 // ---- small arg helpers ----

@@ -52,6 +52,19 @@ type Deps interface {
 
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error
+
+	// --- background jobs ---
+	/**
+	 * JobsInSession returns the jobs one conversation started.
+	 *
+	 * A LIST, NOT A WATCH, because the two tools that read it want different things: `job-list`
+	 * renders whatever exists now, and `job-wait` polls until something changes. Handing back a
+	 * channel would make `job-list` responsible for closing it and would leave `job-wait` holding a
+	 * subscription for a question it asks once a second at most.
+	 *
+	 * AN EMPTY SLICE IS NOT AN ERROR: a session that started nothing is the ordinary case.
+	 */
+	JobsInSession(tenant, session string) ([]JobRow, error)
 }
 
 // ChainEntry is one message in a chain walk.

@@ -30,6 +30,7 @@ import (
 	"github.com/easydev-org/easyagent/media"
 	"github.com/easydev-org/easyagent/server"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/job"
 	sdkbus "github.com/easydev-org/easybus-sdk/bus"
 )
 
@@ -127,7 +128,8 @@ func run(cfgPath string) error {
 	// here would reintroduce the split this variable exists to remove, so the closure refuses
 	// loudly instead.
 	var mailboxPublish func(tenant, session, typ string, payload any, source string) error
-	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub, &mailboxPublish))
+	var jobsRead func(tenant, session string) ([]bundled.JobRow, error)
+	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub, &mailboxPublish, &jobsRead))
 	if err != nil {
 		return fmt.Errorf("bundled extension: %w", err)
 	}
@@ -137,6 +139,44 @@ func run(cfgPath string) error {
 		// because the bus is created after the bundled extension, which needs the publisher.
 		mailboxPublish = func(tenant, session, typ string, payload any, source string) error {
 			return b.PublishMailbox(context.Background(), tenant, session, typ, payload, source)
+		}
+		/**
+		 * THE JOB LIST THE GENERIC TOOLS READ.
+		 *
+		 * IT READS THE SHARED BUCKET, so it sees jobs from every extension — that is what makes
+		 * `job-list` generic. A job whose owner has stopped renewing is already gone from here, and
+		 * one whose owner is alive but stalled has been rewritten as `lost` by a sweeper; both are
+		 * the states a reader should see, and neither needed anything beyond the bucket.
+		 *
+		 * ORDERED OLDEST FIRST so a caller that renders "newest first" can reverse without sorting:
+		 * the bucket's own watch delivers in no particular order, and sorting here would be a sort
+		 * per call for a list that is nearly always in insertion order anyway.
+		 */
+		jobsRead = func(tenant, session string) ([]bundled.JobRow, error) {
+			reg := job.NewRegistry(b.Transport())
+			ch, cancel, err := reg.Watch(context.Background(), tenant, session)
+			if err != nil {
+				return nil, err
+			}
+			defer cancel()
+
+			var rows []bundled.JobRow
+			for ev := range ch {
+				// THE SNAPSHOT IS THE LIST; live updates describe changes the next call will see.
+				if ev.SnapshotDone {
+					break
+				}
+				if ev.Deleted || !ev.HasValue {
+					continue
+				}
+				j := ev.Job
+				rows = append(rows, bundled.JobRow{
+					ID: j.ID, Kind: j.Kind, Title: j.Title, State: string(j.State),
+					ExitCode: j.ExitCode, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
+					Reason: j.Reason,
+				})
+			}
+			return rows, nil
 		}
 		// Mirror every published event onto the durable session-events stream
 		// so other replicas' watchers receive it (cross-replica WatchSession).
@@ -424,7 +464,13 @@ func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c con
 
 // bundledDeps builds the host-capability adapter the in-process bundled
 // extension needs (the Go equivalent of the TS `BundledDeps` injection).
-func bundledDeps(db *store.DB, cfg *agent.Config, hub *server.EventHub, mailboxPublish *func(string, string, string, any, string) error) *bundled.StoreDeps {
+func bundledDeps(
+	db *store.DB, cfg *agent.Config, hub *server.EventHub,
+	mailboxPublish *func(string, string, string, any, string) error,
+	// jobsRead is bound after the bus exists, exactly like mailboxPublish: the bundled extension is
+	// constructed before it, and both need the bus to answer anything.
+	jobsRead *func(tenant, session string) ([]bundled.JobRow, error),
+) *bundled.StoreDeps {
 	d := &bundled.StoreDeps{DB: db}
 	d.ConfigFn = func(tenant, key string) (string, bool) { return cfg.Get(tenant, key) }
 	d.SessionVarFn = func(tenant, session, name string) (string, bool) {
@@ -466,6 +512,23 @@ func bundledDeps(db *store.DB, cfg *agent.Config, hub *server.EventHub, mailboxP
 	d.OnIngestFn = func(ctx context.Context, tenant, code, name, mime string, data []byte) {
 		facts := media.Probe(data)
 		_ = db.UpdateFileMedia(code, facts.Width, facts.Height, facts.DurationMS, nil, nil)
+	}
+	/**
+	 * THE JOB LIST, BOUND THE SAME WAY AS mailboxPublish AND FOR THE SAME REASON.
+	 *
+	 * The bus does not exist when this struct is built — the bundled extension is a constructor
+	 * argument to the runtime that creates it — so the function captures a POINTER and reads it when
+	 * a tool asks. By then startup has finished.
+	 *
+	 * UNWIRED IS AN ERROR, NOT AN EMPTY LIST. A deployment with no bus cannot see any job, and
+	 * reporting that as "this conversation started nothing" would send a reader looking for a bug in
+	 * their own work.
+	 */
+	d.JobsFn = func(tenant, session string) ([]bundled.JobRow, error) {
+		if jobsRead == nil || *jobsRead == nil {
+			return nil, fmt.Errorf("job list: bus not wired yet (this is a startup ordering bug)")
+		}
+		return (*jobsRead)(tenant, session)
 	}
 	return d
 }
