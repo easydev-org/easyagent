@@ -173,6 +173,7 @@ func run(cfgPath string) error {
 				rows = append(rows, bundled.JobRow{
 					ID: j.ID, Kind: j.Kind, Title: j.Title, State: string(j.State),
 					ExitCode: j.ExitCode, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
+					CancelMode: string(j.CancelMode),
 					Reason: j.Reason,
 				})
 			}

@@ -30,6 +30,8 @@ type JobRow struct {
 	StartedAt int64
 	FinishedAt int64
 	Reason   string
+	// CancelMode is how this job can be stopped: "kill", "request", or "" for neither.
+	CancelMode string
 }
 
 // Terminal reports whether a state is an ending, so a waiter knows when to stop asking.
@@ -192,6 +194,18 @@ func renderJobRow(r JobRow) string {
 		state = fmt.Sprintf("%s, exit %d", state, *r.ExitCode)
 	}
 	line := fmt.Sprintf("- %s [%s] %s", r.ID, state, r.Title)
+	// A RUNNING JOB SAYS HOW IT COULD BE STOPPED, because the reader's next question is "can I".
+	// "kill" ends it; "request" only asks; nothing at all means there is nothing to stop — and the
+	// distinction matters because a caller told "cancelled" for a request believes the machine
+	// stopped when the request may still be in flight.
+	if r.State == "running" {
+		switch r.CancelMode {
+		case "kill":
+			line += " (cancellable)"
+		case "request":
+			line += " (cancellable by request — the remote system may finish its current step)"
+		}
+	}
 	if r.Reason != "" {
 		line += " — " + r.Reason
 	}
