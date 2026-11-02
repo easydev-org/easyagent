@@ -130,14 +130,9 @@ func (b *Bus) AuditReplicas() ([]string, error) {
 	if b.replicas <= 0 {
 		return nil, nil
 	}
-	// An OPTIONAL interface on the transport rather than a method on bus.Bus: replication is a
-	// JetStream concept, and the same Bus interface is implemented by in-memory transports where the
-	// question does not apply.
-	auditor, ok := b.transport.(nats.ReplicaAuditor)
-	if !ok {
-		return nil, nil
-	}
-	short, err := auditor.AuditReplicas()
+	// The transport is transport/nats.Bus, which IS the auditor — no type assertion needed. The
+	// optional interface exists for callers holding a bus.Bus; here the concrete type is at hand.
+	short, err := b.transport.AuditReplicas()
 	if err != nil {
 		return nil, err
 	}
