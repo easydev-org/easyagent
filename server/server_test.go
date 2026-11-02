@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easyagent/llm"
@@ -41,14 +42,18 @@ func newTestServerWithSrv(t *testing.T) (*httptest.Server, *store.DB, *Server) {
 	presets := agent.NewPresets(kv)
 	presets.SeedSystem("default", agent.PresetRow{ID: "default", SystemPrompt: "You are a helpful assistant."})
 	hub := NewEventHub()
+	// ONE QUEUE FOR BOTH SIDES — see the note in prompt_test.go: two instances look correct and deliver
+	// nothing.
+	q := mailbox.NewMemory()
 	rt := agent.NewRuntime(agent.RuntimeDeps{
-		DB: db, Lease: agent.NewMemoryLease(), Emit: hub.Emitter("", ""), Presets: agent.PresetStore{P: presets},
+		DB: db, Mailbox: q, Lease: agent.NewMemoryLease(), Emit: hub.Emitter("", ""), Presets: agent.PresetStore{P: presets},
 	})
 	srv := New(Deps{
 		DB: db, Runtime: rt, Hub: hub,
 		Config:   Config{AuthMode: "required", AdminToken: adminToken, DefaultTenant: "default"},
 		Presets:  presets,
 		ConfigKV: agent.NewConfig(kv),
+		Mailbox:  q,
 	})
 	// A runtime-created tenant is seeded (mirrors the TS seedTenantDefaults):
 	// record the tenants the seeder was invoked for.

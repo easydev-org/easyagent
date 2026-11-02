@@ -5,18 +5,22 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // The resume watchdog re-triggers ONLY sessions whose last turn ended with a
 // resumable reason (length / retryable), and nothing else.
 
-func newResumeWatch(t *testing.T) (*ResumeWatch, *store.DB) {
+// newResumeWatch builds the watcher AND the queue it will write to. A resume is a message like any other,
+// so a test that wants to see one has to look in the same place the runtime does.
+func newResumeWatch(t *testing.T) (*ResumeWatch, *store.DB, *mailbox.Memory) {
 	t.Helper()
+	q := mailbox.NewMemory()
 	d := testStore(t)
 	// A lease that never claims: Wake returns immediately WITHOUT draining,
 	// so the enqueued trigger stays observable (the real Wake consumes it).
-	rt := NewRuntime(RuntimeDeps{DB: d, Lease: &neverClaimLease{}})
-	return NewResumeWatch(rt, "t", 0), d
+	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: d, Lease: &neverClaimLease{}})
+	return NewResumeWatch(rt, "t", 0), d, q
 }
 
 func mkSession(t *testing.T, d *store.DB, name, reason string) {
@@ -33,14 +37,21 @@ func mkSession(t *testing.T, d *store.DB, name, reason string) {
 
 // pendingTrigger reports whether a session has an unconsumed `trigger` whose
 // source is the resume watchdog.
-func pendingTrigger(t *testing.T, d *store.DB, name string) bool {
+/**
+ * pendingTrigger asks the QUEUE, not the database.
+ *
+ * THE TWO USED TO BE THE SAME THING, and the test silently kept passing after they stopped being: it
+ * drained a table nothing wrote to and got an empty list, which reads as "the watcher did not resume" —
+ * the answer the negative cases want and the positive ones do not.
+ */
+func pendingTrigger(t *testing.T, q *mailbox.Memory, name string) bool {
 	t.Helper()
-	rows, err := d.DrainAll("t", name)
+	msgs, err := q.Drain(context.Background(), "t", name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range rows {
-		if m.MsgType == "trigger" && m.Source == "system:resume" {
+	for _, m := range msgs {
+		if m.Type == "trigger" && m.Source == "system:resume" {
 			return true
 		}
 	}
@@ -63,10 +74,10 @@ func TestResumeWatchResumesOnlyResumable(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		w, d := newResumeWatch(t)
+		w, d, q := newResumeWatch(t)
 		mkSession(t, d, "s", c.reason)
 		w.Sweep(context.Background())
-		got := pendingTrigger(t, d, "s")
+		got := pendingTrigger(t, q, "s")
 		if got != c.resumable {
 			t.Errorf("reason %q: resumed=%v, want %v", c.reason, got, c.resumable)
 		}
@@ -75,20 +86,20 @@ func TestResumeWatchResumesOnlyResumable(t *testing.T) {
 
 // A resumable session with no model is skipped (nothing to run).
 func TestResumeWatchSkipsNoModel(t *testing.T) {
-	w, d := newResumeWatch(t)
+	w, d, q := newResumeWatch(t)
 	if err := d.CreateSession("t", store.SessionInput{Name: "s"}); err != nil { // no model
 		t.Fatal(err)
 	}
 	_ = d.SetTurnEnd("t", "s", "length")
 	w.Sweep(context.Background())
-	if pendingTrigger(t, d, "s") {
+	if pendingTrigger(t, q, "s") {
 		t.Fatal("a model-less session should not be resumed")
 	}
 }
 
 // The no-progress backoff: the same tip across sweeps backs off after maxNoProg.
 func TestResumeWatchBackoff(t *testing.T) {
-	w, _ := newResumeWatch(t)
+	w, _, _ := newResumeWatch(t)
 	if w.backedOff("s", "tip1") {
 		t.Fatal("first sighting should not be backed off")
 	}

@@ -422,6 +422,30 @@ message Grant {
 message ListGrantsRequest { string id = 1; }
 message ListGrantsResponse { repeated Grant grants = 1; }
 
+/**
+ * PermissionState is one capability's whole story for a session: what is held, and what was refused.
+ *
+ * THE TWO HALVES LIVE IN DIFFERENT STORES AND THAT IS CORRECT — a grant is permanent and belongs in the
+ * relational store, a refusal is a 24-hour reminder and belongs in a TTL bucket. What was wrong was
+ * making every client join them: the panel called two RPCs and matched rows by hand, and any future
+ * client would have to rediscover that `granted` and `refused` are the same question asked twice.
+ *
+ * ONE ROW PER (extension, capability). `refused` is nil when the session holds the grant, because a
+ * refusal that has been granted is cleared — a row that kept both would be describing a problem the
+ * reader already fixed.
+ */
+message PermissionState {
+  string ext_id = 1;
+  string capability = 2;
+  // What the session holds. Absent when the capability was only ever refused.
+  Grant granted = 3;
+  // What was refused in the last day, when nothing is held. Absent otherwise.
+  Denial refused = 4;
+}
+
+message ListPermissionStatesRequest { string id = 1; }
+message ListPermissionStatesResponse { repeated PermissionState states = 1; }
+
 message ListDenialsRequest { string id = 1; }
 message ListDenialsResponse { repeated Denial denials = 1; }
 
@@ -852,6 +876,16 @@ service AgentService {
   // capability with different params — "merge in this repository" and "merge in that
   // one" are two authorisations, not one.
   rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
+
+  /**
+   * ListPermissionStates returns what a session holds AND what it was refused, already joined.
+   *
+   * THE JOIN BELONGS HERE, NOT IN EVERY CLIENT. A grant is permanent and lives in the relational store;
+   * a refusal is a 24-hour reminder and lives in a TTL bucket. That split is right. What was wrong was
+   * that the panel called two RPCs and matched rows by (extension, capability) itself — and any second
+   * client would have to rediscover that the two are one question asked twice.
+   */
+  rpc ListPermissionStates(ListPermissionStatesRequest) returns (ListPermissionStatesResponse);
 
   /**
    * ListDenials reports the capabilities this session was REFUSED in the last day.

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // seedCompacted builds u1/a1, compacts (so the tip becomes a compaction
@@ -17,13 +18,14 @@ func seedCompacted(t *testing.T) (*store.DB, *Runtime) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	q := mailbox.NewMemory()
 	if err := db.Migrate(); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"}); err != nil {
 		t.Fatal(err)
 	}
-	rt := NewRuntime(RuntimeDeps{DB: db, Lease: NewMemoryLease(), Presets: stubPresets{}})
+	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Lease: NewMemoryLease(), Presets: stubPresets{}})
 
 	// u1 / a1 (the part that will be folded).
 	_, _ = db.InsertMessage("t1", "u1", "user", nil, "user")

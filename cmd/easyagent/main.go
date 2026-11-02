@@ -25,7 +25,8 @@ import (
 	"github.com/easydev-org/easyagent/agent"
 	"github.com/easydev-org/easyagent/blob"
 	"github.com/easydev-org/easyagent/bundled"
-	"github.com/easydev-org/easyagent/bus"
+	"github.com/easydev-org/easyagent/agentbus"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/media"
 	"github.com/easydev-org/easyagent/server"
@@ -81,35 +82,44 @@ func run(cfgPath string) error {
 		DeniedTools:        cfg.Agent.DisabledTools,
 		ExtensionAllowlist: extensionAllowlistResolver(db, cfg),
 	}
-	var runtimeBus *bus.Bus
-	var toolExec *bus.ToolExecutor
+	var runtimeBus *agentbus.Bus
+	// queue is the durable delivery queue — a KV bucket, wired into the bus (which publishes to it) and
+	// the server (which reads a session's mailbox page from it).
+	var queue *mailbox.Queue
+	var toolExec *agentbus.ToolExecutor
 	// Channels: the local index, the distributor, and the cleanup for the KV watch.
-	var subIdx *bus.SubscriptionIndex
-	var dist *bus.Distributor
+	var subIdx *agentbus.SubscriptionIndex
+	var dist *agentbus.Distributor
 	var channelStop func()
 	// Presets + tenant config: JetStream KV when NATS is available (persisted
 	// across replicas/restarts), else in-memory.
 	var kv agent.KV = agent.NewMemoryKV()
 	if cfg.NATS.URL != "" {
-		b, err := bus.Connect(cfg.NATS.URL)
+		b, err := agentbus.Connect(cfg.NATS.URL)
 		if err != nil {
 			return fmt.Errorf("nats: %w", err)
 		}
 		// The queue PublishMailbox writes to before it signals. Set here so no code path can
 		// signal a wake for a message the runtime cannot read: PublishMailbox refuses outright
 		// when this is missing.
-		runtimeBus = b.WithMailboxQueue(db)
+		//
+		// THE QUEUE IS A KV BUCKET, NOT A TABLE. It used to be a Postgres row, which forced the bus to
+		// hold a *store.DB it had no other use for, and made "did my message arrive" a question about a
+		// table the reader could not see. A bucket the bus already talks to is the same information
+		// without the second door onto storage.
+		queue = mailbox.New(b.Transport())
+		runtimeBus = b.WithMailboxQueue(queue)
 		defer b.Close()
 		// Work around an abc-protocol-go bug: pre-create the extension presence
 		// bucket so the library's presence watch does not error (and panic).
 		_ = b.EnsurePresenceBucket(context.Background())
-		kv = bus.NewNATSKV(b, bus.PresetsBucket)
+		kv = agentbus.NewNATSKV(b, agentbus.PresetsBucket)
 		// The config surface lives in its own bucket (wired below).
 	}
 	presets := agent.NewPresets(kv)
 	tenantConfig := agent.NewConfig(kv)
 	if runtimeBus != nil {
-		tenantConfig = agent.NewConfig(bus.NewNATSKV(runtimeBus, bus.ConfigBucket))
+		tenantConfig = agent.NewConfig(agentbus.NewNATSKV(runtimeBus, agentbus.ConfigBucket))
 	}
 	// The TURN needs the same presets the console edits.
 	//
@@ -184,6 +194,9 @@ func run(cfgPath string) error {
 		// so other replicas' watchers receive it (cross-replica WatchSession).
 		hub.SetBackplane(b)
 		rtDeps.Lease = b
+		// THE RUNTIME DRAINS THIS SAME QUEUE. Wired here rather than at struct construction because the
+		// queue lives on the bus, and the bus is built after the deps it feeds.
+		rtDeps.Mailbox = queue
 		/**
 		 * MAILBOX MESSAGES FROM EXTENSIONS REACH THE TABLE THROUGH HERE.
 		 *
@@ -202,7 +215,7 @@ func run(cfgPath string) error {
 		if _, berr := b.BridgeExtensionMail(context.Background()); berr != nil {
 			return fmt.Errorf("mailbox bridge: %w", berr)
 		}
-		exec := bus.NewToolExecutor(b.Agent())
+		exec := agentbus.NewToolExecutor(b.Agent())
 		// Permissions: the executor asks this for a session's grants on every gated call.
 		// Injected as a function so the executor stays free of the storage layer.
 		exec.WithGrants(func(ctx context.Context, tenant, session string) (map[string][]store.GrantSnapshot, error) {
@@ -228,7 +241,7 @@ func run(cfgPath string) error {
 		_ = exec.Refresh(context.Background(), 500)
 		// Composite: bundled (in-process) + NATS extensions (out-of-process).
 		composite := agent.NewCompositeTools(
-			[]agent.ToolRegistry{bundledExt, bus.NewToolRegistry(exec)},
+			[]agent.ToolRegistry{bundledExt, agentbus.NewToolRegistry(exec)},
 			[]agent.ToolExecutor{bundledExt, exec},
 		)
 		rtDeps.Tools = composite
@@ -246,14 +259,14 @@ func run(cfgPath string) error {
 		// a per-subscription consumer would have to be rebuilt whenever a user changed what
 		// they follow. Here the filter is always channel.>, so subscriptions cost nothing at
 		// the broker.
-		subIdx = bus.NewSubscriptionIndex(b.Transport())
+		subIdx = agentbus.NewSubscriptionIndex(b.Transport())
 		if stop, err := subIdx.Start(context.Background()); err != nil {
 			slog.Error("channel subscriptions unavailable", "err", err)
 		} else {
 			channelStop = stop
 			slog.Info("channel subscriptions watching")
 		}
-		dist = bus.NewDistributor(subIdx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+		dist = agentbus.NewDistributor(subIdx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
 			return b.PublishMailbox(ctx, tenant, session, typ, payload, source)
 		}).WithLogger(slog.Default())
 		if _, err := dist.Start(context.Background(), sdkbus.NewChannels(b.Transport()), "agent-channels"); err != nil {
@@ -289,8 +302,8 @@ func run(cfgPath string) error {
 		srv.SetStreamSource(runtimeBus)
 		// Every session gets a default channel so anything can reach it by name.
 		if subIdx != nil {
-			srv.SetChannelProvisioner(bus.NewDefaultChannelProvisioner(runtimeBus.Transport()))
-			srv.SetSubscriptions(bus.NewSubscriptionStore(runtimeBus.Transport(), subIdx))
+			srv.SetChannelProvisioner(agentbus.NewDefaultChannelProvisioner(runtimeBus.Transport()))
+			srv.SetSubscriptions(agentbus.NewSubscriptionStore(runtimeBus.Transport(), subIdx))
 		}
 	}
 	// Durable file bytes live in S3 when configured (AGENT_BLOB_BACKEND=s3).
@@ -327,7 +340,7 @@ func run(cfgPath string) error {
 		hb := runtimeBus.NewHeartbeat(replicaID(cfg.NATS.ReplicaID))
 		hb.Start(ctx, runtimeBus)
 		defer hb.Stop()
-		stop, err := runtimeBus.ConsumeMailbox(ctx, func(m bus.MailboxMessage) error {
+		stop, err := runtimeBus.ConsumeMailbox(ctx, func(m agentbus.MailboxMessage) error {
 			return rt.Wake(ctx, m.Tenant, m.SessionName)
 		})
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // slowSSE blocks until the request context is cancelled, then closes (so a
@@ -33,8 +34,9 @@ func slowSSE(t *testing.T) (*httptest.Server, *sync.WaitGroup) {
 	return srv, arrived
 }
 
-func newCancelRuntime(t *testing.T, srvURL string) (*Runtime, *store.DB) {
+func newCancelRuntime(t *testing.T, srvURL string) (*Runtime, *store.DB, *mailbox.Memory) {
 	t.Helper()
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"}); err != nil {
 		t.Fatal(err)
@@ -43,19 +45,20 @@ func newCancelRuntime(t *testing.T, srvURL string) (*Runtime, *store.DB) {
 	presets := NewPresets(kv)
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srvURL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
-	return rt, db
+	return rt, db, q
 }
 
 // An interrupt during a turn records last_turn_reason = "interrupted".
 func TestInterruptRecordsReason(t *testing.T) {
 	srv, arrived := slowSSE(t)
-	rt, db := newCancelRuntime(t, srv.URL)
+	rt, db, q := newCancelRuntime(t, srv.URL)
 
-	if _, err := db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user"); err != nil {
+	if _, err := q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user"); err != nil {
 		t.Fatal(err)
 	}
 	go func() { _ = rt.Wake(context.Background(), "t1", "s1") }()
@@ -70,14 +73,14 @@ func TestInterruptRecordsReason(t *testing.T) {
 // A lost lease records last_turn_reason = "locklost".
 func TestLeaseLostRecordsReason(t *testing.T) {
 	srv, arrived := slowSSE(t)
-	rt, db := newCancelRuntime(t, srv.URL)
+	rt, db, q := newCancelRuntime(t, srv.URL)
 	// The lease reports LOST only once `armed` is closed, which this test does
 	// after the turn has demonstrably started. See loseOnRenewLease.
 	lease := &loseOnRenewLease{armed: make(chan struct{})}
 	rt.deps.Lease = lease
 	rt.deps.LeaseTTL = 30 * time.Millisecond // renew at TTL/3 = 10ms
 
-	if _, err := db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user"); err != nil {
+	if _, err := q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user"); err != nil {
 		t.Fatal(err)
 	}
 	go func() { _ = rt.Wake(context.Background(), "t1", "s1") }()
@@ -89,6 +92,7 @@ func TestLeaseLostRecordsReason(t *testing.T) {
 
 // A normal turn still records "stop" (regression guard).
 func TestNormalTurnRecordsStop(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"})
 	srv := mockV4(t,
@@ -100,11 +104,12 @@ func TestNormalTurnRecordsStop(t *testing.T) {
 	presets := NewPresets(kv)
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +119,7 @@ func TestNormalTurnRecordsStop(t *testing.T) {
 // A truncated generation (provider finishReason "length") records "length",
 // not "stop".
 func TestLengthFinishRecordsReason(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"})
 	srv := mockV4(t,
@@ -125,11 +131,12 @@ func TestLengthFinishRecordsReason(t *testing.T) {
 	presets := NewPresets(kv)
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}

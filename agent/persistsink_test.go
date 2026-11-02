@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // TestPersistSinkStoresToolResults is the regression test for tool results that
@@ -21,6 +22,7 @@ import (
 // The assertion is on the STORED rows, not on the sink: the bug was in what got
 // written, so a test of in-memory state would have passed all along.
 func TestPersistSinkStoresToolResults(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	// The sink advances the session's tip, so the session has to exist first.
 	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "m"}); err != nil {
@@ -33,7 +35,7 @@ func TestPersistSinkStoresToolResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rt := &Runtime{deps: RuntimeDeps{DB: db}}
+	rt := &Runtime{deps: RuntimeDeps{Mailbox: q, DB: db}}
 	sink := &persistSink{rt: rt, tenant: "t1", session: "s1", prevID: "user-1"}
 	ctx := context.Background()
 

@@ -1,4 +1,4 @@
-package bus
+package agentbus
 
 import (
 	"context"
@@ -78,7 +78,7 @@ func (b *Bus) BridgeExtensionMail(ctx context.Context) (func(), error) {
 			 * message needs nothing else — and the boot backstop drains it if no wake races
 			 * through in time.
 			 */
-			if _, eerr := b.db.Enqueue(tenant, session, typ, payload, source); eerr != nil {
+			if _, eerr := b.db.Enqueue(ctx, tenant, session, "", typ, payload, source); eerr != nil {
 				slog.WarnContext(ctx, "mailbox bridge: cannot enqueue",
 					"tenant", tenant, "session", session, "err", eerr)
 				continue

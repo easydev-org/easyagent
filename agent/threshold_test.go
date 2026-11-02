@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/llm"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/store"
 )
 
@@ -20,6 +21,7 @@ import (
 // BEFORE calling the provider (emitting a `compacted` event with reason
 // "threshold"), rather than waiting for an overflow error.
 func TestProactiveCompactionAtThreshold(t *testing.T) {
+	q := mailbox.NewMemory()
 	var calls int32
 	var sawCompactionMsg int32
 	var promptLen int32
@@ -72,6 +74,7 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 		// A tiny window so 90% is crossed immediately.
@@ -79,7 +82,7 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 	})
 	rt.compactTailTokens = 50
 	rt.compactFoldTokens = 5000
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +109,7 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 // TestNoProactiveCompactionWithoutLimit verifies the feature is OFF when no
 // context limit is known (0).
 func TestNoProactiveCompactionWithoutLimit(t *testing.T) {
+	q := mailbox.NewMemory()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"type\":\"text-delta\",\"id\":\"t\",\"delta\":\"ok\"}\n\n")
@@ -121,10 +125,11 @@ func TestNoProactiveCompactionWithoutLimit(t *testing.T) {
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{}, // no ContextLimit
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +145,7 @@ func TestNoProactiveCompactionWithoutLimit(t *testing.T) {
 //     chain — the assistant step's parent is the compaction checkpoint, not the
 //     pre-compaction tip (no branch).
 func TestForceThresholdAndContinuation(t *testing.T) {
+	q := mailbox.NewMemory()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"type\":\"text-delta\",\"id\":\"t\",\"delta\":\"after-compaction\"}\n\n")
@@ -174,6 +180,7 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 		// No window limit; only the absolute force threshold applies.
@@ -181,7 +188,7 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 	})
 	rt.compactTailTokens = 50
 	rt.compactFoldTokens = 5000
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}

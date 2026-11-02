@@ -1,10 +1,11 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
-	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 /**
@@ -43,11 +44,24 @@ func TestTriggerSourceIsCarriedThrough(t *testing.T) {
 	}
 }
 
-// The store keeps what it is given — a wrapper that normalised the source would silently undo the
-// distinction this whole change is about.
-func TestStoreKeepsTheSourceVerbatim(t *testing.T) {
-	m := store.Mailbox{ID: "m1", Tenant: "t", SessionName: "s", MsgType: "trigger", Source: "system:sandbox"}
-	if m.Source != "system:sandbox" {
-		t.Fatal("the mailbox row must carry the producer's source unchanged")
+/**
+ * THE QUEUE KEEPS THE SOURCE VERBATIM.
+ *
+ * A wrapper that normalised it would silently undo the distinction the whole origin change is about — and
+ * the queue is now a different store than the one this test was written against, so it is worth checking
+ * that the value survives the move rather than assuming it.
+ */
+func TestQueueKeepsTheSourceVerbatim(t *testing.T) {
+	q := mailbox.NewMemory()
+	ctx := context.Background()
+	if _, err := q.Enqueue(ctx, "t", "s", "m1", "trigger", map[string]any{"text": "x"}, "system:sandbox"); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := q.Pending(ctx, "t", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Source != "system:sandbox" {
+		t.Fatalf("source did not survive the queue: %+v", msgs)
 	}
 }

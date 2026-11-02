@@ -5,9 +5,11 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 func TestCompactSessionFoldsOlderTurns(t *testing.T) {
+	q := mailbox.NewMemory()
 	db, err := store.Open(store.SQLite, ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -16,7 +18,7 @@ func TestCompactSessionFoldsOlderTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
-	rt := NewRuntime(RuntimeDeps{DB: db, Lease: NewMemoryLease()})
+	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Lease: NewMemoryLease()})
 
 	// Two user/assistant turns with a tool call in the first.
 	_, _ = db.InsertMessage("t1", "u1", "user", nil, "user")

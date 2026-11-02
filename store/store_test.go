@@ -146,40 +146,6 @@ func TestForkBaseSkipsUserPrompt(t *testing.T) {
 	}
 }
 
-func TestMailboxTwoPhaseDrain(t *testing.T) {
-	d := newTestDB(t)
-	// idempotent enqueue by producer id
-	if err := d.EnqueueWithID("t1", "mb1", "s1", "trigger", map[string]any{"text": "hi"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.EnqueueWithID("t1", "mb1", "s1", "trigger", map[string]any{"text": "hi"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	_, _ = d.Enqueue("t1", "s1", "event", map[string]any{"k": 1}, "")
-
-	pending, _ := d.HasPending("t1", "s1")
-	if !pending {
-		t.Fatal("expected pending")
-	}
-	rows, err := d.DrainAll("t1", "s1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("drained %d, want 2", len(rows))
-	}
-	// the drain is atomic: a second drain finds nothing.
-	rows2, _ := d.DrainAll("t1", "s1")
-	if len(rows2) != 0 {
-		t.Errorf("second drain = %d, want 0", len(rows2))
-	}
-	// consumed rows are retained for audit
-	var n int64
-	d.G().Model(&Mailbox{}).Where("status = 'consumed'").Count(&n)
-	if n != 2 {
-		t.Errorf("consumed rows = %d, want 2", n)
-	}
-}
 
 func TestProviderShadowing(t *testing.T) {
 	d := newTestDB(t)

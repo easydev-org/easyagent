@@ -4,7 +4,7 @@
 // It implements the agent package's `Lease` and `ToolExecutor` seams so the
 // runtime is transport-agnostic (tests use the in-memory lease + a stub tool
 // executor).
-package bus
+package agentbus
 
 import (
 	"context"
@@ -47,11 +47,19 @@ type Bus struct {
 
 // MailboxQueue is the durable queue a mailbox message is written to.
 //
-// Declared here (rather than taking *store.DB) so this package stays independent of storage:
-// PublishMailbox needs exactly one method, and saying so is more honest than accepting the whole
-// database handle.
+/**
+ * MailboxQueue is where a published message is put.
+ *
+ * ONE METHOD, BECAUSE THAT IS ALL THIS PACKAGE DOES WITH IT: publish enqueues and then signals. The queue
+ * itself — draining, claiming, expiring — belongs to whoever consumes it, and widening this interface
+ * would make the bus a second door onto storage it has no business knowing about.
+ *
+ * IT NO LONGER TAKES AN ID, and that is the mailbox package's shape rather than a simplification: a
+ * producer that retries should land on the same key, so the id is the caller's to choose or to leave
+ * empty for the queue to mint.
+ */
 type MailboxQueue interface {
-	Enqueue(tenant, session, typ string, payload any, source string) (string, error)
+	Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error)
 }
 
 // WithMailboxQueue installs the durable queue PublishMailbox writes to.
@@ -808,7 +816,7 @@ func (b *Bus) PublishMailbox(ctx context.Context, tenant, session, typ string, p
 		// every angle except the session waking up, which is exactly how this took a day to find.
 		return fmt.Errorf("publish mailbox: no queue configured (call WithMailboxQueue)")
 	}
-	if _, err := b.db.Enqueue(tenant, session, typ, payload, source); err != nil {
+	if _, err := b.db.Enqueue(ctx, tenant, session, "", typ, payload, source); err != nil {
 		return fmt.Errorf("enqueue mailbox: %w", err)
 	}
 	return b.agent.PublishMailbox(ctx, tenant, session, typ, payload, source)

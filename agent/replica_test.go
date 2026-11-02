@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/easydev-org/easyagent/llm"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/store"
 )
 
@@ -61,6 +62,7 @@ func newRuntimeDB(t *testing.T) *store.DB {
 }
 
 func TestLeaseLossAbortsTurn(t *testing.T) {
+	q := mailbox.NewMemory()
 	srv := slowV4(t)
 	defer srv.Close()
 	db := newRuntimeDB(t)
@@ -68,11 +70,12 @@ func TestLeaseLossAbortsTurn(t *testing.T) {
 	lease := &fakeLease{}
 	lease.lostAt.Store(0) // lose on the FIRST renew
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: lease, LeaseTTL: 30 * time.Millisecond, Emit: &recorder{},
 		Presets: stubPresets{},
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	start := time.Now()
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
@@ -88,6 +91,7 @@ func TestLeaseLossAbortsTurn(t *testing.T) {
 }
 
 func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
+	q := mailbox.NewMemory()
 	srv := slowV4(t)
 	defer srv.Close()
 	db := newRuntimeDB(t)
@@ -105,11 +109,12 @@ func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
 		return ch, func() {}, nil
 	}
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), InterruptWatch: watch, Emit: &recorder{},
 		Presets: stubPresets{},
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	start := time.Now()
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
@@ -120,6 +125,7 @@ func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
 }
 
 func TestDrainLoopChainsWithoutReleasingLease(t *testing.T) {
+	q := mailbox.NewMemory()
 	// Each turn appends a text step; a second trigger enqueued DURING the first
 	// turn must be processed in the SAME busy period (one claim, one release).
 	var n int32
@@ -128,7 +134,7 @@ func TestDrainLoopChainsWithoutReleasingLease(t *testing.T) {
 		if atomic.AddInt32(&n, 1) == 1 {
 			// On the first call, enqueue a second trigger (simulating a prompt
 			// that lands mid-turn). It must be picked up by the drain loop.
-			_, _ = dbGlobal.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u2", "text": "more"}, "user")
+			_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u2", "text": "more"}, "user")
 		}
 		fmt.Fprint(w, "data: {\"type\":\"text-delta\",\"id\":\"t\",\"delta\":\"ok\"}\n\n")
 		fmt.Fprint(w, "data: {\"type\":\"finish\",\"finishReason\":{\"unified\":\"stop\"}}\n\n")
@@ -136,28 +142,28 @@ func TestDrainLoopChainsWithoutReleasingLease(t *testing.T) {
 	}))
 	defer srv.Close()
 	db := newRuntimeDB(t)
-	dbGlobal = db
+
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
 	lease := NewMemoryLease()
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: lease, Emit: &recorder{}, MaxTurns: 2, Presets: stubPresets{},
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
 	if n < 2 {
 		t.Errorf("drain loop did not process the mid-turn trigger (calls=%d)", n)
 	}
-	if p, _ := db.HasPending("t1", "s1"); p {
+	if hasPending(t, q, "t1", "s1") {
 		t.Error("mailbox should be drained at the end of the busy period")
 	}
 }
 
-var dbGlobal *store.DB
-
 func TestRecoverOnBootWakesPending(t *testing.T) {
+	q := mailbox.NewMemory()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"type\":\"text-delta\",\"id\":\"t\",\"delta\":\"ok\"}\n\n")
@@ -167,13 +173,14 @@ func TestRecoverOnBootWakesPending(t *testing.T) {
 	defer srv.Close()
 	db := newRuntimeDB(t)
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "left over"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "left over"}, "user")
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: &recorder{}, Presets: stubPresets{},
 	})
 	rt.RecoverOnBoot(context.Background())
-	if p, _ := db.HasPending("t1", "s1"); p {
+	if hasPending(t, q, "t1", "s1") {
 		t.Error("boot recovery should have drained the pending wake")
 	}
 }

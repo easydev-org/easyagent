@@ -62,6 +62,9 @@ const (
 	AgentServiceMarkReadProcedure = "/agent.v1.AgentService/MarkRead"
 	// AgentServiceListGrantsProcedure is the procedure name of the AgentService's ListGrants RPC.
 	AgentServiceListGrantsProcedure = "/agent.v1.AgentService/ListGrants"
+	// AgentServiceListPermissionStatesProcedure is the procedure name of the AgentService's
+	// ListPermissionStates RPC.
+	AgentServiceListPermissionStatesProcedure = "/agent.v1.AgentService/ListPermissionStates"
 	// AgentServiceListDenialsProcedure is the procedure name of the AgentService's ListDenials RPC.
 	AgentServiceListDenialsProcedure = "/agent.v1.AgentService/ListDenials"
 	// AgentServiceListJobsProcedure is the procedure name of the AgentService's ListJobs RPC.
@@ -297,6 +300,13 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListGrants"),
 			Procedure:  AgentServiceListGrantsProcedure,
+		}
+	})
+	agentServiceListPermissionStatesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListPermissionStates"),
+			Procedure:  AgentServiceListPermissionStatesProcedure,
 		}
 	})
 	agentServiceListDenialsSpec = sync.OnceValue(func() connect.Spec {
@@ -596,6 +606,14 @@ type AgentServiceClient interface {
 	// one" are two authorisations, not one.
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
 	//*
+	// ListPermissionStates returns what a session holds AND what it was refused, already joined.
+	//
+	// THE JOIN BELONGS HERE, NOT IN EVERY CLIENT. A grant is permanent and lives in the relational store;
+	// a refusal is a 24-hour reminder and lives in a TTL bucket. That split is right. What was wrong was
+	// that the panel called two RPCs and matched rows by (extension, capability) itself — and any second
+	// client would have to rediscover that the two are one question asked twice.
+	ListPermissionStates(context.Context, *v1.ListPermissionStatesRequest) (*v1.ListPermissionStatesResponse, error)
+	//*
 	// ListDenials reports the capabilities this session was REFUSED in the last day.
 	//
 	// A REFUSAL IS CORRECT AND INVISIBLE TO THE PERSON WHO COULD FIX IT. The model reads the error at
@@ -788,6 +806,14 @@ type AgentServiceHandler interface {
 	// one" are two authorisations, not one.
 	ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error)
 	//*
+	// ListPermissionStates returns what a session holds AND what it was refused, already joined.
+	//
+	// THE JOIN BELONGS HERE, NOT IN EVERY CLIENT. A grant is permanent and lives in the relational store;
+	// a refusal is a 24-hour reminder and lives in a TTL bucket. That split is right. What was wrong was
+	// that the panel called two RPCs and matched rows by (extension, capability) itself — and any second
+	// client would have to rediscover that the two are one question asked twice.
+	ListPermissionStates(context.Context, *v1.ListPermissionStatesRequest) (*v1.ListPermissionStatesResponse, error)
+	//*
 	// ListDenials reports the capabilities this session was REFUSED in the last day.
 	//
 	// A REFUSAL IS CORRECT AND INVISIBLE TO THE PERSON WHO COULD FIX IT. The model reads the error at
@@ -882,6 +908,7 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceUndoSpec(), Handler: adapter.undo},
 		connect.Method{Spec: agentServiceMarkReadSpec(), Handler: adapter.markRead},
 		connect.Method{Spec: agentServiceListGrantsSpec(), Handler: adapter.listGrants},
+		connect.Method{Spec: agentServiceListPermissionStatesSpec(), Handler: adapter.listPermissionStates},
 		connect.Method{Spec: agentServiceListDenialsSpec(), Handler: adapter.listDenials},
 		connect.Method{Spec: agentServiceListJobsSpec(), Handler: adapter.listJobs},
 		connect.Method{Spec: agentServiceCreateGrantSpec(), Handler: adapter.createGrant},
@@ -1051,6 +1078,10 @@ func (UnimplementedAgentServiceHandler) MarkRead(context.Context, *v1.MarkReadRe
 
 func (UnimplementedAgentServiceHandler) ListGrants(context.Context, *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListGrants is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListPermissionStates(context.Context, *v1.ListPermissionStatesRequest) (*v1.ListPermissionStatesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListPermissionStates is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error) {
@@ -1332,6 +1363,14 @@ func (c *agentServiceClient) MarkRead(ctx context.Context, req *v1.MarkReadReque
 func (c *agentServiceClient) ListGrants(ctx context.Context, req *v1.ListGrantsRequest) (*v1.ListGrantsResponse, error) {
 	var res v1.ListGrantsResponse
 	if err := c.client.CallUnary(ctx, agentServiceListGrantsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListPermissionStates(ctx context.Context, req *v1.ListPermissionStatesRequest) (*v1.ListPermissionStatesResponse, error) {
+	var res v1.ListPermissionStatesResponse
+	if err := c.client.CallUnary(ctx, agentServiceListPermissionStatesSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1817,6 +1856,18 @@ func (h agentServiceHandler) listGrants(ctx context.Context, _ connect.Spec, str
 		return err
 	}
 	res, err := h.svc.ListGrants(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listPermissionStates(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListPermissionStatesRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListPermissionStates(ctx, &req)
 	if err != nil {
 		return err
 	}

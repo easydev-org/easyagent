@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easyagent/llm"
@@ -46,8 +47,12 @@ func newPromptServer(t *testing.T, client *llm.Client) (*httptest.Server, *store
 	hub := NewEventHub()
 	presets := agent.NewPresets(agent.NewMemoryKV())
 	presets.SeedSystem("default", agent.PresetRow{ID: "default", SystemPrompt: "You are a helpful assistant."})
+	// ONE QUEUE FOR BOTH SIDES. The server writes a prompt into it and the runtime drains it; two
+	// separate instances would each look correct and deliver nothing, which is exactly how this test
+	// failed — the prompt was "accepted" and the turn never ran.
+	q := mailbox.NewMemory()
 	rt := agent.NewRuntime(agent.RuntimeDeps{
-		DB: db, Client: client, Lease: agent.NewMemoryLease(),
+		DB: db, Mailbox: q, Client: client, Lease: agent.NewMemoryLease(),
 		EmitFor: hub.Emitter, MaxTurns: 3, Presets: agent.PresetStore{P: presets},
 	})
 	srv := New(Deps{
@@ -55,6 +60,7 @@ func newPromptServer(t *testing.T, client *llm.Client) (*httptest.Server, *store
 		Config:   Config{AuthMode: "none", DefaultTenant: "default"},
 		Presets:  presets,
 		ConfigKV: agent.NewConfig(agent.NewMemoryKV()),
+		Mailbox:  q,
 	})
 	mux := http.NewServeMux()
 	cs := connect.NewServer(srv.AuthInterceptor())

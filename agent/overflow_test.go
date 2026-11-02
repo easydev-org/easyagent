@@ -9,10 +9,12 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/llm"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/store"
 )
 
 func TestTurnRecoversFromContextOverflow(t *testing.T) {
+	q := mailbox.NewMemory()
 	var n int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -53,6 +55,7 @@ func TestTurnRecoversFromContextOverflow(t *testing.T) {
 	_, _ = db.AppendMessageTip("t1", "s1", "u2")
 
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: &recorder{}, MaxTurns: 3, Presets: stubPresets{},
 	})
@@ -62,7 +65,7 @@ func TestTurnRecoversFromContextOverflow(t *testing.T) {
 	rec := &recorder{}
 	rt.deps.Emit = rec
 	// enqueue a trigger and run
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u3", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u3", "text": "go"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}

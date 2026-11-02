@@ -10,6 +10,7 @@ import (
 
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // mockV4 is a minimal AI SDK v4 gateway endpoint: it streams a fixed script.
@@ -41,6 +42,7 @@ func testStore(t *testing.T) *store.DB {
 }
 
 func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"}); err != nil {
 		t.Fatal(err)
@@ -60,13 +62,14 @@ func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 	presets := NewPresets(kv)
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: client, Lease: NewMemoryLease(),
 		Tools: &stubTools{}, Emit: rec, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
 
 	// enqueue a user trigger
-	if _, err := db.Enqueue("t1", "s1", "trigger", map[string]any{
+	if _, err := q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{
 		"message_id": "u1", "text": "hi",
 	}, "user"); err != nil {
 		t.Fatal(err)
@@ -119,16 +122,17 @@ func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 }
 
 func TestRuntimeSecondWakeIsIdempotentForFoldedPrompt(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
 	srv := mockV4(t, `{"type":"text-delta","id":"t","delta":"ok"}`, `{"type":"finish","finishReason":{"unified":"stop"}}`)
 	defer srv.Close()
 	client := llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil)
-	rt := NewRuntime(RuntimeDeps{DB: db, Client: client, Lease: NewMemoryLease(), Tools: &stubTools{}})
+	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Client: client, Lease: NewMemoryLease(), Tools: &stubTools{}})
 
 	// Two triggers with the SAME message id must fold the user prompt once.
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -146,23 +150,24 @@ func TestRuntimeSecondWakeIsIdempotentForFoldedPrompt(t *testing.T) {
 }
 
 func TestRuntimeLeaseSerializes(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
 	srv := mockV4(t, `{"type":"text-delta","id":"t","delta":"ok"}`, `{"type":"finish","finishReason":{"unified":"stop"}}`)
 	defer srv.Close()
 	client := llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil)
 	lease := NewMemoryLease()
-	rt := NewRuntime(RuntimeDeps{DB: db, Client: client, Lease: lease, Tools: &stubTools{}})
+	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Client: client, Lease: lease, Tools: &stubTools{}})
 
 	// Hold the lease, then Wake must be a no-op (no drain).
 	if ok, _ := lease.Claim(context.Background(), "t1", "s1"); !ok {
 		t.Fatal("claim failed")
 	}
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
-	pending, _ := db.HasPending("t1", "s1")
+	pending := hasPending(t, q, "t1", "s1")
 	if !pending {
 		t.Error("a lease-held Wake must NOT drain the mailbox")
 	}
@@ -171,7 +176,7 @@ func TestRuntimeLeaseSerializes(t *testing.T) {
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := db.HasPending("t1", "s1"); p {
+	if hasPending(t, q, "t1", "s1") {
 		t.Error("mailbox should be drained after the lease is free")
 	}
 }

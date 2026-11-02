@@ -13,6 +13,7 @@ import (
 
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // WakeTypes are the mailbox message types that WAKE a session's turn loop.
@@ -39,6 +40,18 @@ type FileRef struct {
 // RuntimeDeps are the session runtime's collaborators.
 type RuntimeDeps struct {
 	DB       *store.DB
+	/**
+	 * Mailbox is the durable delivery queue.
+	 *
+	 * SEPARATE FROM DB EVEN THOUGH BOTH ARE STORAGE, because they are different KINDS of storage: the
+	 * chain, the sessions and the grants are relational and belong in Postgres; a queue is a list of
+	 * things waiting to be taken, and belongs where a TTL can forget them. They used to share one handle,
+	 * which is how a queue grew a `status` column and a two-phase drain to pretend it was a table.
+	 *
+	 * IT IS AN INTERFACE, not the concrete queue, so a test can hand in a fixed batch — draining is the
+	 * one runtime input that arrives from outside the process.
+	 */
+	Mailbox MailboxQueue
 	Client   *llm.Client
 	Resolver ProviderResolver
 	Lease    Lease
@@ -114,6 +127,17 @@ type Runtime struct {
 func NewRuntime(deps RuntimeDeps) *Runtime {
 	if deps.Now == nil {
 		deps.Now = time.Now
+	}
+	/**
+	 * NO QUEUE MEANS AN EMPTY ONE, NOT A NIL.
+	 *
+	 * A runtime without storage is a legitimate configuration — a test, or a deployment that only runs
+	 * turns and never receives. Installing an in-process queue makes "nothing waiting" a normal answer
+	 * rather than a nil check every wake has to remember; forgetting one is a panic in the middle of a
+	 * turn, which is the worst place to discover a configuration gap.
+	 */
+	if deps.Mailbox == nil {
+		deps.Mailbox = mailbox.NewMemory()
 	}
 	return &Runtime{deps: deps, active: map[string]context.CancelFunc{}, cancelReason: map[string]string{}}
 }
@@ -229,7 +253,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 		if leaseLost.Load() || runCtx.Err() != nil {
 			break
 		}
-		items, derr := r.deps.DB.DrainAll(tenant, session)
+		items, derr := r.deps.Mailbox.Drain(ctx, tenant, session)
 		if derr != nil {
 			r.releaseIfHeld(ctx, tenant, session, leaseLost.Load())
 			return derr
@@ -258,7 +282,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 	if err != nil || !ok {
 		return err
 	}
-	items, derr := r.deps.DB.DrainAll(tenant, session)
+	items, derr := r.deps.Mailbox.Drain(ctx, tenant, session)
 	if derr != nil || len(items) == 0 {
 		r.releaseIfHeld(ctx, tenant, session, false)
 		return derr
@@ -286,7 +310,7 @@ func (r *Runtime) releaseIfHeld(ctx context.Context, tenant, session string, los
 
 // handleBatch folds the drained batch and runs a turn when it carried a
 // trigger. Returns true when the busy period should continue draining.
-func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items []store.Mailbox, cancel context.CancelFunc) bool {
+func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items []mailbox.Message, cancel context.CancelFunc) bool {
 	hasTrigger := false
 	for _, it := range items {
 		/**
@@ -294,8 +318,8 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 		 * counts rows; this one names their types, which is the difference between "two messages
 		 * arrived" and "a trigger arrived" — and only the second one runs a turn.
 		 */
-		slog.Info("batch item", "tenant", tenant, "session", session, "msg", it.ID, "type", it.MsgType)
-		switch it.MsgType {
+		slog.Info("batch item", "tenant", tenant, "session", session, "msg", it.ID, "type", it.Type)
+		switch it.Type {
 		case "trigger":
 			hasTrigger = true
 			if err := r.foldUserMessage(tenant, session, it); err != nil {
@@ -303,7 +327,7 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 				// already reported the message as delivered; without this line the only evidence
 				// that it was then dropped is that no turn ran.
 				slog.Warn("fold user message failed", "tenant", tenant, "session", session,
-					"msg", it.ID, "type", it.MsgType, "err", err)
+					"msg", it.ID, "type", it.Type, "err", err)
 				return false
 			}
 		case "interrupt":
@@ -317,7 +341,7 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 			if err := r.foldEvent(tenant, session, it); err != nil {
 				// THE SAME SILENT PATH AS foldUserMessage: the batch stops and nothing says why.
 				slog.Warn("fold event failed", "tenant", tenant, "session", session,
-					"msg", it.ID, "type", it.MsgType, "err", err)
+					"msg", it.ID, "type", it.Type, "err", err)
 				return false
 			}
 		}
@@ -417,9 +441,16 @@ func (r *Runtime) clearActive(tenant, session string) {
 
 // foldUserMessage persists a user prompt (role=user) under its logical id,
 // idempotently, and bumps the chain counter.
-func (r *Runtime) foldUserMessage(tenant, session string, it store.Mailbox) error {
+func (r *Runtime) foldUserMessage(tenant, session string, it mailbox.Message) error {
 	var p WakePayload
-	if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
+	/**
+	 * THE PAYLOAD ARRIVES DECODED, NOT AS TEXT.
+	 *
+	 * The queue stores an object, so what reaches this function is a value rather than a JSON string that
+	 * the old table held. Re-encoding it to parse it back would be a round trip through two lossy
+	 * representations, and it is the step where `message_id` versus `messageId` used to go wrong.
+	 */
+	if err := decodeWakePayload(it.Payload, &p); err != nil {
 		return fmt.Errorf("agent: bad trigger payload: %w", err)
 	}
 	id := p.MessageID
@@ -489,7 +520,7 @@ func messageSource(mailboxSource string) string {
 }
 
 // foldEvent persists a context-only event as an `event` message.
-func (r *Runtime) foldEvent(tenant, session string, it store.Mailbox) error {
+func (r *Runtime) foldEvent(tenant, session string, it mailbox.Message) error {
 	tip, err := r.deps.DB.SessionTip(tenant, session)
 	if err != nil {
 		return err

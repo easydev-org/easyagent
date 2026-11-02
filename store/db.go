@@ -69,7 +69,7 @@ func (d *DB) Backend() Backend { return d.backend }
 // path: there is no legacy schema to upgrade.
 func (d *DB) Migrate() error {
 	if err := d.g.AutoMigrate(
-		&Session{}, &Message{}, &Part{}, &Mailbox{},
+		&Session{}, &Message{}, &Part{},
 		&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
 		&BundledTodo{}, &AdminToken{}, &SessionToken{},
 		&SessionGrant{},

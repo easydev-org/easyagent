@@ -1,6 +1,7 @@
-package bus
+package agentbus
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 )
@@ -20,7 +21,9 @@ type memQueue struct {
 
 func newMemQueue() *memQueue { return &memQueue{} }
 
-func (q *memQueue) Enqueue(tenant, session, typ string, _ any, _ string) (string, error) {
+// Enqueue matches the queue's signature, context and producer id included — the id is the producer's
+// to choose now, and a fake that dropped it would not notice a caller relying on that.
+func (q *memQueue) Enqueue(_ context.Context, tenant, session, id, typ string, _ any, _ string) (string, error) {
 	if q.fails != nil {
 		return "", q.fails
 	}

@@ -105,7 +105,12 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		if w.backedOff(s.Name, tip) {
 			continue
 		}
-		_, _ = w.rt.deps.DB.Enqueue(w.tenant, s.Name, "trigger", WakePayload{
+		/**
+		 * A MINTED ID, NOT A DERIVED ONE: each resume is a NEW nudge about a NEW failed turn, so two of
+		 * them are two messages rather than one delivered twice. Deriving the id from the session would
+		 * make a second resume overwrite the first, which is the opposite of what a retry needs.
+		 */
+		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.Name, newUUID(), "trigger", WakePayload{
 			Type: "trigger", MessageID: newUUID(),
 			Text: resumeText(s.LastTurnReason),
 		}, "system:resume")

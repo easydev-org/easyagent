@@ -8,7 +8,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 
-	"github.com/easydev-org/easyagent/bus"
+	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 )
 
@@ -22,9 +22,9 @@ import (
 // SubscriptionStore is the slice of the subscription machinery these RPCs need.
 type SubscriptionStore interface {
 	// List returns a session's subscriptions.
-	List(tenant, session string) []bus.Subscription
+	List(tenant, session string) []agentbus.Subscription
 	// Put writes one subscription, returning its id.
-	Put(ctx context.Context, tenant, session, channel, pattern string, wake bool) (bus.Subscription, error)
+	Put(ctx context.Context, tenant, session, channel, pattern string, wake bool) (agentbus.Subscription, error)
 	// Delete removes one subscription. Implementations must refuse to remove a system one.
 	Delete(ctx context.Context, tenant, session, id string) error
 }
@@ -95,7 +95,7 @@ func (s *Server) UnsubscribeChannel(ctx context.Context, req *agentv1.Unsubscrib
 	}
 	// Check ownership and system-ness from the store's own view, not from the request: a
 	// client that guessed an id must not be able to remove another session's subscription.
-	var found *bus.Subscription
+	var found *agentbus.Subscription
 	for _, sub := range s.subs.List(tenant, req.GetId()) {
 		if sub.ID == req.GetSubscriptionId() {
 			cp := sub

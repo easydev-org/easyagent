@@ -6,6 +6,7 @@ import (
 
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // Boundary tests for the compaction primitives, ported from the reference
@@ -171,9 +172,10 @@ func TestEntryCostCountsAllClasses(t *testing.T) {
 // ⑧ An empty chain folds nothing (compactWithBudgets returns false, no
 // checkpoint written).
 func TestCompactEmptyChainIsNoop(t *testing.T) {
+	q := mailbox.NewMemory()
 	db := testStore(t)
 	_ = db.CreateSession("t", store.SessionInput{Name: "s", Model: "gw/m"})
-	rt := NewRuntime(RuntimeDeps{DB: db, Lease: NewMemoryLease()})
+	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Lease: NewMemoryLease()})
 	written, err := rt.compactWithBudgets(t.Context(), "t", "s", "manual", 1, 100000)
 	if err != nil {
 		t.Fatal(err)

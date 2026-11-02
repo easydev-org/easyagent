@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"time"
 	"encoding/json"
+	"fmt"
 
 	"connectrpc.com/connect/v2"
 	"github.com/easydev-org/easyagent/agent"
@@ -72,7 +74,7 @@ func (s *Server) publishMailbox(ctx context.Context, tenant, session, typ string
 	}
 	// In-memory mode: no bus, so no other replica to notify and no signal to send. Enqueue and
 	// wake THIS runtime — the only one there is.
-	if _, err := s.db.Enqueue(tenant, session, typ, payload, source); err != nil {
+	if err := s.enqueue(ctx, tenant, session, typ, payload, source); err != nil {
 		return err
 	}
 	if s.rt != nil {
@@ -244,31 +246,73 @@ func (s *Server) State(ctx context.Context, req *agentv1.StateRequest) (*agentv1
 	})}, nil
 }
 
-// Mailbox returns a newest-first page of the session's mailbox.
+/**
+ * Mailbox returns a newest-first page of the session's mailbox.
+ *
+ * THE QUEUE RETURNS THE WHOLE LIST and the page is taken here, because the cursor is a presentation
+ * concern: a bucket has no stable server-side cursor across a TTL sweep, and inventing one would put
+ * pagination state in the store where it would have to expire alongside the messages.
+ */
 func (s *Server) Mailbox(ctx context.Context, req *agentv1.MailboxRequest) (*agentv1.MailboxResponse, error) {
 	tenant := tenantOf(ctx)
-	rows, hasMore, err := s.db.ListMailboxPage(tenant, req.Id, int(req.Limit), req.Before)
+	if s.mail == nil {
+		// NOT AN EMPTY LIST: "this deployment has no queue" is a different answer from "nothing was sent",
+		// and showing the second when the first is true would hide a misconfiguration.
+		return nil, connect.NewError(connect.CodeUnavailable,
+			"the mailbox needs a runtime bus; this deployment has none")
+	}
+	msgs, err := s.mail.Page(ctx, tenant, req.GetId())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	out := make([]*agentv1.MailboxEntry, 0, len(rows))
-	for _, m := range rows {
+	limit := int(req.GetLimit())
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	hasMore := len(msgs) > limit
+	if hasMore {
+		msgs = msgs[:limit]
+	}
+	out := make([]*agentv1.MailboxEntry, 0, len(msgs))
+	for _, m := range msgs {
 		e := &agentv1.MailboxEntry{
-			Id: m.ID, SessionName: m.SessionName, MsgType: m.MsgType, Source: m.Source,
-			Payload: m.Payload, Status: m.Status, CreatedAt: m.CreatedAt,
+			Id: m.ID, SessionName: req.GetId(), MsgType: m.Type, Source: m.Source,
+			Status: m.Status, CreatedAt: millisToText(m.CreatedAt),
 		}
-		if m.EffectiveAt != nil {
-			e.EffectiveAt = *m.EffectiveAt
+		// THE PAYLOAD IS AN OBJECT NOW, rendered as JSON text for the wire — the entry's field is a
+		// string and has consumers that do not need to change.
+		if raw, jerr := json.Marshal(m.Payload); jerr == nil {
+			e.Payload = string(raw)
 		}
-		if m.ConsumedAt != nil {
-			e.ConsumedAt = *m.ConsumedAt
-		}
-		if m.Seq != nil {
-			e.Seq = *m.Seq
+		if m.ConsumedAt > 0 {
+			e.ConsumedAt = millisToText(m.ConsumedAt)
 		}
 		out = append(out, e)
 	}
 	return &agentv1.MailboxResponse{Ok: true, Mailbox: out, HasMore: hasMore}, nil
+}
+
+// millisToText renders a Unix-millisecond timestamp the way the mailbox wire type expects.
+func millisToText(ms int64) string {
+	if ms == 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano)
+}
+
+/**
+ * enqueue puts a message where the runtime will find it.
+ *
+ * A DEPLOYMENT WITH NO QUEUE REFUSES rather than dropping the message. The alternative — a nil-safe no-op
+ * — would let `Prompt` return "accepted" for a prompt nothing would ever run, which is the same class of
+ * silently-broken the mailbox redesign exists to remove.
+ */
+func (s *Server) enqueue(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	if s.mail == nil {
+		return fmt.Errorf("publish mailbox: no queue configured in this deployment")
+	}
+	_, err := s.mail.Enqueue(ctx, tenant, session, "", typ, payload, source)
+	return err
 }
 
 // Interrupt aborts a session's in-flight turn.
@@ -279,7 +323,7 @@ func (s *Server) Interrupt(ctx context.Context, req *agentv1.InterruptRequest) (
 		interrupted = s.rt.Interrupt(tenant, req.Id)
 	}
 	// Also enqueue a durable interrupt so a turn on ANOTHER replica aborts.
-	if _, err := s.db.Enqueue(tenant, req.Id, "interrupt", map[string]any{}, "user"); err != nil {
+	if err := s.enqueue(ctx, tenant, req.Id, "interrupt", map[string]any{}, "user"); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	return &agentv1.InterruptResponse{Ok: true, Interrupted: interrupted}, nil
@@ -288,7 +332,7 @@ func (s *Server) Interrupt(ctx context.Context, req *agentv1.InterruptRequest) (
 // Compact enqueues a manual compaction request.
 func (s *Server) Compact(ctx context.Context, req *agentv1.CompactRequest) (*agentv1.CompactResponse, error) {
 	tenant := tenantOf(ctx)
-	if _, err := s.db.Enqueue(tenant, req.Id, "compact", map[string]any{}, "user"); err != nil {
+	if err := s.enqueue(ctx, tenant, req.Id, "compact", map[string]any{}, "user"); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if s.rt != nil {

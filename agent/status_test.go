@@ -9,9 +9,11 @@ import (
 
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 func TestStatusBusyIdleAndPreview(t *testing.T) {
+	q := mailbox.NewMemory()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"type\":\"text-delta\",\"id\":\"t\",\"delta\":\"the answer\"}\n\n")
@@ -27,10 +29,11 @@ func TestStatusBusyIdleAndPreview(t *testing.T) {
 	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
+		Mailbox: q,
 		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 	})
-	_, _ = db.Enqueue("t1", "s1", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
 	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
 		t.Fatal(err)
 	}

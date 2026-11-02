@@ -10,7 +10,7 @@ import (
 	"github.com/easydev-org/easybus-sdk/protocol"
 	"github.com/easydev-org/easybus-sdk/transport/nats"
 
-	abcbus "github.com/easydev-org/easyagent/bus"
+	abcbus "github.com/easydev-org/easyagent/agentbus"
 )
 
 // TestFileRPCRoundTrip proves the agent serves file.ingest / file.get for a

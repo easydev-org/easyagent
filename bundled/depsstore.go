@@ -202,11 +202,14 @@ func (d *StoreDeps) DeleteSessionMailbox(tenant, sid string) error {
 
 // PublishMailbox implements Deps.
 func (d *StoreDeps) PublishMailbox(tenant, session, typ string, payload any, source string) error {
-	if d.MailFn != nil {
-		return d.MailFn(tenant, session, typ, payload, source)
+	if d.MailFn == nil {
+		// REFUSING IS DELIBERATE. The fallback used to be a direct write to the store's queue, which
+		// only worked while the queue lived in the relational database. It does not any more, so a
+		// deployment that forgot to wire this would silently deliver nothing — and a tool that says it
+		// sent something it did not is worse than one that says it cannot.
+		return fmt.Errorf("publish mailbox: no queue configured")
 	}
-	_, err := d.DB.Enqueue(tenant, session, typ, payload, source)
-	return err
+	return d.MailFn(tenant, session, typ, payload, source)
 }
 
 // MessageChain implements Deps (oldest-first; limit <= 0 = no cap).

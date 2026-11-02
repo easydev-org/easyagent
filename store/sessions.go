@@ -72,9 +72,6 @@ func (d *DB) SessionExists(tenant, name string) (bool, error) {
 // history is NOT touched (messages are append-only and shared by forks).
 func (d *DB) DeleteSession(tenant, name string) error {
 	return d.g.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("tenant = ? AND session_name = ?", tenant, name).Delete(&Mailbox{}).Error; err != nil {
-			return err
-		}
 		return tx.Where("tenant = ? AND name = ?", tenant, name).Delete(&Session{}).Error
 	})
 }

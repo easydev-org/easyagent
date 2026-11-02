@@ -69,24 +69,7 @@ type Part struct {
 
 func (Part) TableName() string { return "parts" }
 
-// Mailbox is a session's durable delivery queue. `ConsumedBy` is the CLAIM
-// column that makes the atomic drain a portable two-phase operation.
-type Mailbox struct {
-	ID          string  `gorm:"column:id;primaryKey;size:64"`
-	Tenant      string  `gorm:"column:tenant;size:64;index:idx_mb_session,priority:1"`
-	SessionName string  `gorm:"column:session_name;size:128;index:idx_mb_session,priority:2"`
-	MsgType     string  `gorm:"column:msg_type"`
-	Source      string  `gorm:"column:source"`
-	Payload     string  `gorm:"column:payload"`
-	EffectiveAt *string `gorm:"column:effective_at"`
-	Status      string  `gorm:"column:status"`
-	CreatedAt   string  `gorm:"column:created_at"`
-	ConsumedAt  *string `gorm:"column:consumed_at"`
-	ConsumedBy  *string `gorm:"column:consumed_by;size:64;index"`
-	Seq         *int64  `gorm:"column:seq"`
-}
 
-func (Mailbox) TableName() string { return "mailbox" }
 
 // Provider is a registered model provider. A provider serves EXACTLY ONE
 // capability (modality); a host serving several registers one row per modality.

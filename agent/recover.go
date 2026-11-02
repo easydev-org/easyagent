@@ -9,7 +9,14 @@ import (
 // The lease guarantees exactly one replica processes each; the others no-op.
 // Run once at boot (a crash left messages queued).
 func (r *Runtime) RecoverOnBoot(ctx context.Context) {
-	rows, err := r.deps.DB.PendingSessions(WakeTypes)
+	/**
+	 * THE QUEUE ANSWERS THIS, NOT THE DATABASE.
+	 *
+	 * A crash leaves messages queued, and the sessions holding them have to be woken. That question — "who
+	 * has work waiting" — belongs to whoever holds the queue; asking the relational store was only ever
+	 * true because the queue happened to live in it.
+	 */
+	rows, err := r.deps.Mailbox.SessionsWithPending(ctx, WakeTypes)
 	if err != nil {
 		return
 	}

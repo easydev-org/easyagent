@@ -16,10 +16,11 @@ import (
 	"github.com/easydev-org/easyagent/agent"
 	"github.com/easydev-org/easyagent/blob"
 	"github.com/easydev-org/easyagent/bundled"
-	"github.com/easydev-org/easyagent/bus"
+	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // Config is the server's configuration.
@@ -46,9 +47,12 @@ type Server struct {
 	config  *agent.Config
 
 	// runtimeBus is the NATS bus, when wired (nil in in-memory mode).
-	runtimeBus *bus.Bus
+	runtimeBus *agentbus.Bus
+	// mail is the delivery queue. nil in a deployment with no bus, where the mailbox page reports the
+	// absence rather than an empty list — "no queue" and "nothing waiting" are different facts.
+	mail MailboxQueue
 	// tools is the discovered tool surface (nil in in-memory mode).
-	tools *bus.ToolExecutor
+	tools *agentbus.ToolExecutor
 	// bundledTools is the in-process bundled extension tool surface.
 	bundledTools ToolSource
 	// bundledFields exposes a tool's declared config fields.
@@ -75,6 +79,18 @@ type Server struct {
 	nowFn func() time.Time
 }
 
+/**
+ * MailboxQueue is the delivery queue, as this package uses it.
+ *
+ * TWO METHODS, WHICH IS THE WHOLE OF WHAT AN RPC NEEDS: put a message where the runtime will find it, and
+ * page one conversation's messages. Draining belongs to the runtime, and the interface stays narrow so a
+ * deployment cannot hand this package something that only half works.
+ */
+type MailboxQueue interface {
+	Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error)
+	Page(ctx context.Context, tenant, session string) ([]mailbox.Message, error)
+}
+
 // Deps are the server's collaborators.
 type Deps struct {
 	DB       *store.DB
@@ -83,7 +99,18 @@ type Deps struct {
 	Config   Config
 	Presets  *agent.Presets
 	ConfigKV *agent.Config
-	Bus      *bus.Bus
+	Bus      *agentbus.Bus
+	/**
+	 * Mailbox is the delivery queue the prompt path writes to and the mailbox page reads from.
+	 *
+	 * IT USED TO BE s.db, because the queue was a table. Now that it is a bucket, the server needs the
+	 * queue itself — and keeping it as its own field says which of the two a call is about: a message
+	 * waiting to be taken, or the transcript it becomes.
+	 *
+	 * AN INTERFACE, so a test can supply the in-process queue and a deployment the durable one, without
+	 * either knowing which it was given.
+	 */
+	Mailbox MailboxQueue
 }
 
 // New builds the server.
@@ -93,7 +120,7 @@ func New(d Deps) *Server {
 	}
 	return &Server{
 		db: d.DB, rt: d.Runtime, hub: d.Hub, cfg: d.Config,
-		presets: d.Presets, config: d.ConfigKV, runtimeBus: d.Bus,
+		presets: d.Presets, config: d.ConfigKV, runtimeBus: d.Bus, mail: d.Mailbox,
 		blobs: map[string][]byte{},
 	}
 }
@@ -102,7 +129,7 @@ func New(d Deps) *Server {
 func (s *Server) Hub() *EventHub { return s.hub }
 
 // SetTools installs the discovered tool surface (for ListTools/ToolConfig).
-func (s *Server) SetTools(t *bus.ToolExecutor) { s.tools = t }
+func (s *Server) SetTools(t *agentbus.ToolExecutor) { s.tools = t }
 
 // ToolSource is a read-only tool surface (the bundled extension).
 type ToolSource interface {
