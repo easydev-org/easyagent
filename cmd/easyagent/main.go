@@ -111,7 +111,7 @@ func run(cfgPath string) error {
 		 * The remediation is in the message, because the operator reading it is the only one who can
 		 * act on it.
 		 */
-		if stale, aerr := b.AuditReplicas(context.Background()); aerr != nil {
+		if stale, aerr := b.AuditReplicas(); aerr != nil {
 			slog.Warn("cannot audit JetStream replica counts", "err", aerr)
 		} else {
 			for _, s := range stale {
