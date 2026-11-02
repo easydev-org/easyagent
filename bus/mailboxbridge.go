@@ -60,12 +60,19 @@ func (b *Bus) BridgeExtensionMail(ctx context.Context) (func(), error) {
 					"ch", env.GetCh(), "tenant", tenant, "session", session)
 				continue
 			}
-			typ, payload, source := extensionMailParts(env.GetPayload().AsInterface())
-			// WHAT ACTUALLY ARRIVED, at the level that decides whether the message has a body. A
-			// delivered trigger with an empty text folds an empty user message — the conversation
-			// gains a turn with nothing in it, which reads as the model ignoring the notification.
+			whole := env.GetPayload().AsInterface()
+			typ, payload, source := extensionMailParts(whole)
+			/**
+			 * BOTH LEVELS, BECAUSE THE BODY WAS NIL AND THE TYPE WAS RIGHT.
+			 *
+			 * A delivered trigger whose `payload` field is empty folds an empty user message: the
+			 * conversation gains a turn with nothing in it, which from outside looks exactly like the
+			 * model ignoring the notification. Printing the whole value shows whether the field is
+			 * absent, empty, or spelled differently — three causes that looked identical at the point
+			 * of loss.
+			 */
 			slog.InfoContext(ctx, "mailbox bridge: payload", "tenant", tenant, "session", session,
-				"type", typ, "payload", fmt.Sprintf("%v", payload))
+				"type", typ, "body", fmt.Sprintf("%v", payload), "whole", fmt.Sprintf("%#v", whole))
 			/**
 			 * ENQUEUE IS THE WHOLE JOB. `Wake` is driven by the row existing, so a delivered
 			 * message needs nothing else — and the boot backstop drains it if no wake races
