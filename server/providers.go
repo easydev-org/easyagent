@@ -166,9 +166,10 @@ func (s *Server) TestProvider(ctx context.Context, req *agentv1.TestProviderRequ
 	switch cap {
 	case agent.CapText:
 		if prompt == "" {
-			prompt = "Reply with exactly: OK"
+			return invalidTest("the text probe needs a prompt")
 		}
-		text, err := agent.ProbeModel(ctx, baseURL, apiKey, model)
+		// THE PROMPT IS WHAT THE OPERATOR TYPED, and what comes back is the model's actual answer.
+		text, err := agent.ProbeModel(ctx, baseURL, apiKey, model, prompt)
 		if err != nil {
 			return &agentv1.TestProviderResponse{Ok: false, Result: err.Error()}, nil
 		}
