@@ -3,6 +3,7 @@ package agentbus
 import (
 	"context"
 	"errors"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"testing"
 
 	"github.com/easydev-org/easybus-sdk/bus"
@@ -12,9 +13,10 @@ import (
 // things worth pinning are: who receives it, how many times, and whether it wakes.
 
 type delivery struct {
-	tenant, session, typ string
-	payload              any
-	source               string
+	tenant, session string
+	typ             mailbox.Type
+	payload         any
+	source          string
 }
 
 func newTestDistributor(t *testing.T, subs func(*SubscriptionIndex)) (*Distributor, *[]delivery) {
@@ -22,7 +24,7 @@ func newTestDistributor(t *testing.T, subs func(*SubscriptionIndex)) (*Distribut
 	idx := NewSubscriptionIndex(nil)
 	subs(idx)
 	var got []delivery
-	d := NewDistributor(idx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 		got = append(got, delivery{tenant: tenant, session: session, typ: typ, payload: payload, source: source})
 		return nil
 	})
@@ -141,7 +143,7 @@ func TestDistributeContinuesAfterFailure(t *testing.T) {
 	put(t, idx, "alice", "s2", "sub-1", "group-chat", "eng.>", true)
 
 	var reached []string
-	d := NewDistributor(idx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 		if session == "s1" {
 			return errors.New("mailbox unavailable")
 		}

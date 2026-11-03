@@ -2,6 +2,7 @@ package agentbus
 
 import (
 	"context"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"sync"
 	"sync/atomic"
 )
@@ -23,13 +24,13 @@ func newMemQueue() *memQueue { return &memQueue{} }
 
 // Enqueue matches the queue's signature, context and producer id included — the id is the producer's
 // to choose now, and a fake that dropped it would not notice a caller relying on that.
-func (q *memQueue) Enqueue(_ context.Context, tenant, session, id, typ string, _ any, _ string) (string, error) {
+func (q *memQueue) Enqueue(_ context.Context, tenant, session, id string, typ mailbox.Type, _ any, _ string) (string, error) {
 	if q.fails != nil {
 		return "", q.fails
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.rows = append(q.rows, tenant+"/"+session+"/"+typ)
+	q.rows = append(q.rows, tenant+"/"+session+"/"+string(typ))
 	n := atomic.AddInt64(&q.seq, 1)
 	return "row-" + itoa(n), nil
 }

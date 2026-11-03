@@ -87,7 +87,7 @@ type Server struct {
  * deployment cannot hand this package something that only half works.
  */
 type MailboxQueue interface {
-	Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error)
+	Enqueue(ctx context.Context, tenant, session, id string, typ mailbox.Type, payload any, source string) (string, error)
 	Page(ctx context.Context, tenant, session string) ([]mailbox.Message, error)
 }
 

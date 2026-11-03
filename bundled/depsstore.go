@@ -2,11 +2,13 @@ package bundled
 
 import (
 	"context"
+
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"strings"
 
 	"github.com/easydev-org/easyagent/agent"
@@ -27,7 +29,7 @@ type StoreDeps struct {
 	// SessionVar reads a projected session variable (e.g. locale).
 	SessionVarFn func(tenant, session, name string) (string, bool)
 	// Mail publishes a mailbox message (bus when wired, else the store queue).
-	MailFn func(tenant, session, typ string, payload any, source string) error
+	MailFn func(tenant, session string, typ mailbox.Type, payload any, source string) error
 	// OnIngest is called after a generated blob is stored (e.g. media probe).
 	OnIngestFn func(ctx context.Context, tenant, code, name, mime string, data []byte)
 }
@@ -188,7 +190,7 @@ func (d *StoreDeps) DeleteSessionMailbox(tenant, sid string) error {
 }
 
 // PublishMailbox implements Deps.
-func (d *StoreDeps) PublishMailbox(tenant, session, typ string, payload any, source string) error {
+func (d *StoreDeps) PublishMailbox(tenant, session string, typ mailbox.Type, payload any, source string) error {
 	if d.MailFn == nil {
 		// REFUSING IS DELIBERATE. The fallback used to be a direct write to the store's queue, which
 		// only worked while the queue lived in the relational database. It does not any more, so a

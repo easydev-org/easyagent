@@ -20,7 +20,7 @@ import (
  */
 func enqueue(t *testing.T, q *mailbox.Memory, tenant, session, typ string, payload any) {
 	t.Helper()
-	if _, err := q.Enqueue(context.Background(), tenant, session, "", typ, payload, "user"); err != nil {
+	if _, err := q.Enqueue(context.Background(), tenant, session, "", mailbox.Type(typ), payload, "user"); err != nil {
 		t.Fatal(err)
 	}
 }

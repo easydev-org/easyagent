@@ -23,6 +23,7 @@ import (
 	abcagent "github.com/easydev-org/easybus-sdk/agent"
 	"github.com/easydev-org/easybus-sdk/bus"
 	"github.com/easydev-org/easybus-sdk/events"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easybus-sdk/protocol"
 	"github.com/easydev-org/easybus-sdk/transport/nats"
 )
@@ -63,7 +64,7 @@ type Bus struct {
  * empty for the queue to mint.
  */
 type MailboxQueue interface {
-	Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error)
+	Enqueue(ctx context.Context, tenant, session, id string, typ mailbox.Type, payload any, source string) (string, error)
 }
 
 // WithMailboxQueue installs the durable queue PublishMailbox writes to.
@@ -882,7 +883,7 @@ func (b *Bus) ConsumeMailbox(ctx context.Context, handler func(MailboxMessage) e
 // So both happen here, in this order: enqueue first (durable), then signal. If the signal is lost
 // the row is still there and the boot backstop drains it; the reverse order would signal a wake
 // for a message that is not yet readable.
-func (b *Bus) PublishMailbox(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+func (b *Bus) PublishMailbox(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 	if b.db == nil {
 		// Refusing is deliberate. Falling through to signal-only would look like success from
 		// every angle except the session waking up, which is exactly how this took a day to find.
@@ -891,7 +892,7 @@ func (b *Bus) PublishMailbox(ctx context.Context, tenant, session, typ string, p
 	if _, err := b.db.Enqueue(ctx, tenant, session, "", typ, payload, source); err != nil {
 		return fmt.Errorf("enqueue mailbox: %w", err)
 	}
-	return b.agent.PublishMailbox(ctx, tenant, session, typ, payload, source)
+	return b.agent.PublishMailbox(ctx, tenant, session, string(typ), payload, source)
 }
 
 // PublishLifecycle broadcasts a session lifecycle event (`created` / `forked` /

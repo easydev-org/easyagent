@@ -10,6 +10,7 @@ import (
 	"github.com/easydev-org/easyagent/agent"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // ListMessages reads a session's chain (anchored / backward-paged).
@@ -62,20 +63,30 @@ func (s *Server) hydrate(tenant string, msgs []storeMessage) ([]*agentv1.Message
 	return messagesToProto(msgs, parts), nil
 }
 
-// publishMailbox sends one mailbox message through the single authoritative path.
+// publishMailbox puts one message in the durable queue and signals the replicas.
 //
-// The server used to enqueue and then call rt.Wake directly, which is correct only while THIS
-// replica holds the session lease. A prompt arriving when another replica holds it enqueued and
-// woke nobody; the 60-second boot backstop was the only thing that eventually ran it.
-func (s *Server) publishMailbox(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+// IT USED TO BRANCH ON `runtimeBus != nil`. With a bus it delegated to `runtimeBus.PublishMailbox`; without
+// one it enqueued and woke this runtime directly. Two paths for one operation, and the branch existed
+// only because the bus was optional — the ORDER (enqueue, then signal) was the same either way.
+//
+// The bus, when it exists, already IS the durable queue plus the cross-replica signal, so delegating is
+// right; the in-process case is what a deployment without NATS looks like, and there the queue is local
+// and `Wake` is the only subscriber. Keeping both here is what let the two drift: a caller could take a
+// path whose signal meant something different.
+//
+// ENQUEUE FIRST. A signal that arrives before the row exists wakes a runtime that finds nothing and
+// returns — the turn simply never happens, and the only trace is a log line saying the drain was empty.
+func (s *Server) publishMailbox(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 	if s.runtimeBus != nil {
-		// Enqueue + cross-replica signal. The bus owns both halves so no caller can do one.
 		return s.runtimeBus.PublishMailbox(ctx, tenant, session, typ, payload, source)
 	}
-	// In-memory mode: no bus, so no other replica to notify and no signal to send. Enqueue and
-	// wake THIS runtime — the only one there is.
-	if err := s.enqueue(ctx, tenant, session, typ, payload, source); err != nil {
-		return err
+	if s.mail == nil {
+		// Refusing is deliberate. Falling through to signal-only would look like success from every
+		// angle except the session waking up.
+		return fmt.Errorf("publish mailbox: no queue configured in this deployment")
+	}
+	if _, err := s.mail.Enqueue(ctx, tenant, session, "", typ, payload, source); err != nil {
+		return fmt.Errorf("enqueue mailbox: %w", err)
 	}
 	if s.rt != nil {
 		go func() { _ = s.rt.Wake(context.WithoutCancel(ctx), tenant, session) }()
@@ -104,7 +115,7 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 	// (cross-replica). Calling db.Enqueue + rt.Wake here would be correct only while the lease
 	// happens to be on THIS replica — a prompt that arrives when another replica holds it would
 	// enqueue and then wake nobody, and only the 60s boot backstop would notice.
-	if err := s.publishMailbox(ctx, tenant, req.Id, "trigger", payload, "user"); err != nil {
+	if err := s.publishMailbox(ctx, tenant, req.Id, mailbox.Trigger, payload, "user"); err != nil {
 		return connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if err := stream.Send(&agentv1.PromptResponse{
@@ -276,8 +287,8 @@ func (s *Server) Mailbox(ctx context.Context, req *agentv1.MailboxRequest) (*age
 	out := make([]*agentv1.MailboxEntry, 0, len(msgs))
 	for _, m := range msgs {
 		e := &agentv1.MailboxEntry{
-			Id: m.ID, SessionName: req.GetId(), MsgType: m.Type, Source: m.Source,
-			Status: m.Status, CreatedAt: millisToText(m.CreatedAt),
+			Id: m.ID, SessionName: req.GetId(), MsgType: string(m.Type), Source: m.Source,
+			Status: string(m.Status), CreatedAt: millisToText(m.CreatedAt),
 		}
 		// THE PAYLOAD IS AN OBJECT NOW, rendered as JSON text for the wire — the entry's field is a
 		// string and has consumers that do not need to change.
@@ -307,7 +318,7 @@ func millisToText(ms int64) string {
  * — would let `Prompt` return "accepted" for a prompt nothing would ever run, which is the same class of
  * silently-broken the mailbox redesign exists to remove.
  */
-func (s *Server) enqueue(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+func (s *Server) enqueue(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 	if s.mail == nil {
 		return fmt.Errorf("publish mailbox: no queue configured in this deployment")
 	}
@@ -323,7 +334,7 @@ func (s *Server) Interrupt(ctx context.Context, req *agentv1.InterruptRequest) (
 		interrupted = s.rt.Interrupt(tenant, req.Id)
 	}
 	// Also enqueue a durable interrupt so a turn on ANOTHER replica aborts.
-	if err := s.enqueue(ctx, tenant, req.Id, "interrupt", map[string]any{}, "user"); err != nil {
+	if err := s.enqueue(ctx, tenant, req.Id, mailbox.Interrupt, map[string]any{}, "user"); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	return &agentv1.InterruptResponse{Ok: true, Interrupted: interrupted}, nil
@@ -332,7 +343,7 @@ func (s *Server) Interrupt(ctx context.Context, req *agentv1.InterruptRequest) (
 // Compact enqueues a manual compaction request.
 func (s *Server) Compact(ctx context.Context, req *agentv1.CompactRequest) (*agentv1.CompactResponse, error) {
 	tenant := tenantOf(ctx)
-	if err := s.enqueue(ctx, tenant, req.Id, "compact", map[string]any{}, "user"); err != nil {
+	if err := s.enqueue(ctx, tenant, req.Id, mailbox.Compact, map[string]any{}, "user"); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if s.rt != nil {

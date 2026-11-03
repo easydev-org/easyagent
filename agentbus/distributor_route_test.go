@@ -2,6 +2,7 @@ package agentbus
 
 import (
 	"context"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"testing"
 
 	"github.com/easydev-org/easybus-sdk/bus"
@@ -28,12 +29,12 @@ func TestDistributeRoutesToMatchingSession(t *testing.T) {
 		session string
 		typ     string
 	}
-	d := NewDistributor(idx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 		got = append(got, struct {
 			tenant  string
 			session string
 			typ     string
-		}{tenant, session, typ})
+		}{tenant, session, string(typ)})
 		return nil
 	})
 
@@ -65,7 +66,7 @@ func TestDistributeRoutesToMatchingSession(t *testing.T) {
 // An unparseable subject must be REPORTED, not silently dropped.
 func TestDistributeReportsUnparseableSubject(t *testing.T) {
 	idx := NewSubscriptionIndex(nil)
-	d := NewDistributor(idx, func(context.Context, string, string, string, any, string) error {
+	d := NewDistributor(idx, func(context.Context, string, string, mailbox.Type, any, string) error {
 		t.Fatal("publisher must not be called for an unparseable subject")
 		return nil
 	})

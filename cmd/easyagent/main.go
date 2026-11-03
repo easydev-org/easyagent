@@ -158,7 +158,7 @@ func run(cfgPath string) error {
 	// the channel distributor uses, and the bus is created later in this function. A nil check
 	// here would reintroduce the split this variable exists to remove, so the closure refuses
 	// loudly instead.
-	var mailboxPublish func(tenant, session, typ string, payload any, source string) error
+	var mailboxPublish func(tenant, session string, typ mailbox.Type, payload any, source string) error
 	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub, &mailboxPublish))
 	if err != nil {
 		return fmt.Errorf("bundled extension: %w", err)
@@ -167,7 +167,7 @@ func run(cfgPath string) error {
 		b := runtimeBus
 		// THE single mailbox path: enqueue (durable) then signal (cross-replica). Wired here
 		// because the bus is created after the bundled extension, which needs the publisher.
-		mailboxPublish = func(tenant, session, typ string, payload any, source string) error {
+		mailboxPublish = func(tenant, session string, typ mailbox.Type, payload any, source string) error {
 			return b.PublishMailbox(context.Background(), tenant, session, typ, payload, source)
 		}
 		// Mirror every published event onto the durable session-events stream
@@ -246,7 +246,7 @@ func run(cfgPath string) error {
 			channelStop = stop
 			slog.Info("channel subscriptions watching")
 		}
-		dist = agentbus.NewDistributor(subIdx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+		dist = agentbus.NewDistributor(subIdx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 			return b.PublishMailbox(ctx, tenant, session, typ, payload, source)
 		}).WithLogger(slog.Default())
 		if _, err := dist.Start(context.Background(), sdkbus.NewChannels(b.Transport()), "agent-channels"); err != nil {
@@ -499,7 +499,7 @@ func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c con
 // extension needs (the Go equivalent of the TS `BundledDeps` injection).
 func bundledDeps(
 	db *store.DB, cfg *agent.Config, hub *server.EventHub,
-	mailboxPublish *func(string, string, string, any, string) error,
+	mailboxPublish *func(string, string, mailbox.Type, any, string) error,
 ) *bundled.StoreDeps {
 	d := &bundled.StoreDeps{DB: db}
 	d.ConfigFn = func(tenant, key string) (string, bool) { return cfg.Get(tenant, key) }
@@ -527,7 +527,7 @@ func bundledDeps(
 	d.BlobPutFn = func(ctx context.Context, tenant, code string, data []byte) error {
 		return fileBlobPut(ctx, code, data)
 	}
-	d.MailFn = func(tenant, session, typ string, payload any, source string) error {
+	d.MailFn = func(tenant, session string, typ mailbox.Type, payload any, source string) error {
 		// THE SAME PATH the channel distributor takes.
 		//
 		// It used to enqueue and stop, relying on the caller to nudge the runtime — so a message

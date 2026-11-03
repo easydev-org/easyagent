@@ -2,6 +2,7 @@ package agentbus
 
 import (
 	"context"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ func TestWakingChannelEventCarriesText(t *testing.T) {
 	})
 
 	var got map[string]any
-	d := NewDistributor(idx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 		got, _ = payload.(map[string]any)
 		return nil
 	})
@@ -68,7 +69,7 @@ func TestNonWakingChannelEventHasNoText(t *testing.T) {
 	})
 
 	var got map[string]any
-	d := NewDistributor(idx, func(ctx context.Context, tenant, session, typ string, payload any, source string) error {
+	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 		got, _ = payload.(map[string]any)
 		return nil
 	})

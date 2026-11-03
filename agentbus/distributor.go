@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/easydev-org/easybus-sdk/bus"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // Distributor turns channel messages into mailbox messages.
@@ -24,13 +25,13 @@ import (
 type Distributor struct {
 	index *SubscriptionIndex
 	// publish is the mailbox publisher; nil disables distribution.
-	publish func(ctx context.Context, tenant, session, typ string, payload any, source string) error
+	publish func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error
 	// log is optional; nil disables the delivery diagnostics.
 	log *slog.Logger
 }
 
 // NewDistributor wires an index to a mailbox publisher.
-func NewDistributor(index *SubscriptionIndex, publish func(ctx context.Context, tenant, session, typ string, payload any, source string) error) *Distributor {
+func NewDistributor(index *SubscriptionIndex, publish func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error) *Distributor {
 	return &Distributor{index: index, publish: publish}
 }
 
@@ -100,9 +101,11 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 				break
 			}
 		}
-		typ := "event"
+		// A WAKE SUBSCRIPTION RUNS A TURN; anything else is context for the next one. Named types rather
+		// than literals, because this value decides whether a conversation wakes at all.
+		typ := mailbox.Event
 		if wake {
-			typ = "trigger"
+			typ = mailbox.Trigger
 		}
 
 		// The payload keeps the channel and topic alongside the event body, so the session
