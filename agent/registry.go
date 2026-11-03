@@ -66,9 +66,17 @@ func splitModelRef(ref string) (providerID, modelID string, ok bool) {
 }
 
 // ModelOf returns the bare model id from a `provider/model` reference.
+//
+// A REFERENCE WITHOUT A SLASH IS RETURNED UNCHANGED. Every caller wants "the id the model is known by",
+// and for a string that was already a bare id that is the string itself. Returning "" instead made a
+// bare id indistinguishable from a malformed one, so a caller that had one had to special-case it —
+// and the first caller that did not (the provider test) rejected a perfectly good model.
 func ModelOf(ref string) string {
-	_, m, _ := splitModelRef(ref)
-	return m
+	if p, m, ok := splitModelRef(ref); ok {
+		_ = p
+		return m
+	}
+	return ref
 }
 
 // modelContextLimit reads a model's context window from its provider row's
