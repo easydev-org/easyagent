@@ -2,6 +2,7 @@ package bundled
 
 import (
 	"context"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"testing"
 
 	"github.com/easydev-org/easyagent/agent"
@@ -42,7 +43,7 @@ func (d *stubDeps) SessionsInGroup(string, string) []string   { return nil }
 func (d *stubDeps) ForkSession(string, string, string) error  { return nil }
 func (d *stubDeps) DeleteSessionRow(string, string) error     { return nil }
 func (d *stubDeps) DeleteSessionMailbox(string, string) error { return nil }
-func (d *stubDeps) PublishMailbox(_, session, _ string, _ any, _ string) error {
+func (d *stubDeps) PublishMailbox(_, session string, _ mailbox.Type, _ any, _ string) error {
 	d.mails = append(d.mails, session)
 	return nil
 }

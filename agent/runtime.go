@@ -18,7 +18,7 @@ import (
 
 // WakeTypes are the mailbox message types that WAKE a session's turn loop.
 // Every other type is CONTEXT-ONLY (folded into the chain lazily).
-var WakeTypes = []string{"trigger", "compact"}
+var WakeTypes = []mailbox.Type{mailbox.Trigger, mailbox.Compact}
 
 // WakePayload is a mailbox message body.
 type WakePayload struct {
@@ -238,7 +238,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 						if !ok {
 							return
 						}
-						if typ == "interrupt" {
+						if typ == string(mailbox.Interrupt) {
 							r.markCancel(tenant, session, "interrupted")
 						}
 					}
@@ -320,7 +320,7 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 		 */
 		slog.Info("batch item", "tenant", tenant, "session", session, "msg", it.ID, "type", it.Type)
 		switch it.Type {
-		case "trigger":
+		case "trigger": // WakePayload.Type is the WIRE word, not the queue's Type
 			hasTrigger = true
 			if err := r.foldUserMessage(tenant, session, it); err != nil {
 				// LOGGED, BECAUSE RETURNING FALSE HERE ENDS THE BUSY PERIOD SILENTLY. The drain

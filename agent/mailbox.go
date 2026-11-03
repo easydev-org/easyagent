@@ -43,11 +43,11 @@ type MailboxQueue interface {
 	 * whose turn ended for a reason worth retrying. Everything else that enqueues is a producer outside
 	 * the turn — an API prompt, a subsession hand-off, an extension's completion notice.
 	 */
-	Enqueue(ctx context.Context, tenant, session, id, typ string, payload any, source string) (string, error)
+	Enqueue(ctx context.Context, tenant, session, id string, typ mailbox.Type, payload any, source string) (string, error)
 	// Pending reports what is waiting without taking it.
 	Pending(ctx context.Context, tenant, session string) ([]mailbox.Message, error)
 	// SessionsWithPending lists conversations with work waiting, narrowed to the given message types.
-	SessionsWithPending(ctx context.Context, types []string) ([]struct{ Tenant, SessionName string }, error)
+	SessionsWithPending(ctx context.Context, types []mailbox.Type) ([]struct{ Tenant, SessionName string }, error)
 	// HasInterrupt reports whether an interrupt is waiting.
 	HasInterrupt(ctx context.Context, tenant, session string) (bool, error)
 }

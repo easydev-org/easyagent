@@ -2,6 +2,7 @@ package agentbus
 
 import (
 	"context"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"os"
 	"testing"
 	"time"
@@ -61,9 +62,12 @@ func TestChannelEndToEnd(t *testing.T) {
 	}
 
 	// 3. The distributor, publishing into a mailbox we can observe.
-	type delivered struct{ session, typ string }
+	type delivered struct {
+		session string
+		typ     mailbox.Type
+	}
 	got := make(chan delivered, 4)
-	dist := NewDistributor(idx, func(_ context.Context, _, session, typ string, _ any, _ string) error {
+	dist := NewDistributor(idx, func(_ context.Context, _, session string, typ mailbox.Type, _ any, _ string) error {
 		got <- delivered{session: session, typ: typ}
 		return nil
 	})
@@ -135,8 +139,8 @@ func TestChannelEndToEndNonWaking(t *testing.T) {
 	}
 
 	got := make(chan string, 4)
-	dist := NewDistributor(idx, func(_ context.Context, _, _, typ string, _ any, _ string) error {
-		got <- typ
+	dist := NewDistributor(idx, func(_ context.Context, _, _ string, typ mailbox.Type, _ any, _ string) error {
+		got <- string(typ)
 		return nil
 	})
 	ch := sdkbus.NewChannels(b)
@@ -200,8 +204,8 @@ func TestDefaultSubscriptionEndToEnd(t *testing.T) {
 	}
 
 	got := make(chan string, 4)
-	dist := NewDistributor(idx, func(_ context.Context, _, session, typ string, _ any, _ string) error {
-		got <- session + "/" + typ
+	dist := NewDistributor(idx, func(_ context.Context, _, session string, typ mailbox.Type, _ any, _ string) error {
+		got <- session + "/" + string(typ)
 		return nil
 	})
 	ch := sdkbus.NewChannels(b)

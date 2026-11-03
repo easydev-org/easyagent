@@ -6,6 +6,7 @@ package bundled
 
 import (
 	"github.com/easydev-org/easyagent/llm"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // Deps are the host capabilities the bundled tools need. agent-go supplies an
@@ -41,7 +42,7 @@ type Deps interface {
 	ForkSession(tenant, parent, child string) error
 	DeleteSessionRow(tenant, sid string) error
 	DeleteSessionMailbox(tenant, sid string) error
-	PublishMailbox(tenant, session, typ string, payload any, source string) error
+	PublishMailbox(tenant, session string, typ mailbox.Type, payload any, source string) error
 
 	// --- history ---
 	// MessageChain walks a chain from tip, oldest-first with depth 0 at the tip.

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 	"sync"
 	"time"
 )
@@ -110,7 +111,7 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		 * them are two messages rather than one delivered twice. Deriving the id from the session would
 		 * make a second resume overwrite the first, which is the opposite of what a retry needs.
 		 */
-		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.Name, newUUID(), "trigger", WakePayload{
+		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.Name, newUUID(), mailbox.Trigger, WakePayload{
 			Type: "trigger", MessageID: newUUID(),
 			Text: resumeText(s.LastTurnReason),
 		}, "system:resume")
