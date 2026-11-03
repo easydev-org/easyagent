@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"github.com/easydev-org/easyagent/store"
 )
@@ -110,6 +109,19 @@ func (r *Runtime) compactWithBudgets(ctx context.Context, tenant, session, reaso
 	if _, err := r.deps.DB.AppendMessageTip(tenant, session, id); err != nil {
 		return false, err
 	}
+	/**
+	 * THE SESSION LIST NEEDS A PREVIEW, AND A COMPACTION CHECKPOINT HAS NO TEXT TO MAKE ONE FROM.
+	 *
+	 * `persistSink` writes the preview from the step's TEXT parts, which is right for a normal turn and
+	 * wrong for this one: a checkpoint carries a `summary` part and nothing else, so the preview became
+	 * an EMPTY STRING — the conversation's row in the list went blank at the moment it was compacted,
+	 * which is the one moment a reader wants to know what happened.
+	 *
+	 * `CompactionPreview` has existed for this since checkpoints were added, and nothing ever wrote it:
+	 * the constant was declared, the console's `previewLabel` was written to recognise it, and the
+	 * sentinel never travelled. Setting it here is what closes that loop.
+	 */
+	_ = r.deps.DB.SetSessionPreview(tenant, session, CompactionPreview)
 	_ = emitBg(r.emitterFor(tenant, session), "compacted", map[string]any{"reason": reason})
 	return true, nil
 }
@@ -149,10 +161,4 @@ func foldEntries(msgs []store.Message, parts []store.Part) ([]FoldEntry, map[str
 		out = append(out, e)
 	}
 	return out, snippets
-}
-
-// IsCompactionPreview reports whether a session tip is a compaction checkpoint
-// (the client substitutes a localized label for the preview).
-func IsCompactionPreview(lastPreview string) bool {
-	return strings.TrimSpace(lastPreview) == CompactionPreview
 }
