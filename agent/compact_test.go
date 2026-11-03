@@ -55,6 +55,22 @@ func TestCompactSessionFoldsOlderTurns(t *testing.T) {
 	if summary == "" {
 		t.Fatal("checkpoint must carry a summary part")
 	}
+	/**
+	 * THE SESSION LIST STILL NEEDS A PREVIEW, AND THE CHECKPOINT HAS NO TEXT TO MAKE ONE FROM.
+	 *
+	 * `persistSink` writes the preview from a step's TEXT parts. A checkpoint carries a `summary` part
+	 * and nothing else, so the row went BLANK in the session list at the exact moment it was compacted.
+	 * `CompactionPreview` existed for this and nothing wrote it; the console's `previewLabel` was written
+	 * to recognise it. This is the loop being closed.
+	 */
+	sess, ok, _ := db.GetSession("t1", "s1")
+	if !ok {
+		t.Fatal("session vanished")
+	}
+	if sess.LastMessagePreview != CompactionPreview {
+		t.Fatalf("preview = %q, want the compaction sentinel %q — the list row would be blank",
+			sess.LastMessagePreview, CompactionPreview)
+	}
 	// The checkpoint never appears in the rebuilt model context.
 	msgs, _ := db.Chain("t1", tip, 0, "")
 	ids := make([]string, len(msgs))

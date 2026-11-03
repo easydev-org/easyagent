@@ -6,7 +6,6 @@ package media
 import (
 	"bytes"
 	"image"
-	"io"
 
 	"github.com/abema/go-mp4"
 	"github.com/disintegration/imaging"
@@ -120,22 +119,3 @@ func Mime(data []byte) string {
 	}
 	return "application/octet-stream"
 }
-
-// Thumbnail decodes + resizes an image to a bounded PNG (nil when not an image).
-func Thumbnail(data []byte, maxEdge int) []byte {
-	if maxEdge <= 0 {
-		maxEdge = 512
-	}
-	img, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
-	if err != nil {
-		return nil
-	}
-	thumb := imaging.Fit(img, maxEdge, maxEdge, imaging.Lanczos)
-	var buf bytes.Buffer
-	if err := imaging.Encode(&buf, thumb, imaging.PNG); err != nil {
-		return nil
-	}
-	return buf.Bytes()
-}
-
-var _ = io.Discard
