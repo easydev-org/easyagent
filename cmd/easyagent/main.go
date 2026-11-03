@@ -323,8 +323,14 @@ func run(cfgPath string) error {
 		hb := runtimeBus.NewHeartbeat(replicaID(cfg.NATS.ReplicaID))
 		hb.Start(ctx, runtimeBus)
 		defer hb.Stop()
-		stop, err := runtimeBus.ConsumeMailbox(ctx, func(m agentbus.MailboxMessage) error {
-			return rt.Wake(ctx, m.Tenant, m.SessionName)
+		// CONSUME WAKE, NOT MAILBOX. The runtime drains the queue itself, so it needs only the
+		// notification — and subscribing to the delivery subject is what made it race the bridge for
+		// the agent's own nudges.
+		//
+		// The wake body is empty by design, so the tenant and session come from the envelope the SDK
+		// resolved rather than from a payload.
+		stop, err := runtimeBus.ConsumeWake(ctx, func(tenant, session string) error {
+			return rt.Wake(ctx, tenant, session)
 		})
 		if err != nil {
 			return fmt.Errorf("mailbox consumer: %w", err)
