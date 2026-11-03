@@ -620,16 +620,45 @@ message TestProviderRequest {
   string api_type = 2;
   string base_url = 3;
   string api_key = 4;
+  // The model to exercise: a bare id or a `provider_id/model_id` reference. The server strips the
+  // prefix, because the gateway only knows the bare id.
   string model = 5;
   // Optional reasoning variant id to exercise in the test generation.
   string variant = 6;
-  // What the model under test generates: "text" (default). Only text models
-  // are testable today; image/video/speech are rejected with a clear message.
+  /**
+   * The modality to exercise: text | image | video | speech | transcription.
+   *
+   * EACH ONE HAS ITS OWN CALL, because a chat completion cannot test a TTS model. The server routes
+   * on this value; empty means text.
+   */
   string capability = 7;
+  // The prompt: a question for text, the prompt for image/video, the words for speech.
+  string prompt = 8;
+  // Recorded audio for transcription, base64. Ignored by the other modalities.
+  string audio = 9;
+  // The recording's media type, e.g. "audio/webm". Transcription only.
+  string audio_media_type = 10;
+  // Voice for speech synthesis: empty for a preset-voice model, or a `data:` URL for cloning.
+  string voice = 11;
 }
 message TestProviderResponse {
   bool ok = 1;
+  // Text the caller should show as-is: the reply, the transcript, or the error.
   string result = 2;
+  /**
+   * Produced media, for the modalities that generate a file rather than text.
+   *
+   * ONE LIST RATHER THAN ONE FIELD PER MODALITY: the caller renders whatever comes back by its
+   * `media_type`, which is also what makes an image-EDIT that returns several images work without a
+   * second shape.
+   */
+  repeated GeneratedFile files = 3;
+}
+
+// GeneratedFile is one produced artifact: an image, a clip, a spoken line.
+message GeneratedFile {
+  string media_type = 1;
+  bytes data = 2;
 }
 
 // ListModels returns the models of ONE provider. provider_id is required: the

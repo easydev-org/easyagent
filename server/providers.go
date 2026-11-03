@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 	"github.com/easydev-org/easyagent/agent"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
+	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
 )
 
@@ -107,10 +111,25 @@ func modelsToInfo(ms []*agentv1.ProviderModel) []*agentv1.ModelInfo {
 	return out
 }
 
-// TestProvider probes a provider's model with a trivial completion.
+// TestProvider exercises ONE model of ONE modality.
+//
+// SOMETHING IS SENT TO THE MODEL, because "the provider row is valid" is not the question anybody is
+// asking — the question is whether a call works right now. Which thing is sent depends on the
+// modality: a chat completion cannot test a TTS model, so each modality has its own call, and the
+// caller says which one it wants.
+//
+// THE MODEL ARRIVES AS A `provider_id/model_id` REFERENCE, and only the model id is the gateway's. The
+// console sends the canonical reference it stores — `gateway-text/tal-coding/deepseek-v4.1-flash` —
+// because that is what every other call in the system takes. Handing that straight to the gateway asks
+// it for a model named after our own provider id, which it does not have, and the answer is a 404 that
+// reads like the model is missing rather than the ref being unparsed.
 func (s *Server) TestProvider(ctx context.Context, req *agentv1.TestProviderRequest) (*agentv1.TestProviderResponse, error) {
 	tenant := tenantOf(ctx)
 	baseURL, apiKey := req.BaseUrl, req.ApiKey
+	capability := req.GetCapability()
+	if capability == "" {
+		capability = "text"
+	}
 	if req.ProviderId != "" {
 		if row, ok, _ := s.providerByID(tenant, req.ProviderId); ok {
 			if baseURL == "" {
@@ -119,16 +138,120 @@ func (s *Server) TestProvider(ctx context.Context, req *agentv1.TestProviderRequ
 			if apiKey == "" || apiKey == agent.MaskSecret(row.APIKey) {
 				apiKey = row.APIKey
 			}
+			if row.Capability != "" {
+				capability = row.Capability
+			}
 		}
 	}
 	if err := agent.ValidateAPIType(req.ApiType); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
 	}
-	res, err := agent.ProbeModel(ctx, baseURL, apiKey, req.Model)
+	cap, err := agent.ParseCapability(capability)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error())
+	}
+	// STRIP THE PROVIDER PREFIX. `ModelOf` returns the bare id when the ref parses and the ref itself
+	// when it does not, so a caller that already sent a bare id is unaffected.
+	model := agent.ModelOf(req.GetModel())
+	if model == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "model is required")
+	}
+	if baseURL == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "base_url is required")
+	}
+
+	c := llm.New(llm.ProviderCredentials{BaseURL: baseURL, APIKey: apiKey}, nil)
+	prompt := strings.TrimSpace(req.GetPrompt())
+
+	switch cap {
+	case agent.CapText:
+		if prompt == "" {
+			prompt = "Reply with exactly: OK"
+		}
+		text, err := agent.ProbeModel(ctx, baseURL, apiKey, model)
+		if err != nil {
+			return &agentv1.TestProviderResponse{Ok: false, Result: err.Error()}, nil
+		}
+		return &agentv1.TestProviderResponse{Ok: true, Result: text}, nil
+
+	case agent.CapImage:
+		if prompt == "" {
+			return invalidTest("the image probe needs a prompt")
+		}
+		// n=1: a test produces one image. Asking for several spends quota to prove the same thing.
+		files, err := c.GenerateImage(ctx, model, prompt, 1, "", nil)
+		return testFiles(files, err)
+
+	case agent.CapVideo:
+		if prompt == "" {
+			return invalidTest("the video probe needs a prompt")
+		}
+		files, err := c.GenerateVideo(ctx, model, map[string]any{
+			"prompt":   map[string]any{"text": prompt},
+			"n":        1,
+			"duration": 4,
+		})
+		return testFiles(files, err)
+
+	case agent.CapSpeech:
+		if prompt == "" {
+			return invalidTest("the speech probe needs some text to say")
+		}
+		f, err := c.GenerateSpeech(ctx, model, prompt, req.GetVoice(), "")
+		if err != nil {
+			return &agentv1.TestProviderResponse{Ok: false, Result: err.Error()}, nil
+		}
+		return fileResult(f, "speech synthesised"), nil
+
+	case agent.CapTranscription:
+		audio, derr := base64.StdEncoding.DecodeString(req.GetAudio())
+		if derr != nil || len(audio) == 0 {
+			return invalidTest("the transcription probe needs recorded audio")
+		}
+		mt := req.GetAudioMediaType()
+		if mt == "" {
+			mt = "audio/webm"
+		}
+		text, err := c.Transcribe(ctx, model, audio, mt)
+		if err != nil {
+			return &agentv1.TestProviderResponse{Ok: false, Result: err.Error()}, nil
+		}
+		return &agentv1.TestProviderResponse{Ok: true, Result: text}, nil
+	}
+
+	// embedding / rerank / realtime: the console does not offer them, so there is no probe shape for
+	// them either. Saying so is better than a generic failure a caller will retry.
+	return &agentv1.TestProviderResponse{
+		Ok:     false,
+		Result: fmt.Sprintf("there is no test interface for a %q provider", cap),
+	}, nil
+}
+
+func invalidTest(msg string) (*agentv1.TestProviderResponse, error) {
+	return &agentv1.TestProviderResponse{Ok: false, Result: msg}, nil
+}
+
+// testFiles turns a generated-file list into the response shape, or the error.
+func testFiles(files []llm.GeneratedFile, err error) (*agentv1.TestProviderResponse, error) {
 	if err != nil {
 		return &agentv1.TestProviderResponse{Ok: false, Result: err.Error()}, nil
 	}
-	return &agentv1.TestProviderResponse{Ok: true, Result: res}, nil
+	if len(files) == 0 {
+		return &agentv1.TestProviderResponse{Ok: false, Result: "the model returned nothing"}, nil
+	}
+	out := make([]*agentv1.GeneratedFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, &agentv1.GeneratedFile{MediaType: f.MediaType, Data: f.Data})
+	}
+	return &agentv1.TestProviderResponse{Ok: true, Files: out}, nil
+}
+
+func fileResult(f llm.GeneratedFile, ok string) *agentv1.TestProviderResponse {
+	return &agentv1.TestProviderResponse{
+		Ok:     true,
+		Result: ok,
+		Files:  []*agentv1.GeneratedFile{{MediaType: f.MediaType, Data: f.Data}},
+	}
 }
 
 func (s *Server) providerByID(tenant, id string) (store.Provider, bool, error) {
