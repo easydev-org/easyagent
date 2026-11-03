@@ -67,8 +67,6 @@ const (
 	AgentServiceListPermissionStatesProcedure = "/agent.v1.AgentService/ListPermissionStates"
 	// AgentServiceListDenialsProcedure is the procedure name of the AgentService's ListDenials RPC.
 	AgentServiceListDenialsProcedure = "/agent.v1.AgentService/ListDenials"
-	// AgentServiceListJobsProcedure is the procedure name of the AgentService's ListJobs RPC.
-	AgentServiceListJobsProcedure = "/agent.v1.AgentService/ListJobs"
 	// AgentServiceCreateGrantProcedure is the procedure name of the AgentService's CreateGrant RPC.
 	AgentServiceCreateGrantProcedure = "/agent.v1.AgentService/CreateGrant"
 	// AgentServiceRevokeGrantProcedure is the procedure name of the AgentService's RevokeGrant RPC.
@@ -314,13 +312,6 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListDenials"),
 			Procedure:  AgentServiceListDenialsProcedure,
-		}
-	})
-	agentServiceListJobsSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListJobs"),
-			Procedure:  AgentServiceListJobsProcedure,
 		}
 	})
 	agentServiceCreateGrantSpec = sync.OnceValue(func() connect.Spec {
@@ -623,18 +614,6 @@ type AgentServiceClient interface {
 	// IT IS A REMINDER, NOT A LOG: entries aggregate by capability, and they expire after a day. A list
 	// that keeps complaining about something already granted teaches the reader that it is noise.
 	ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error)
-	//*
-	// ListJobs reports the background jobs a conversation started.
-	//
-	// A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
-	// answer from a tool result. This is how a page shows what is still running — and how a reader sees
-	// what finished while they were looking elsewhere.
-	//
-	// THE LIST IS NOT THE TRUTH ABOUT THE WORK: it is a cache every extension writes to, and a job
-	// whose owner stopped renewing is recorded as `lost` by a sweeper rather than reported as running
-	// forever. `cancel_mode` says whether the action is worth offering at all — `kill` ends a process,
-	// `request` only asks a remote system, and empty means there is nothing to stop.
-	ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error)
 	CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error)
 	RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error)
 	// ListPermissionDecls publishes what the discovered extensions can require.
@@ -823,18 +802,6 @@ type AgentServiceHandler interface {
 	// IT IS A REMINDER, NOT A LOG: entries aggregate by capability, and they expire after a day. A list
 	// that keeps complaining about something already granted teaches the reader that it is noise.
 	ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error)
-	//*
-	// ListJobs reports the background jobs a conversation started.
-	//
-	// A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
-	// answer from a tool result. This is how a page shows what is still running — and how a reader sees
-	// what finished while they were looking elsewhere.
-	//
-	// THE LIST IS NOT THE TRUTH ABOUT THE WORK: it is a cache every extension writes to, and a job
-	// whose owner stopped renewing is recorded as `lost` by a sweeper rather than reported as running
-	// forever. `cancel_mode` says whether the action is worth offering at all — `kill` ends a process,
-	// `request` only asks a remote system, and empty means there is nothing to stop.
-	ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error)
 	CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error)
 	RevokeGrant(context.Context, *v1.RevokeGrantRequest) (*v1.RevokeGrantResponse, error)
 	// ListPermissionDecls publishes what the discovered extensions can require.
@@ -910,7 +877,6 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceListGrantsSpec(), Handler: adapter.listGrants},
 		connect.Method{Spec: agentServiceListPermissionStatesSpec(), Handler: adapter.listPermissionStates},
 		connect.Method{Spec: agentServiceListDenialsSpec(), Handler: adapter.listDenials},
-		connect.Method{Spec: agentServiceListJobsSpec(), Handler: adapter.listJobs},
 		connect.Method{Spec: agentServiceCreateGrantSpec(), Handler: adapter.createGrant},
 		connect.Method{Spec: agentServiceRevokeGrantSpec(), Handler: adapter.revokeGrant},
 		connect.Method{Spec: agentServiceListPermissionDeclsSpec(), Handler: adapter.listPermissionDecls},
@@ -1086,10 +1052,6 @@ func (UnimplementedAgentServiceHandler) ListPermissionStates(context.Context, *v
 
 func (UnimplementedAgentServiceHandler) ListDenials(context.Context, *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListDenials is not implemented")
-}
-
-func (UnimplementedAgentServiceHandler) ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListJobs is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) CreateGrant(context.Context, *v1.CreateGrantRequest) (*v1.CreateGrantResponse, error) {
@@ -1379,14 +1341,6 @@ func (c *agentServiceClient) ListPermissionStates(ctx context.Context, req *v1.L
 func (c *agentServiceClient) ListDenials(ctx context.Context, req *v1.ListDenialsRequest) (*v1.ListDenialsResponse, error) {
 	var res v1.ListDenialsResponse
 	if err := c.client.CallUnary(ctx, agentServiceListDenialsSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *agentServiceClient) ListJobs(ctx context.Context, req *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
-	var res v1.ListJobsResponse
-	if err := c.client.CallUnary(ctx, agentServiceListJobsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1880,18 +1834,6 @@ func (h agentServiceHandler) listDenials(ctx context.Context, _ connect.Spec, st
 		return err
 	}
 	res, err := h.svc.ListDenials(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h agentServiceHandler) listJobs(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.ListJobsRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.ListJobs(ctx, &req)
 	if err != nil {
 		return err
 	}

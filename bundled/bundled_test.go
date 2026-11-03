@@ -52,7 +52,6 @@ func (d *stubDeps) TodosReplace(string, string, []TodoRow) error   { return nil 
 
 // NO JOBS IN THE STUB. A test that needs them sets jobs; the default is the ordinary case, which
 // is a conversation that started none.
-func (d *stubDeps) JobsInSession(string, string) ([]JobRow, error) { return nil, nil }
 
 func TestManifestToolsAndNoTimeWait(t *testing.T) {
 	m, err := ParseManifest()
