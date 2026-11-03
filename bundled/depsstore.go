@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -31,18 +30,6 @@ type StoreDeps struct {
 	MailFn func(tenant, session, typ string, payload any, source string) error
 	// OnIngest is called after a generated blob is stored (e.g. media probe).
 	OnIngestFn func(ctx context.Context, tenant, code, name, mime string, data []byte)
-	/**
-	 * JobsFn reads the shared job list for one conversation.
-	 *
-	 * A FUNCTION RATHER THAN A BUS FIELD, because the bus is not always there: the bundled
-	 * extension is constructed before it (it needs this struct to build its tools), and a
-	 * deployment without a runtime bus still has to answer "no jobs" instead of panicking.
-	 *
-	 * NIL MEANS NO JOB SUPPORT. The two job tools then report that the list is unavailable rather
-	 * than returning an empty list, which would read as "this conversation started nothing" even
-	 * when it did.
-	 */
-	JobsFn func(tenant, session string) ([]JobRow, error)
 }
 
 // SessionVariable implements Deps.
@@ -249,23 +236,6 @@ func (d *StoreDeps) MessageParts(tenant string, ids []string) []MessagePartRow {
 func (d *StoreDeps) TodosReplace(tenant, sid string, rows []TodoRow) error {
 	return d.DB.TodosReplace(tenant, sid, toStoreTodos(rows))
 }
-
-/**
- * JobsInSession implements Deps.
- *
- * A NIL FUNCTION IS NOT AN EMPTY LIST. "This deployment cannot see jobs" and "this conversation
- * started none" look identical to a caller reading a slice, and the first one is a
- * misconfiguration worth reporting. Returning an error lets the tools say so.
- */
-func (d *StoreDeps) JobsInSession(tenant, session string) ([]JobRow, error) {
-	if d.JobsFn == nil {
-		return nil, errNoJobSource
-	}
-	return d.JobsFn(tenant, session)
-}
-
-// errNoJobSource says the deployment has no job list wired, rather than pretending it is empty.
-var errNoJobSource = errors.New("background jobs are not available in this deployment")
 
 func toStoreTodos(rows []TodoRow) []struct {
 	Content  string

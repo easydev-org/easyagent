@@ -468,41 +468,6 @@ message Denial {
   int32 count = 6;
 }
 
-message ListJobsRequest {
-  // The conversation whose jobs to report. A job belongs to the session that started it — the
-  // worker address lives in the extension, but the QUESTION "what did I start" belongs here.
-  string id = 1;
-}
-message ListJobsResponse { repeated Job jobs = 1; }
-
-/**
- * Job is one background job, as the shared list reports it.
- *
- * NO OUTPUT FIELD. A job's output lives where the work ran, and reading it is that extension's own
- * tool — `sandbox-job-output`, `gh-run-log`. Carrying bytes here would duplicate the tool-output
- * stream and would need a truncation policy beside the one the agent already applies.
- */
-message Job {
-  string id = 1;
-  // The extension's word for the kind of work: "sandbox-job", "ci-run".
-  string kind = 2;
-  string title = 3;
-  // running | done | cancelled | lost
-  //
-  // NO "failed": a job that exited 1 is `done` with exit_code 1. The state says why it stopped; the
-  // code says what the ending was worth, and only the caller knows what it wanted.
-  string state = 4;
-  // Absent while running, and absent for a cancelled or lost job — neither produced one.
-  optional int32 exit_code = 5;
-  // Unix milliseconds.
-  int64 started_at = 6;
-  int64 finished_at = 7;
-  // "kill" ends a process this extension owns; "request" only asks a remote system, which may finish
-  // its current step first; empty means there is nothing to cancel.
-  string cancel_mode = 8;
-  // Explains a terminal state that needs one — why it was lost, or what the ending was.
-  string reason = 9;
-}
 
 message CreateGrantRequest {
   string id = 1;           // session name
@@ -899,19 +864,6 @@ service AgentService {
    */
   rpc ListDenials(ListDenialsRequest) returns (ListDenialsResponse);
 
-  /**
-   * ListJobs reports the background jobs a conversation started.
-   *
-   * A JOB OUTLIVES THE CALL THAT STARTED IT, so there is no moment at which the caller can read the
-   * answer from a tool result. This is how a page shows what is still running — and how a reader sees
-   * what finished while they were looking elsewhere.
-   *
-   * THE LIST IS NOT THE TRUTH ABOUT THE WORK: it is a cache every extension writes to, and a job
-   * whose owner stopped renewing is recorded as `lost` by a sweeper rather than reported as running
-   * forever. `cancel_mode` says whether the action is worth offering at all — `kill` ends a process,
-   * `request` only asks a remote system, and empty means there is nothing to stop.
-   */
-  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
   rpc CreateGrant(CreateGrantRequest) returns (CreateGrantResponse);
   rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
   // ListPermissionDecls publishes what the discovered extensions can require.
