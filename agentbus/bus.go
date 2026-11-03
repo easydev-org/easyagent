@@ -855,9 +855,21 @@ type MailboxMessage struct {
 	Source      string
 }
 
-// ConsumeMailbox subscribes to the durable mailbox stream and invokes handler
-// for each message (exactly-once per replica via the durable consumer + queue
-// group). Returns a stop function.
+// ConsumeWake subscribes to the wake stream and runs the handler per notification.
+//
+// WAKE, NOT MAILBOX. The runtime drains the queue itself; it never needs the message bodies, and
+// subscribing to the delivery subject is what made it — and the bridge — race for the same publishes.
+//
+// THE ADDRESS IS STILL PASSED THROUGH even though the body is empty: who a wake is FOR is not in the
+// payload, it is in the envelope, and a consumer cannot drain without knowing which session to drain.
+func (b *Bus) ConsumeWake(ctx context.Context, handler func(tenant, session string) error) (func(), error) {
+	return b.agent.ConsumeWake(ctx, func(m abcagent.MailboxMessageResolved) error {
+		return handler(m.Tenant, m.SessionName)
+	}, 1000)
+}
+
+// ConsumeMailbox subscribes to the DELIVERY stream — message bodies included — for consumers that need
+// them. The agent's own runtime does not: it drains. See ConsumeWake.
 func (b *Bus) ConsumeMailbox(ctx context.Context, handler func(MailboxMessage) error) (func(), error) {
 	return b.agent.ConsumeMailbox(ctx, func(m abcagent.MailboxMessageResolved) error {
 		return handler(MailboxMessage{
@@ -867,22 +879,22 @@ func (b *Bus) ConsumeMailbox(ctx context.Context, handler func(MailboxMessage) e
 	}, 1000)
 }
 
-// PublishMailbox delivers one mailbox message to a session. THE single entry point.
+// PublishMailbox puts one message in the durable queue and nudges the replicas. THE single entry point.
 //
 // A mailbox message has to exist in TWO places, and they are not interchangeable:
 //
-//   - the DATABASE is the execution queue. `Wake` drains it, and a drained row is what a turn
-//     actually reads. Anything not in the table is, to the runtime, a message that never arrived.
-//   - NATS is the WAKE SIGNAL. The database alone would sit there unread until something nudged
-//     a runtime, and the nudge has to reach whichever replica ends up holding the lease.
+//   - the QUEUE is the work. `Wake` drains it, and a drained row is what a turn actually reads.
+//   - the WAKE is a signal. The queue alone would sit unread until something nudged a runtime, and the
+//     nudge has to reach whichever replica ends up holding the lease.
 //
-// They drifted apart once, with exactly that consequence: the channel distributor called the
-// NATS-only path, so a channel event reached the mailbox stream, a consumer acked it, `Wake` ran,
-// found an empty table, and returned. Routing said `matches=2` and no session ever woke.
+// THE NUDGE GOES TO A DIFFERENT SUBJECT THAN DELIVERY, and that is the fix for a duplication that lasted
+// long enough to look like normal behaviour. It used to publish on `mailbox.<session>`, the same subject
+// the bridge watches to turn EXTENSION messages into queue rows — so the bridge saw the agent's own nudge
+// and enqueued it a second time. Every prompt was written twice; both copies were complete, so nothing
+// looked wrong until the payload itself broke and the duplicate arrived as an empty message.
 //
-// So both happen here, in this order: enqueue first (durable), then signal. If the signal is lost
-// the row is still there and the boot backstop drains it; the reverse order would signal a wake
-// for a message that is not yet readable.
+// The order stays: enqueue first, then signal. If the signal is lost the row is still there and the boot
+// backstop drains it; the reverse order would signal a wake for a message that is not yet readable.
 func (b *Bus) PublishMailbox(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
 	if b.db == nil {
 		// Refusing is deliberate. Falling through to signal-only would look like success from
@@ -892,7 +904,7 @@ func (b *Bus) PublishMailbox(ctx context.Context, tenant, session string, typ ma
 	if _, err := b.db.Enqueue(ctx, tenant, session, "", typ, payload, source); err != nil {
 		return fmt.Errorf("enqueue mailbox: %w", err)
 	}
-	return b.agent.PublishMailbox(ctx, tenant, session, string(typ), payload, source)
+	return b.agent.PublishWake(ctx, tenant, session)
 }
 
 // PublishLifecycle broadcasts a session lifecycle event (`created` / `forked` /
