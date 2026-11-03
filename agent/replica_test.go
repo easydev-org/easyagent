@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/easydev-org/easyagent/llm"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // slowV4 streams a text delta then blocks until the request context is
@@ -71,7 +71,7 @@ func TestLeaseLossAbortsTurn(t *testing.T) {
 	lease.lostAt.Store(0) // lose on the FIRST renew
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: lease, LeaseTTL: 30 * time.Millisecond, Emit: &recorder{},
 		Presets: stubPresets{},
 	})
@@ -110,7 +110,7 @@ func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
 	}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), InterruptWatch: watch, Emit: &recorder{},
 		Presets: stubPresets{},
 	})
@@ -147,7 +147,7 @@ func TestDrainLoopChainsWithoutReleasingLease(t *testing.T) {
 	lease := NewMemoryLease()
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: lease, Emit: &recorder{}, MaxTurns: 2, Presets: stubPresets{},
 	})
 	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
@@ -176,7 +176,7 @@ func TestRecoverOnBootWakesPending(t *testing.T) {
 	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "left over"}, "user")
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: &recorder{}, Presets: stubPresets{},
 	})
 	rt.RecoverOnBoot(context.Background())

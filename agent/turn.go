@@ -255,7 +255,7 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 					// client to fall back between field names and hope.
 					"toolCallId": ev.ToolCall.ID, "id": ev.ToolCall.ID,
 					"toolName": ev.ToolCall.Name,
-					"input": input, "message_id": stepID, "run_id": in.RunID,
+					"input":    input, "message_id": stepID, "run_id": in.RunID,
 				})
 			case llm.EventToolInputStart:
 				_ = emit(ctx, deps.Emit, "tool-input-start", map[string]any{

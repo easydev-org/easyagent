@@ -146,7 +146,6 @@ func TestForkBaseSkipsUserPrompt(t *testing.T) {
 	}
 }
 
-
 func TestProviderShadowing(t *testing.T) {
 	d := newTestDB(t)
 	if err := d.UpsertProvider(Provider{Tenant: "global", ProviderID: "gw", BaseURL: "https://global"}); err != nil {

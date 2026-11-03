@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/llm"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // TestProactiveCompactionAtThreshold verifies that when the estimated context
@@ -75,7 +75,7 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 		// A tiny window so 90% is crossed immediately.
 		ContextLimit: 500, CompactAtFraction: 0.9,
@@ -126,7 +126,7 @@ func TestNoProactiveCompactionWithoutLimit(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{}, // no ContextLimit
 	})
 	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
@@ -181,7 +181,7 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 		// No window limit; only the absolute force threshold applies.
 		ForceCompactTokens: 100,

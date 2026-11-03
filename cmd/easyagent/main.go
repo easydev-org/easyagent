@@ -23,17 +23,17 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/agentbus"
 	"github.com/easydev-org/easyagent/blob"
 	"github.com/easydev-org/easyagent/bundled"
-	"github.com/easydev-org/easyagent/agentbus"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/media"
 	"github.com/easydev-org/easyagent/server"
 	"github.com/easydev-org/easyagent/store"
+	sdkbus "github.com/easydev-org/easybus-sdk/bus"
 	"github.com/easydev-org/easybus-sdk/denial"
 	"github.com/easydev-org/easybus-sdk/job"
-	sdkbus "github.com/easydev-org/easybus-sdk/bus"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 func main() {
@@ -206,7 +206,7 @@ func run(cfgPath string) error {
 					ID: j.ID, Kind: j.Kind, Title: j.Title, State: string(j.State),
 					ExitCode: j.ExitCode, StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
 					CancelMode: string(j.CancelMode),
-					Reason: j.Reason,
+					Reason:     j.Reason,
 				})
 			}
 			return rows, nil

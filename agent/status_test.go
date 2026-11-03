@@ -30,7 +30,7 @@ func TestStatusBusyIdleAndPreview(t *testing.T) {
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 	})
 	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")

@@ -11,11 +11,11 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 
 	"github.com/easydev-org/easyagent/agent"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easyagent/llm"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 const adminToken = "admin-secret"

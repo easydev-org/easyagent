@@ -2,11 +2,11 @@ package bundled
 
 import (
 	"context"
-	"errors"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 

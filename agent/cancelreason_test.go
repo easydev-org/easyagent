@@ -46,7 +46,7 @@ func newCancelRuntime(t *testing.T, srvURL string) (*Runtime, *store.DB, *mailbo
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srvURL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srvURL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
@@ -105,7 +105,7 @@ func TestNormalTurnRecordsStop(t *testing.T) {
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
@@ -132,7 +132,7 @@ func TestLengthFinishRecordsReason(t *testing.T) {
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Tools: &stubTools{}, Emit: &recorder{}, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})

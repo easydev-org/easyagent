@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/easydev-org/easyagent/llm"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	"github.com/easydev-org/easyagent/store"
+	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 func TestTurnRecoversFromContextOverflow(t *testing.T) {
@@ -56,7 +56,7 @@ func TestTurnRecoversFromContextOverflow(t *testing.T) {
 
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
+		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: &recorder{}, MaxTurns: 3, Presets: stubPresets{},
 	})
 	// Force compaction to actually fold by shrinking the tail budget.
