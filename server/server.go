@@ -14,9 +14,9 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/agentbus"
 	"github.com/easydev-org/easyagent/blob"
 	"github.com/easydev-org/easyagent/bundled"
-	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easyagent/store"

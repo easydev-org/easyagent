@@ -39,7 +39,7 @@ type FileRef struct {
 
 // RuntimeDeps are the session runtime's collaborators.
 type RuntimeDeps struct {
-	DB       *store.DB
+	DB *store.DB
 	/**
 	 * Mailbox is the durable delivery queue.
 	 *
@@ -51,7 +51,7 @@ type RuntimeDeps struct {
 	 * IT IS AN INTERFACE, not the concrete queue, so a test can hand in a fixed batch — draining is the
 	 * one runtime input that arrives from outside the process.
 	 */
-	Mailbox MailboxQueue
+	Mailbox  MailboxQueue
 	Client   *llm.Client
 	Resolver ProviderResolver
 	Lease    Lease

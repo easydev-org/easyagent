@@ -22,14 +22,14 @@ import (
  * owns the job, which is a cross-process call these tools do not make.
  */
 type JobRow struct {
-	ID       string
-	Kind     string
-	Title    string
-	State    string
-	ExitCode *int
-	StartedAt int64
+	ID         string
+	Kind       string
+	Title      string
+	State      string
+	ExitCode   *int
+	StartedAt  int64
 	FinishedAt int64
-	Reason   string
+	Reason     string
 	// CancelMode is how this job can be stopped: "kill", "request", or "" for neither.
 	CancelMode string
 }
@@ -82,7 +82,7 @@ func (e *Extension) jobList(_ context.Context, tenant, session string, args map[
 		return agent.ToolOutcome{Content: "No background jobs in this conversation."}, nil
 	}
 	return agent.ToolOutcome{
-		Content: renderJobList(rows),
+		Content:  renderJobList(rows),
 		Metadata: map[string]any{"jobs": rows},
 	}, nil
 }
@@ -117,7 +117,7 @@ func (e *Extension) jobWait(ctx context.Context, tenant, session string, args ma
 		}
 		if row.Terminal() {
 			return agent.ToolOutcome{
-				Content: renderJobRow(row),
+				Content:  renderJobRow(row),
 				Metadata: map[string]any{"job": row},
 			}, nil
 		}

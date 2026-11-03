@@ -69,8 +69,6 @@ type Part struct {
 
 func (Part) TableName() string { return "parts" }
 
-
-
 // Provider is a registered model provider. A provider serves EXACTLY ONE
 // capability (modality); a host serving several registers one row per modality.
 type Provider struct {

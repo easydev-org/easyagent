@@ -63,7 +63,7 @@ func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 	presets.SeedSystem("t1", PresetRow{ID: "default", SystemPrompt: "sys", IsSystem: true})
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
-		DB: db, Client: client, Lease: NewMemoryLease(),
+		DB:      db, Client: client, Lease: NewMemoryLease(),
 		Tools: &stubTools{}, Emit: rec, MaxTurns: 3,
 		Presets: PresetStore{P: presets}, Config: ConfigStore{C: NewConfig(kv)},
 	})
