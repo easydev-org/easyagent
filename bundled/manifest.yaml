@@ -338,6 +338,41 @@ tools:
       required: [code]
     required_config: [model.transcription]
 
+  # ---- web-search ----
+  - name: web-search
+    description: >-
+      Search the web and return titles, URLs and excerpts. Use this for current information beyond
+      your knowledge cutoff. The current year is 2026; use this year when searching for recent
+      information or current events.
+      Several backends are tried in order and the response names which one answered; if a backend
+      failed, the result says so — a partially covered search is reported as partial rather than
+      presented as complete.
+    descriptions:
+      zh: >-
+        搜索网页并返回标题、URL 与摘要。用于获取超出知识截止时间的最新信息。当前年份为 2026，搜索近期信息或
+        时事时请使用此年份。
+        会按顺序尝试多个后端，并在结果中说明实际使用了哪一个；若有后端失败，结果会写明——覆盖不完整的搜索会被
+        明确告知，而不是伪装成完整结果。
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The search query. Keep it short (3-8 words); use `site:example.com` to narrow.
+          descriptions:
+            zh: 搜索查询。保持简短（3-8 个词）；可用 `site:example.com` 限定域名。
+        count:
+          type: integer
+          description: Maximum number of results to return (default 8, max 20).
+          descriptions:
+            zh: 最多返回的结果数（默认 8，上限 20）。
+        timeout:
+          type: number
+          description: Per-request timeout in seconds (default 25, minimum 5).
+          descriptions:
+            zh: 单次请求超时秒数（默认 25，最小 5）。
+      required: [query]
+
   # ---- web-fetch ----
   - name: web-fetch
     description: >-
@@ -600,6 +635,19 @@ tools:
       required: [to, text]
 
 config:
+  - name: search_provider
+    description: >-
+      Pin one web-search backend instead of trying them in order. Leave empty to use the first that
+      answers. A pinned backend that fails is an ERROR, not a silent fallback: a caller that asked for
+      a specific source wants to know it did not answer.
+    descriptions:
+      zh: >-
+        固定使用某一个 web-search 后端，而不是按顺序尝试。留空则使用第一个可用的。固定后端失败会明确报错，
+        不会静默回退：调用方指定了来源，就该知道它没有响应。
+    type: string
+    scope: global
+    default: ''
+    enum_values: [parallel, tavily, exa, firecrawl]
   # Model-reference knobs. `kind: model` + `capability` let the UI render a
   # picker scoped to the registered modality instead of a free-form text field
   # (no variable-name heuristics). Each knob resolves at runtime via
