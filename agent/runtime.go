@@ -21,8 +21,13 @@ import (
 var WakeTypes = []mailbox.Type{mailbox.Trigger, mailbox.Compact}
 
 // WakePayload is a mailbox message body.
+//
+// THERE IS NO `Type` FIELD, and it is worth saying why rather than leaving a blank: the queue's own
+// `Message.Type` says what the message asks for, and a copy of it inside the body was written by two
+// producers and read by NOTHING. Two fields for one fact is a chance for them to disagree, and the
+// losing half of that disagreement is silent — a trigger whose body claims a different type would be
+// dispatched by the queue's field anyway.
 type WakePayload struct {
-	Type        string    `json:"type"`
 	MessageID   string    `json:"message_id"`
 	Text        string    `json:"text"`
 	Attachments []FileRef `json:"attachments,omitempty"`
@@ -77,6 +82,9 @@ type RuntimeDeps struct {
 	ExtensionAllowlist func(tenant string) []string
 	// ToolTimeout bounds each tool call (0 = none).
 	ToolTimeout time.Duration
+	// ToolInterrupt cancels a running tool in the process executing it, so a timeout stops the
+	// WORK rather than only the waiting. Optional; see the field on turn.Deps.
+	ToolInterrupt func(ctx context.Context, tenant, session, toolName string)
 	// CompactAtFraction overrides the proactive-compaction threshold (0 = 0.9).
 	CompactAtFraction float64
 	// ContextLimit overrides the model's context window (0 = derive from the
@@ -265,7 +273,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 			break
 		}
 		slog.Info("wake draining", "tenant", tenant, "session", session, "messages", len(items))
-		if !r.handleBatch(runCtx, tenant, session, items, cancel) {
+		if !r.handleBatch(runCtx, tenant, session, items) {
 			break
 		}
 	}
@@ -291,7 +299,7 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 	runCtx2, cancel2 := context.WithCancel(ctx)
 	r.setActive(tenant, session, cancel2)
 	defer r.clearActive(tenant, session)
-	_ = r.handleBatch(runCtx2, tenant, session, items, cancel2)
+	_ = r.handleBatch(runCtx2, tenant, session, items)
 	r.releaseIfHeld(ctx, tenant, session, false)
 	cancel2()
 	return nil
@@ -310,8 +318,28 @@ func (r *Runtime) releaseIfHeld(ctx context.Context, tenant, session string, los
 
 // handleBatch folds the drained batch and runs a turn when it carried a
 // trigger. Returns true when the busy period should continue draining.
-func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items []mailbox.Message, cancel context.CancelFunc) bool {
+//
+// A STALE INTERRUPT MUST NOT KILL A TURN THAT HAS NOT STARTED. The interrupt case below cancels
+// `cancel`, which is the BUSY PERIOD's context — and the turn uses that same context. So an
+// interrupt that was queued while the session sat idle (the user pressed Stop with nothing running,
+// which the server enqueues durably) is drained FIRST, because drain is oldest-first, and cancels
+// the busy period before the trigger that arrived with it is ever looked at. The trigger is then
+// folded and dropped by the `ctx.Err() != nil` check below: the message is accepted, acked, written
+// to the transcript, and no turn runs.
+//
+// The test is on TIME, not on order, because order alone cannot tell the two intents apart: a user
+// who presses Stop and then types has a real interrupt followed by a real prompt, and that pair MUST
+// cancel. What is stale is an interrupt that predates the newest trigger in the same batch — it was
+// aimed at a turn that is no longer running.
+func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items []mailbox.Message) bool {
 	hasTrigger := false
+	// newestTrigger is the newest trigger's timestamp; interrupts older than it are stale.
+	var newestTrigger int64
+	for _, it := range items {
+		if it.Type == mailbox.Trigger && it.CreatedAt > newestTrigger {
+			newestTrigger = it.CreatedAt
+		}
+	}
 	for _, it := range items {
 		/**
 		 * WHAT THE BATCH ACTUALLY CONTAINS, at the level the dispatch reads. The drain's own log
@@ -320,7 +348,7 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 		 */
 		slog.Info("batch item", "tenant", tenant, "session", session, "msg", it.ID, "type", it.Type)
 		switch it.Type {
-		case "trigger": // WakePayload.Type is the WIRE word, not the queue's Type
+		case mailbox.Trigger:
 			hasTrigger = true
 			if err := r.foldUserMessage(tenant, session, it); err != nil {
 				// LOGGED, BECAUSE RETURNING FALSE HERE ENDS THE BUSY PERIOD SILENTLY. The drain
@@ -330,9 +358,16 @@ func (r *Runtime) handleBatch(ctx context.Context, tenant, session string, items
 					"msg", it.ID, "type", it.Type, "err", err)
 				return false
 			}
-		case "interrupt":
+		case mailbox.Interrupt:
+			if newestTrigger > 0 && it.CreatedAt < newestTrigger {
+				// AIMED AT A TURN THAT ALREADY ENDED. Dropping it is the only answer that does
+				// not also discard the prompt it was drained alongside.
+				slog.Info("ignoring a stale interrupt", "tenant", tenant, "session", session,
+					"msg", it.ID, "interrupt_at", it.CreatedAt, "trigger_at", newestTrigger)
+				continue
+			}
 			r.markCancel(tenant, session, "interrupted")
-		case "compact":
+		case mailbox.Compact:
 			if _, err := r.CompactSession(context.WithoutCancel(ctx), tenant, session, "manual"); err != nil {
 				slog.Warn("compact failed", "tenant", tenant, "session", session, "err", err)
 				return false
@@ -606,8 +641,9 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		// Relay a tool's in-flight progress onto the session's durable event
 		// stream. The frames reach clients (and replay on reconnect) but never
 		// enter the model's context — see relayProgress in turn.go.
-		ToolProgress: r.deps.ToolProgress,
-		ToolTimeout:  r.deps.ToolTimeout,
+		ToolProgress:  r.deps.ToolProgress,
+		ToolTimeout:   r.deps.ToolTimeout,
+		ToolInterrupt: r.deps.ToolInterrupt,
 		// The agent's own prose (the "output omitted" marker in a trimmed result)
 		// follows the same locale the tools and the env block already use.
 		Locale:             plan.Locale,

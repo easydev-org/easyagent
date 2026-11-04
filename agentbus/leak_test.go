@@ -88,7 +88,7 @@ func TestNoConsumerLeakAcrossSessionSubscriptions(t *testing.T) {
 		if _, stop, err := b.WatchInterrupts(ctx, "t1", "s1"); err == nil {
 			stop()
 		}
-		if _, cancel, err := b.SubscribeSessionEvents(ctx, "t1", "s1", 0); err == nil {
+		if _, cancel, err := b.SubscribeSessionEvents(ctx, "t1", "s1", 0, 0); err == nil {
 			cancel()
 		}
 	}

@@ -78,6 +78,19 @@ type Deps struct {
 	// ToolTimeout bounds each tool call (0 = none). On timeout the tool yields an
 	// error-content result so the model can recover instead of the turn hanging.
 	ToolTimeout time.Duration
+	/**
+	 * ToolInterrupt cancels a RUNNING tool in the process that is executing it.
+	 *
+	 * A TIMEOUT ONLY STOPS WAITING. The agent's context expiring unblocks this side and nothing
+	 * else: an out-of-process tool is a request over the bus, so its handler keeps running — a
+	 * browser automation script, a build, a `sleep` — with nothing left to read its output. The
+	 * result is work that costs resources indefinitely and a UI that says "timeout" while the
+	 * thing it timed out on is still going.
+	 *
+	 * Injected rather than called from here because reaching an extension needs the bus, and this
+	 * package has none. nil disables it: a deployment without one behaves exactly as before.
+	 */
+	ToolInterrupt func(ctx context.Context, tenant, session, toolName string)
 	// SystemTokens is the estimated cost of the system prompt (counted toward the
 	// proactive-compaction budget).
 	SystemTokens int
@@ -466,6 +479,13 @@ func execTool(ctx context.Context, deps Deps, in Input, name, callID, stepID, ar
 			state := "timeout"
 			if ctx.Err() != nil {
 				state = "cancelled"
+				// A CANCELLED TURN IS STOPPING EVERYTHING, not just this call. Tell the extension
+				// too: it owns the process, and "the model stopped reading" is not a reason for a
+				// container to keep burning CPU.
+				// A TIMEOUT IS NOT CANCELLATION AND IS NOT SIGNALLED HERE — a tool that ran out of
+				// budget may be mid-effect (a push, a file write), and killing it at the deadline
+				// converts "slow" into "half done". The caller decides; see the timeout path below.
+				toolInterrupt(deps, in, name)
 			}
 			stream.Close(state)
 			// Same size policy as a normal result: an interrupted tool's output is
@@ -649,6 +669,24 @@ func relayInto(ctx context.Context, deps Deps, in Input, callID, stepID, toolNam
 			<-done
 		})
 	}
+}
+
+/**
+ * toolInterrupt tells the extension to stop the tool it is running.
+ *
+ * IT PASSES THE TOOL NAME, NOT AN EXTENSION ID, because this package cannot derive one: a bundled
+ * tool (`todo-write`) and an extension tool (`sandbox-job-start`) are both `word-word`, and
+ * splitting on the first hyphen guesses wrong for one of them. The executor knows which extension
+ * owns which tool, so the lookup belongs there.
+ *
+ * BEST-EFFORT ON PURPOSE. The turn is already ending; failing to signal must not turn "the user
+ * stopped this" into an error they have to deal with.
+ */
+func toolInterrupt(deps Deps, in Input, toolName string) {
+	if deps.ToolInterrupt == nil {
+		return
+	}
+	deps.ToolInterrupt(context.WithoutCancel(context.Background()), in.Tenant, in.Session, toolName)
 }
 
 // resolveToolName maps a model-emitted tool name onto an offered tool: an exact

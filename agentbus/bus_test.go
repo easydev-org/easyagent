@@ -102,7 +102,7 @@ func TestSessionEventsPublishSubscribe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ch, stop, err := b.SubscribeSessionEvents(ctx, "t1", "s1", 0)
+	ch, stop, err := b.SubscribeSessionEvents(ctx, "t1", "s1", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -50,4 +50,16 @@ type MailboxQueue interface {
 	SessionsWithPending(ctx context.Context, types []mailbox.Type) ([]struct{ Tenant, SessionName string }, error)
 	// HasInterrupt reports whether an interrupt is waiting.
 	HasInterrupt(ctx context.Context, tenant, session string) (bool, error)
+	/**
+	 * Watch streams this session's queue entries while a turn is running.
+	 *
+	 * IT IS NOT `Drain` IN A LOOP, and that distinction is the whole point: a cancel has to reach a
+	 * turn that is ALREADY running. Draining answers "what is waiting now" — one wake too late for an
+	 * interrupt, because by the time the next drain happens the turn it was meant to stop has
+	 * finished. This is what makes `Interrupt` work across replicas.
+	 *
+	 * A NIL IMPLEMENTATION IS VALID: a deployment without a watchable queue simply cannot be
+	 * interrupted from another replica, which is what it could not do before either.
+	 */
+	Watch(ctx context.Context, tenant, session string) (<-chan mailbox.Message, func(), error)
 }
