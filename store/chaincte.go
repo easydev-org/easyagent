@@ -15,11 +15,18 @@ type chainNode struct {
 	Source    string  `gorm:"column:source"`
 	CreatedAt string  `gorm:"column:created_at"`
 	Depth     int     `gorm:"column:depth"`
+	// Seq comes from the SELECT below, not from the walk. It has to be listed explicitly: the CTE
+	// only carries (id, depth), so a column nobody names arrives as the zero value — which made
+	// every message in a chain look like position 0 to a positional read.
+	Seq int64 `gorm:"column:seq"`
 }
 
 // message converts a walked row back to the canonical Message.
 func (n chainNode) message() Message {
-	return Message{ID: n.ID, Tenant: n.Tenant, Role: n.Role, PrevID: n.PrevID, Source: n.Source, CreatedAt: n.CreatedAt}
+	return Message{
+		ID: n.ID, Tenant: n.Tenant, Role: n.Role, PrevID: n.PrevID,
+		Source: n.Source, CreatedAt: n.CreatedAt, Seq: n.Seq,
+	}
 }
 
 // chainCTE walks the prev_id chain from one message toward the root in a SINGLE
@@ -37,7 +44,7 @@ const chainCTE = `WITH RECURSIVE chain(id, depth) AS (
   FROM chain c JOIN messages m ON m.id = c.id
   WHERE c.depth < ? AND m.prev_id IS NOT NULL
 )
-SELECT m.id, m.tenant, m.role, m.prev_id, m.source, m.created_at, c.depth
+SELECT m.id, m.tenant, m.role, m.prev_id, m.source, m.created_at, c.depth, m.seq
 FROM chain c JOIN messages m ON m.id = c.id
 ORDER BY c.depth ASC`
 

@@ -129,31 +129,44 @@ tools:
 
   - name: history-range-read
     description: >-
-      Read a conversation's chat history by POSITION (depth) window. depth 0 = the newest message;
-      positive numbers go back in time. Returns [depth_from, depth_to) oldest-first with role,
-      content and tool names. `limit` caps only the number of returned messages (0 = no cap).
-      `preview_chars` cuts each entry (default 2000, 0 = no limit) and marks it `truncated`; use
-      "history-read" with the entry's `id` for the rest. Pass `session` to read another
-      conversation in the same tenant.
+      Read a conversation's history by POSITION. `from_seq`/`to_seq` bound the window by each
+      message's position in the chain: the oldest message is 1 and a message's number NEVER CHANGES,
+      so a position you saved last turn still addresses the same message this turn. Use `last` for
+      "the most recent N" (a seq window cannot ask that without knowing the count). Returns
+      oldest-first with seq, id, role, content and tool names. `preview_chars` cuts each entry
+      (default 2000, 0 = no limit) and marks it `truncated`; call "history-read" with the entry's
+      `id` for the rest. The response reports `seq_min`/`seq_max` so you can page without guessing.
+      Pass `session` to read another conversation in the same tenant.
     descriptions:
       zh: >-
-        按位置（深度）窗口读取会话历史。depth 0 = 最新消息；正数向更早回溯。返回
-        [depth_from, depth_to)，最旧在前，含角色、内容与工具名。`limit` 仅限制返回条数（0 = 不限）。
-        `preview_chars` 截断每条（默认 2000，0 = 不限）并标记 `truncated`；用该条 `id` 调
-        "history-read" 取剩余部分。传 `session` 可读取同租户下的另一个会话。
+        按位置读取会话历史。`from_seq`/`to_seq` 按消息在链中的位置限定窗口：最旧一条是 1，且一条消息的编号
+        永不改变——上一轮记下的位置这一轮仍指向同一条消息。要「最近 N 条」用 `last`（seq 窗口无法在不知道
+        总数的情况下表达它）。返回最旧在前，含 seq、id、角色、内容与工具名。`preview_chars` 截断每条
+        （默认 2000，0 = 不限）并标记 `truncated`；用该条 `id` 调 "history-read" 取剩余部分。返回中包含
+        `seq_min`/`seq_max`，便于翻页。传 `session` 可读取同租户下的另一个会话。
     input_schema:
       type: object
       properties:
-        depth_from:
+        from_seq:
           type: integer
-          description: Starting depth (0 = newest message).
+          description: >-
+            Inclusive lower bound on the message's position (oldest = 1). Omit to start at the
+            beginning.
           descriptions:
-            zh: 起始深度（0 = 最新一条消息）。
-        depth_to:
+            zh: 消息位置的含端点下界（最旧 = 1）。省略则从头开始。
+        to_seq:
           type: integer
-          description: Exclusive depth bound (0 = no upper bound).
+          description: >-
+            EXCLUSIVE upper bound on position. Omit (or 0) for no upper bound.
           descriptions:
-            zh: 不含端点的深度上界（0 = 不限）。
+            zh: 位置的**不含端点**上界。省略（或 0）则不限上界。
+        last:
+          type: integer
+          description: >-
+            Keep only the newest N messages of the window. This is how "the most recent N" is
+            expressed; a seq window cannot, because it needs the count first.
+          descriptions:
+            zh: 只保留窗口中最新的 N 条。这是表达「最近 N 条」的方式；seq 窗口做不到，因为它需要先知道总数。
         include:
           type: array
           items:

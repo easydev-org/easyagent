@@ -60,8 +60,13 @@ type ChainEntry struct {
 	ID        string
 	Role      string
 	CreatedAt string
-	Depth     int
-	Source    string
+	// Depth counts BACK FROM THE TIP: 0 is the newest message. It SHIFTS whenever a message is
+	// appended, so it addresses "how far back" rather than "which message".
+	Depth int
+	// Seq is the message's POSITION IN THE CHAIN: oldest is 1 and it never changes. This is the
+	// address a caller can hold across turns.
+	Seq    int64
+	Source string
 }
 
 // MessagePartRow is one persisted message part.

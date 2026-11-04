@@ -215,7 +215,7 @@ func (d *StoreDeps) MessageChain(tenant, tip string, limit int) []ChainEntry {
 	for i, m := range msgs {
 		out = append(out, ChainEntry{
 			ID: m.ID, Role: m.Role, CreatedAt: m.CreatedAt,
-			Depth: len(msgs) - 1 - i, Source: m.Source,
+			Depth: len(msgs) - 1 - i, Seq: m.Seq, Source: m.Source,
 		})
 	}
 	return out
