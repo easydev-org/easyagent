@@ -272,20 +272,20 @@ func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars in
 		/**
 		 * THE RENDERED LINE CARRIES THE ID.
 		 *
-		 * SEQ AND THE ID ARE THE TWO HANDLES, and both are in the text because both are taken as
-		 * arguments: seq by `history-range-read`, id by `history-read`.
+		 * ONE HANDLE, AND IT IS THE SEQ. Both tools address by it: `history-range-read` windows on
+		 * it and `history-read` looks a message up by it.
 		 *
-		 * IT USED TO PRINT A DEPTH INSTEAD OF A SEQ, and put the id only in `metadata.entries[].id`.
-		 * A model reads the text, not the metadata, so it had one number and nothing to pass to
-		 * either tool — and one tried the depth as an id, got "no such message", and read that as a
-		 * broken tool. Depth is gone now: it looked like an address and moved on every append.
+		 * THE MESSAGE ID IS NOT SHOWN. It is a 36-character UUID, it appears nowhere else in the
+		 * model's context, and there are two of them for every pair of turns — pure noise in a
+		 * window a reader is scanning. `(session, seq)` is the address a caller can hold; the id
+		 * stays inside the tool as the store's key.
 		 */
-		block := fmt.Sprintf("[seq %d] id=%s %s (%s)\n%s\n", en.Seq, en.ID, en.role(), en.Time, body)
+		block := fmt.Sprintf("[seq %d] %s (%s)\n%s\n", en.Seq, en.role(), en.Time, body)
 		if cut {
 			// The marker names the id and the command that returns the rest, so the model does not
 			// have to guess either.
-			block += fmt.Sprintf("[truncated: %d of %d chars — history-read(id=%q) for the rest]\n",
-				len(body), entryChars(en), en.ID)
+			block += fmt.Sprintf("[truncated: %d of %d chars — history-read(seq=%d) for the rest]\n",
+				len(body), entryChars(en), en.Seq)
 		}
 		if maxChars > 0 && used+len(block) > maxChars && emitted > 0 {
 			break
@@ -365,8 +365,10 @@ func entriesToData(entries []historyEntry, previewChars int) []map[string]any {
 	out := make([]map[string]any, 0, len(entries))
 	for _, en := range entries {
 		body, cut := entryBody(en, previewChars)
+		// NO id EITHER. The structured output feeds the same reader as the text, and an id here
+		// would be a second address that the tools do not accept — see the note in the renderer.
 		row := map[string]any{
-			"id": en.ID, "role": en.Role, "seq": en.Seq, "content": body,
+			"role": en.Role, "seq": en.Seq, "content": body,
 		}
 		if cut {
 			row["truncated"] = true
@@ -597,9 +599,13 @@ func (e *Extension) historyRangeRead(ctx context.Context, tenant, session string
  * message needs.
  */
 func (e *Extension) historyRead(ctx context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
-	id := strings.TrimSpace(strArg(args, "id"))
-	if id == "" {
-		return agent.ToolOutcome{}, &toolError{msg: "history-read: missing \"id\""}
+	seqArg, ok := numArg(args, "seq")
+	if !ok {
+		return agent.ToolOutcome{}, &toolError{msg: "history-read: missing \"seq\""}
+	}
+	want := int64(seqArg)
+	if want <= 0 {
+		return agent.ToolOutcome{}, &toolError{msg: "history-read: \"seq\" must be positive (oldest message is 1)"}
 	}
 	target, err := historyTarget(args, session)
 	if err != nil {
@@ -617,9 +623,20 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 			"history-read: unknown part %q (want text, tool or result)", part)}
 	}
 
+	/**
+	 * LOOKED UP BY POSITION, NOT BY ID.
+	 *
+	 * `(session, seq)` is UNIQUE WITHIN ONE SESSION, which is the only thing a caller can name —
+	 * and that is exactly what this tool needs, because the caller just read that seq out of a
+	 * listing. Two forked sessions can each have a seq 3 (they share a chain until they diverge),
+	 * but they are different conversations, so the session name disambiguates them.
+	 *
+	 * Out of range is an ERROR rather than an empty answer: "no message" would read as "the
+	 * conversation is empty", and the caller needs to know that its seq was wrong.
+	 */
 	var found *historyEntry
 	for _, en := range e.collectHistory(tenant, target) {
-		if en.ID == id {
+		if en.Seq == want {
 			e := en
 			found = &e
 			break
@@ -627,7 +644,7 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 	}
 	if found == nil {
 		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf(
-			"history-read: no message %q in session %q", id, target)}
+			"history-read: session %q has no message at seq %d", target, want)}
 	}
 
 	// UNTRUNCATED, ALWAYS: this tool exists to return what the search withheld.
@@ -645,8 +662,7 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 	return agent.ToolOutcome{
 		Content: body,
 		Metadata: map[string]any{
-			"session": target, "id": found.ID, "role": found.Role,
-			"seq": found.Seq, "chars": len(body),
+			"session": target, "seq": found.Seq, "role": found.Role, "chars": len(body),
 		},
 	}, nil
 }
