@@ -207,30 +207,83 @@ func TestWebSearchRunsOnlyTheConfiguredProvider(t *testing.T) {
 		}
 	}
 
-	// No config: the DEFAULT runs, and only it.
-	out, err := e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(called) != 1 || called[0] != defaultSearchProvider {
-		t.Fatalf("called %v, want only %q", called, defaultSearchProvider)
-	}
-	if meta := out.Metadata.(map[string]any); meta["provider"] != defaultSearchProvider {
-		t.Fatalf("reported provider = %v", meta["provider"])
-	}
-
-	// Pinned: that one runs, and only it.
-	called = nil
+	// CONFIGURED: that one runs, and only it.
 	d.cfg = map[string]string{"search_provider": "tavily"}
-	out, err = e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
-	if err != nil {
+	if _, err := e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(called) != 1 || called[0] != "tavily" {
 		t.Fatalf("called %v, want only tavily", called)
 	}
-	if meta := out.Metadata.(map[string]any); meta["provider"] != "tavily" {
-		t.Fatalf("reported provider = %v", meta["provider"])
+}
+
+/**
+ * AN UNCONFIGURED BACKEND IS A REFUSAL, NOT A DEFAULT.
+ *
+ * `required_config` normally hides this tool, so an unconfigured call should not arrive — but a stale
+ * plan or a config cleared mid-turn can still produce one. The answer is that the tool is unavailable.
+ * Substituting a backend would put results in front of a reader from a source their deployment never
+ * chose, and there would be nothing anywhere saying so.
+ */
+func TestWebSearchRefusesWithoutANConfiguredBackend(t *testing.T) {
+	called := false
+	e, err := New(&stubDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := searchProviders
+	t.Cleanup(func() { searchProviders = orig })
+	searchProviders = func() []searchProvider {
+		return []searchProvider{{name: "parallel", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+			called = true
+			return []searchResult{{URL: "https://p.example/"}}, nil
+		}}}
+	}
+
+	_, err = e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err == nil {
+		t.Fatal("an unconfigured backend produced a result")
+	}
+	if called {
+		t.Fatal("a provider ran even though none was configured")
+	}
+	if !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("the refusal does not say the tool is unavailable: %v", err)
+	}
+}
+
+/**
+ * THE MODEL IS NEVER TOLD WHICH VENDOR ANSWERED.
+ *
+ * It cannot act on the name — it cannot switch providers — and telling it invites commentary about the
+ * tool instead of the answer. The operator sees the choice in the console; the model sees results.
+ */
+func TestWebSearchNeverNamesTheProvider(t *testing.T) {
+	e, err := New(&stubDeps{cfg: map[string]string{"search_provider": "tinyfish"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := searchProviders
+	t.Cleanup(func() { searchProviders = orig })
+	searchProviders = func() []searchProvider {
+		return []searchProvider{{name: "tinyfish", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+			return []searchResult{{URL: "https://a.example/", Title: "A", Content: "text", Provider: "tinyfish"}}, nil
+		}}}
+	}
+
+	out, err := e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"tinyfish", "via ", "provider"} {
+		if strings.Contains(strings.ToLower(out.Content), strings.ToLower(leak)) {
+			t.Errorf("the result mentions %q:\n%s", leak, out.Content)
+		}
+	}
+	if meta, ok := out.Metadata.(map[string]any); ok {
+		if _, has := meta["provider"]; has {
+			t.Error("the metadata still carries a provider")
+		}
 	}
 }
 
@@ -265,10 +318,13 @@ func TestWebSearchDoesNotFallBackWhenTheProviderFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failing pinned provider returned success")
 	}
-	// THE ERROR NAMES THE PROVIDER: a rate limit is wait-and-retry, a timeout is pick another backend,
-	// a 401 is a credential problem — and the reader cannot tell which without the name.
-	if !strings.Contains(err.Error(), "tavily") || !strings.Contains(err.Error(), "rate limited") {
-		t.Fatalf("the error does not name the provider and reason: %v", err)
+	// THE REASON STAYS, THE VENDOR GOES: "rate limited" tells the model whether to retry or rephrase;
+	// the provider's name is something it cannot act on.
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("the error lost the reason: %v", err)
+	}
+	if strings.Contains(err.Error(), "tavily") {
+		t.Fatalf("the error names the vendor: %v", err)
 	}
 	if len(called) != 1 {
 		t.Fatalf("called %v; a failure must not trigger another provider", called)
@@ -282,17 +338,20 @@ func TestWebSearchRejectsUnknownProvider(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown provider was accepted")
 	}
-	for _, want := range []string{"bogus", "parallel", "tinyfish"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the error does not mention %q: %v", want, err)
-		}
+	// THE VALID NAMES ARE NOT LISTED TO THE MODEL either — the same reason as above. The operator
+	// sees them in the config page's picker.
+	if !strings.Contains(err.Error(), "not available") {
+		t.Errorf("the error does not say the tool is unavailable: %v", err)
+	}
+	if strings.Contains(err.Error(), "bogus") {
+		t.Errorf("the error echoes the configured value back to the model: %v", err)
 	}
 }
 
 // A provider that answered with nothing is a real answer, said plainly — not an error, and not a
 // silent empty page.
 func TestWebSearchEmptyResultIsStated(t *testing.T) {
-	e, _ := New(&stubDeps{})
+	e, _ := New(&stubDeps{cfg: map[string]string{"search_provider": "parallel"}})
 	orig := searchProviders
 	t.Cleanup(func() { searchProviders = orig })
 	searchProviders = func() []searchProvider {
@@ -304,7 +363,56 @@ func TestWebSearchEmptyResultIsStated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an empty answer was treated as a failure: %v", err)
 	}
-	if !strings.Contains(out.Content, "No results from parallel") {
+	if !strings.Contains(out.Content, "No results") {
 		t.Fatalf("the empty answer is not stated:\n%s", out.Content)
 	}
+	if strings.Contains(out.Content, "parallel") {
+		t.Fatalf("the empty answer names the vendor:\n%s", out.Content)
+	}
+}
+
+/**
+ * THE TOOL IS HIDDEN UNTIL A BACKEND EXISTS.
+ *
+ * `required_config: [search_provider]` is what makes the agent never see web-search on a deployment
+ * that has not chosen one. Without it, the tool is in every tool list and fails on first use — the
+ * shape of "a capability that cannot work".
+ *
+ * This asserts the DECLARATION, because the filtering itself lives in agent.FilterBlockedByConfig and
+ * is tested there; what can silently break here is the manifest forgetting to say it.
+ */
+func TestWebSearchRequiresAConfiguredBackend(t *testing.T) {
+	m, err := ParseManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, tool := range m.Tools {
+		if tool.Name != "web-search" {
+			continue
+		}
+		found = true
+		if len(tool.RequiredConfig) != 1 || tool.RequiredConfig[0] != "search_provider" {
+			t.Fatalf("required_config = %v, want [search_provider]", tool.RequiredConfig)
+		}
+	}
+	if !found {
+		t.Fatal("web-search is not in the manifest")
+	}
+
+	// AND THE KNOB HAS NO DEFAULT. A default would make the tool appear everywhere, which is the same
+	// failure the requirement exists to prevent.
+	for _, knob := range m.Config {
+		if knob.Name == "search_provider" {
+			if knob.Default != "" {
+				t.Fatalf("search_provider has default %q; with a default the tool is never hidden", knob.Default)
+			}
+			if knob.Type != "enum" || len(knob.EnumValues) == 0 {
+				t.Fatalf("search_provider type = %q with %d values; the console needs both for a picker",
+					knob.Type, len(knob.EnumValues))
+			}
+			return
+		}
+	}
+	t.Fatal("search_provider is not declared")
 }
