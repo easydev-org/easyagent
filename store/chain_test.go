@@ -182,16 +182,19 @@ func TestForkBaseAnchorsAtParent(t *testing.T) {
 	}
 }
 
-// TestChainDepthLimit checks the handler semantics ported from
-// message-chain-limit.test.ts: `limit` is a DEPTH cap (newest N), and
-// `limit <= 0` means "no depth cap" (the FULL chain).
-func TestChainDepthLimit(t *testing.T) {
+// TestChainLimit checks the handler semantics ported from message-chain-limit.test.ts: `limit` keeps
+// the NEWEST N messages, and `limit <= 0` means the FULL chain.
+//
+// IT IS NOT A "DEPTH" — the word is avoided here because `depth` used to name a different thing in
+// the history tools (a per-read offset that shifted as messages arrived). This `limit` is a row
+// count on one read and does not travel anywhere.
+func TestChainLimit(t *testing.T) {
 	d := newTestDB(t)
 	n := 12
 	roles := rolesFor(n, 11)
 	tip, logical := buildChain(t, d, "t", roles)
 
-	// A positive limit caps the depth to the NEWEST `limit` messages.
+	// A positive limit keeps the NEWEST `limit` messages.
 	capped, err := d.Chain("t", tip, 5, "")
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +206,7 @@ func TestChainDepthLimit(t *testing.T) {
 		t.Fatalf("capped newest = %s, want %s", capped[len(capped)-1].ID, logical[n-1])
 	}
 
-	// limit <= 0 means no cap -> the full chain.
+	// limit <= 0 means no cap: the full chain.
 	full, err := d.Chain("t", tip, 0, "")
 	if err != nil {
 		t.Fatal(err)

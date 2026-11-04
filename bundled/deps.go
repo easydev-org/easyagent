@@ -45,8 +45,8 @@ type Deps interface {
 	PublishMailbox(tenant, session string, typ mailbox.Type, payload any, source string) error
 
 	// --- history ---
-	// MessageChain walks a chain from tip, oldest-first with depth 0 at the tip.
-	// limit <= 0 means NO cap (the whole chain).
+	// MessageChain walks a chain from tip, OLDEST FIRST, each entry carrying its position (`Seq`).
+	// limit <= 0 means NO cap (the whole chain); a positive limit keeps the NEWEST `limit` messages.
 	MessageChain(tenant, tip string, limit int) []ChainEntry
 	// MessageParts returns the ordered parts for the given message ids.
 	MessageParts(tenant string, ids []string) []MessagePartRow
@@ -60,11 +60,12 @@ type ChainEntry struct {
 	ID        string
 	Role      string
 	CreatedAt string
-	// Depth counts BACK FROM THE TIP: 0 is the newest message. It SHIFTS whenever a message is
-	// appended, so it addresses "how far back" rather than "which message".
-	Depth int
-	// Seq is the message's POSITION IN THE CHAIN: oldest is 1 and it never changes. This is the
-	// address a caller can hold across turns.
+	// Seq is the message's POSITION IN THE CHAIN: oldest is 1 and it never changes.
+	//
+	// THERE IS NO "DEPTH" HERE ANY MORE. It counted back from the tip and was recomputed from the
+	// chain's LENGTH, so appending one message shifted every depth in the conversation — a number
+	// that looks like an address and is not one. `Seq` is that address, and `Chain(limit)` still
+	// answers "the newest N" for the one question depth was actually good at.
 	Seq    int64
 	Source string
 }

@@ -50,10 +50,8 @@ const defaultPreviewChars = 2000
 type historyEntry struct {
 	ID   string
 	Role string
-	// Depth counts back from the tip and SHIFTS on every append — it answers "how far back", which
-	// is useful, and "which message", which it cannot.
-	Depth int
-	// Seq is the message's position in its chain: oldest is 1, fixed when written.
+	// Seq is the message's position in its chain: oldest is 1, fixed when written. It is the only
+	// positional handle a caller gets, because the other one (depth) was not stable across appends.
 	Seq  int64
 	Time string
 	// Text is the message's own prose (text + summary parts).
@@ -102,7 +100,7 @@ func (e *Extension) collectHistory(tenant, session string) []historyEntry {
 
 	out := make([]historyEntry, 0, len(chain))
 	for _, m := range chain {
-		en := historyEntry{ID: m.ID, Role: m.Role, Depth: m.Depth, Seq: m.Seq, Time: m.CreatedAt}
+		en := historyEntry{ID: m.ID, Role: m.Role, Seq: m.Seq, Time: m.CreatedAt}
 		// Tools are keyed by their call id so a result attaches to the call it belongs to. A
 		// result whose call is in a DIFFERENT message still attaches, because the id is the
 		// authority and a provider may split them.
@@ -163,7 +161,7 @@ func (e *Extension) collectHistory(tenant, session string) []historyEntry {
  * historyFilter is what every entry point narrows with.
  *
  * THE ENTRY POINTS DIFFER ONLY IN HOW THEY FILL THIS. `history-search` sets a query and optional
- * time range; `history-range-read` sets a depth window. Both then run the same match, which is what
+ * time range; `history-range-read` sets a seq window. Both then run the same match, which is what
  * keeps "does this message match?" from having two implementations.
  */
 type historyFilter struct {
@@ -177,12 +175,12 @@ type historyFilter struct {
 	TimeFrom string
 	TimeTo   string
 	// SeqFrom / SeqTo bound the window by POSITION IN THE CHAIN (oldest = 1). SeqTo 0 means no upper
-	// bound. Position, not depth: a depth window silently moves as messages arrive, so a window a
-	// caller saved last turn would address different messages this turn.
+	// bound. Position, not "how far back": a window measured from the tip silently moves as messages
+	// arrive, so one a caller saved last turn would address different messages this turn.
 	SeqFrom int64
 	SeqTo   int64
-	// LastN selects the newest N messages, which is what a depth window is actually good for.
-	// Applied after the seq window so the two compose rather than one silently winning.
+	// LastN selects the newest N messages, which is the one question a "how far back" window answered
+	// well. Applied after the seq window so the two compose rather than one silently winning.
 	LastN int
 }
 
@@ -274,14 +272,13 @@ func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars in
 		/**
 		 * THE RENDERED LINE CARRIES THE ID.
 		 *
-		 * It used to say `[depth] role (time)` and put the id only in `metadata.entries[].id`. A model
-		 * reads the TEXT, not the metadata, so it had the depth and nothing to pass to `history-read`
-		 * — and one that tried anyway sent the depth as an id and got "no such message", which reads
-		 * as a broken tool rather than a missing field.
+		 * SEQ AND THE ID ARE THE TWO HANDLES, and both are in the text because both are taken as
+		 * arguments: seq by `history-range-read`, id by `history-read`.
 		 *
-		 * SEQ IS THE ADDRESS A CALLER HOLDS ACROSS TURNS; depth is shown beside it because "how far
-		 * back" is a useful reading, but it is NOT what a window takes any more — it shifts on every
-		 * append, so a depth saved last turn addresses a different message this turn.
+		 * IT USED TO PRINT A DEPTH INSTEAD OF A SEQ, and put the id only in `metadata.entries[].id`.
+		 * A model reads the text, not the metadata, so it had one number and nothing to pass to
+		 * either tool — and one tried the depth as an id, got "no such message", and read that as a
+		 * broken tool. Depth is gone now: it looked like an address and moved on every append.
 		 */
 		block := fmt.Sprintf("[seq %d] id=%s %s (%s)\n%s\n", en.Seq, en.ID, en.role(), en.Time, body)
 		if cut {
@@ -369,7 +366,7 @@ func entriesToData(entries []historyEntry, previewChars int) []map[string]any {
 	for _, en := range entries {
 		body, cut := entryBody(en, previewChars)
 		row := map[string]any{
-			"id": en.ID, "role": en.Role, "seq": en.Seq, "depth": en.Depth, "content": body,
+			"id": en.ID, "role": en.Role, "seq": en.Seq, "content": body,
 		}
 		if cut {
 			row["truncated"] = true
@@ -506,17 +503,13 @@ func (e *Extension) historySearch(ctx context.Context, tenant, session string, a
 /**
  * historyRangeRead reads a window BY POSITION IN THE CHAIN, oldest first.
  *
- * THE ANCHOR IS `seq`, NOT `depth`, AND THE DIFFERENCE IS NOT COSMETIC.
+ * THE ANCHOR IS `seq`: the message's position, oldest = 1, fixed when it is written. It survives new
+ * messages, forks (a child continues from its parent's tip) and undos (the abandoned rows keep their
+ * numbers and simply stop being reachable).
  *
- * `depth` counts back from the tip, so it is recomputed from the chain's LENGTH: appending one
- * message shifts every depth in the conversation by one. A model that read "depth 5 is where the
- * deploy failed" and came back next turn would find different content there — with no error, and no
- * way to notice. `depth` is an honest answer to "how far back is this" and a false one to "which
- * message is this".
- *
- * `seq` is the message's position, oldest = 1, fixed when it is written. It survives new messages,
- * forks (a child continues from its parent's tip) and undos (the abandoned rows keep their numbers
- * and simply stop being reachable).
+ * THERE IS NO DEPTH PARAMETER, AND NO DEPTH ANYWHERE. It counted back from the tip, so it was
+ * recomputed from the chain's LENGTH and shifted for every message each time one was appended — a
+ * number that looked like an address and was not one.
  *
  * `last` REMAINS, because "the most recent N" is a real question and a seq window cannot ask it
  * without knowing the count first. The two compose: seq narrows to a stretch, last trims it.

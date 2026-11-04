@@ -37,8 +37,8 @@ func historyStubDeps() *stubDeps {
 	// oldest message has the highest depth.
 	return &stubDeps{
 		chain: []ChainEntry{
-			{ID: "m1", Role: "user", CreatedAt: "2026-01-02 09:59:00", Depth: 1, Seq: 1},
-			{ID: "m2", Role: "assistant", CreatedAt: "2026-01-02 10:00:00", Depth: 0, Seq: 2},
+			{ID: "m1", Role: "user", CreatedAt: "2026-01-02 09:59:00", Seq: 1},
+			{ID: "m2", Role: "assistant", CreatedAt: "2026-01-02 10:00:00", Seq: 2},
 		},
 		parts: parts,
 	}
@@ -257,7 +257,7 @@ func TestHistorySearchReadsAnotherSession(t *testing.T) {
 	d.tips = map[string]string{"s1": "m2", "other": "x1"}
 	d.chainByTip = map[string][]ChainEntry{
 		"m2": d.chain,
-		"x1": {{ID: "x1", Role: "user", CreatedAt: "2026-02-01 08:00:00", Depth: 0, Seq: 1}},
+		"x1": {{ID: "x1", Role: "user", CreatedAt: "2026-02-01 08:00:00", Seq: 1}},
 	}
 	d.parts = append(d.parts, MessagePartRow{
 		MessageID: "x1", Type: "text", Seq: 0, Data: `{"text":"the other conversation is about caching"}`,
@@ -400,5 +400,43 @@ func TestHistoryRenderedIDIsReadable(t *testing.T) {
 	// And history-read accepts it.
 	if got := callHistory(t, "history-read", map[string]any{"id": id}); strings.TrimSpace(got.Content) == "" {
 		t.Fatal("history-read returned nothing for the id the search printed")
+	}
+}
+
+/**
+ * DEPTH IS GONE FROM THE OUTPUT, NOT JUST FROM THE PARAMETERS.
+ *
+ * Leaving it in `entries[].depth` would keep offering a number that looks like an address: it is
+ * recomputed from the chain's length, so it shifts for every message each time one is appended. The
+ * tool would be documenting a handle that quietly retargets.
+ *
+ * This asserts on the RENDERED TEXT and the METADATA, because the two are read by different
+ * consumers — a model reads the text, a client reads `data` — and either one still carrying depth
+ * would be enough to mislead.
+ */
+func TestHistoryOutputHasNoDepth(t *testing.T) {
+	for _, tool := range []string{"history-search", "history-range-read"} {
+		out := callHistory(t, tool, map[string]any{"query": "deploy"})
+		if strings.Contains(out.Content, "depth") {
+			t.Errorf("%s: the rendered text still mentions depth:\n%s", tool, out.Content)
+		}
+		for _, row := range historyEntries(t, out) {
+			if _, ok := row["depth"]; ok {
+				t.Errorf("%s: an entry still carries a depth field: %+v", tool, row)
+			}
+			if _, ok := row["seq"]; !ok {
+				t.Errorf("%s: an entry carries no seq: %+v", tool, row)
+			}
+		}
+	}
+
+	// history-read reports the position too, and must report the stable one.
+	out := callHistory(t, "history-read", map[string]any{"id": "m2"})
+	meta, _ := out.Metadata.(map[string]any)
+	if _, ok := meta["depth"]; ok {
+		t.Error("history-read still reports a depth")
+	}
+	if meta["seq"] != int64(2) {
+		t.Errorf("history-read seq = %v, want 2", meta["seq"])
 	}
 }

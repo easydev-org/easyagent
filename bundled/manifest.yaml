@@ -44,8 +44,8 @@ tools:
       Search a conversation's chat history by keyword. Matches are case-insensitive substrings.
       WHICH CONTENT IS SEARCHED IS EXPLICIT: `include` defaults to ["text"] — the messages' own
       prose — so a long tool log cannot drown the conversational hits. Add "tool" to match tool
-      names and their arguments, and "result" to match tool OUTPUT. Searches the FULL chain (no
-      depth cap), newest-first, and returns one page [offset, offset+limit). Each entry's content is
+      names and their arguments, and "result" to match tool OUTPUT. Searches the WHOLE conversation
+      (no cap), newest-first, and returns one page [offset, offset+limit). Each entry's content is
       cut to `preview_chars` (default 2000) and marked `truncated` with `full_chars`; call
       "history-read" with that entry's `id` to get the rest.
       Pass `session` to search ANOTHER conversation in the same tenant (empty = this one).
@@ -186,10 +186,10 @@ tools:
         limit:
           type: integer
           description: >-
-            Maximum number of messages to RETURN (default 200; 0 = no cap). Does not bound the
-            traversal depth.
+            Maximum number of messages to RETURN (default 200; 0 = no cap). Does not bound how far
+            back the walk goes.
           descriptions:
-            zh: 最多返回的消息数（默认 200；0 = 不限）。不限制遍历深度。
+            zh: 最多返回的消息数（默认 200；0 = 不限）。不限制向前回溯的范围。
         preview_chars:
           type: integer
           description: >-

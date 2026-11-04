@@ -211,11 +211,12 @@ func (d *StoreDeps) MessageChain(tenant, tip string, limit int) []ChainEntry {
 		return nil
 	}
 	out := make([]ChainEntry, 0, len(msgs))
-	// Chain returns oldest-first; depth 0 = tip, so depth = len-1-i.
-	for i, m := range msgs {
+	// Chain already returns oldest-first, which is the order callers expect; the position comes from
+	// the row, not from the walk.
+	for _, m := range msgs {
 		out = append(out, ChainEntry{
 			ID: m.ID, Role: m.Role, CreatedAt: m.CreatedAt,
-			Depth: len(msgs) - 1 - i, Seq: m.Seq, Source: m.Source,
+			Seq: m.Seq, Source: m.Source,
 		})
 	}
 	return out
