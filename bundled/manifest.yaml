@@ -637,14 +637,18 @@ tools:
 config:
   - name: search_provider
     description: >-
-      Pin one web-search backend instead of trying them in order. Leave empty to use the first that
-      answers. A pinned backend that fails is an ERROR, not a silent fallback: a caller that asked for
-      a specific source wants to know it did not answer.
+      Which web-search backend to use. Empty tries them in order and uses the first that answers.
+      Pinning one does NOT fall back silently: if it fails, the call fails, because a caller that
+      chose a specific source wants to know it did not answer.
     descriptions:
       zh: >-
-        固定使用某一个 web-search 后端，而不是按顺序尝试。留空则使用第一个可用的。固定后端失败会明确报错，
-        不会静默回退：调用方指定了来源，就该知道它没有响应。
-    type: string
+        使用哪个 web-search 后端。留空则按顺序尝试、使用第一个可用的。固定某一个时不会静默回退：
+        它失败就用失败，因为指定了来源的人需要知道它没有响应。
+    # type: enum IS WHAT RENDERS THIS AS A DROPDOWN. As a plain `string` the console showed a text box
+    # and `enum_values` was ignored — the values were in the manifest and nowhere a user could pick
+    # them, so the only way to set this was to type a backend name from memory and hope it was spelled
+    # the way the code expects.
+    type: enum
     scope: global
     default: ''
     enum_values: [parallel, tavily, exa, firecrawl, tinyfish]

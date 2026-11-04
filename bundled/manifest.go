@@ -33,6 +33,7 @@ type manifestConfig struct {
 	Capability   string            `yaml:"capability"`
 	Scope        string            `yaml:"scope"`
 	Default      any               `yaml:"default"`
+	EnumValues   []string          `yaml:"enum_values"`
 }
 
 type manifestDoc struct {
@@ -58,6 +59,9 @@ type ConfigKnob struct {
 	Kind         string
 	Capability   string
 	Default      string
+	// EnumValues are the allowed choices when Type is "enum". They decide whether a client renders
+	// a picker or a text box, so losing them here turns a declared set of choices into free text.
+	EnumValues []string
 }
 
 // ParseManifest parses the embedded manifest (equivalent to the TS
@@ -86,6 +90,7 @@ func ParseManifest() (Manifest, error) {
 		m.Config = append(m.Config, ConfigKnob{
 			Name: c.Name, Description: c.Description, Descriptions: c.Descriptions,
 			Type: c.Type, Kind: c.Kind, Capability: c.Capability, Default: def,
+			EnumValues: c.EnumValues,
 		})
 	}
 	return m, nil

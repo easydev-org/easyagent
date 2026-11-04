@@ -119,6 +119,7 @@ func configFieldToProto(cf bundled.ConfigField) *agentv1.ToolConfigField {
 	f := &agentv1.ToolConfigField{
 		Name: cf.Name, Type: cf.Type, Description: cf.Description,
 		Scope: cf.Scope, Kind: cf.Kind, Capability: cf.Capability,
+		EnumValues: cf.EnumValues,
 	}
 	// A secret knob's default is NEVER surfaced (it would be broadcast in the
 	// manifest); the field declares only its shape.

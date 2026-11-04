@@ -190,3 +190,44 @@ func TestTinyfishContentAppendsSiteNameOnce(t *testing.T) {
 		t.Errorf("an empty site name changed the text: %q", got)
 	}
 }
+
+/**
+ * THE PROVIDER KNOB MUST REACH THE CLIENT AS A PICKER, NOT A TEXT BOX.
+ *
+ * `enum_values` was declared in the manifest and dropped in three places on the way to the wire:
+ * `manifestConfig` did not parse it, `ConfigKnob` did not carry it, and `ConfigField` did not expose
+ * it. The knob therefore rendered as a free-text field, and the only way to choose a backend was to
+ * type its name from memory and hope it was spelled the way the code expects.
+ *
+ * A knob whose declared values never reach the client is worse than one with none: the manifest says
+ * a set of choices exists, and nothing shows them.
+ */
+func TestSearchProviderIsAnEnumThatReachesTheClient(t *testing.T) {
+	e, err := New(&stubDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *ConfigField
+	for _, f := range e.ConfigFields() {
+		if f.Name == "search_provider" {
+			cp := f
+			found = &cp
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("search_provider is not in the declared config surface")
+	}
+	if found.Type != "enum" {
+		t.Errorf("type = %q; a client only renders a picker for \"enum\"", found.Type)
+	}
+	want := []string{"parallel", "tavily", "exa", "firecrawl", "tinyfish"}
+	if len(found.EnumValues) != len(want) {
+		t.Fatalf("enum values = %v, want %v", found.EnumValues, want)
+	}
+	for i := range want {
+		if found.EnumValues[i] != want[i] {
+			t.Fatalf("enum values = %v, want %v", found.EnumValues, want)
+		}
+	}
+}
