@@ -54,7 +54,6 @@ var enStrings = map[string]string{
 	"promptRequired":             "prompt is required",
 	"textRequired":               "text is required",
 	"queryRequired":              "query is required",
-	"braveKeyMissing":            "brave_api_key is not configured",
 	"notAudio":                   "file {code} is not audio (mime: {mime})",
 	"transcriptionNotConfigured": "model.transcription is not configured",
 	"transcriptionEmpty":         "transcription returned no text",
@@ -71,10 +70,6 @@ var enStrings = map[string]string{
 	"fetchUnsupportedImage":      "unsupported image content type: {mime}",
 	"fetchUnsupportedFile":       "unsupported content type: {mime}",
 	"fetchTooLarge":              "response exceeds {bytes} bytes",
-	"braveNoResults":             "No search results found. Please try a different query.",
-	"braveTooLarge":              "response exceeds {bytes} bytes",
-	"braveHttp":                  "brave search failed: {status}",
-	"braveFailed":                "web search failed: {detail}",
 	"todosWritten":               "Updated the session todo list ({n} items).",
 }
 
@@ -86,7 +81,6 @@ var zhStrings = map[string]string{
 	"promptRequired":             "缺少 prompt",
 	"textRequired":               "缺少 text",
 	"queryRequired":              "缺少 query",
-	"braveKeyMissing":            "未配置 brave_api_key",
 	"notAudio":                   "文件 {code} 不是音频（mime：{mime}）",
 	"transcriptionNotConfigured": "未配置 model.transcription",
 	"transcriptionEmpty":         "转写结果为空",
@@ -103,9 +97,5 @@ var zhStrings = map[string]string{
 	"fetchUnsupportedImage":      "不支持的图片类型：{mime}",
 	"fetchUnsupportedFile":       "不支持的内容类型：{mime}",
 	"fetchTooLarge":              "响应超过 {bytes} 字节",
-	"braveNoResults":             "未找到搜索结果，请换个关键词。",
-	"braveTooLarge":              "响应超过 {bytes} 字节",
-	"braveHttp":                  "brave 搜索失败：{status}",
-	"braveFailed":                "网页搜索失败：{detail}",
 	"todosWritten":               "已更新会话待办列表（{n} 项）。",
 }

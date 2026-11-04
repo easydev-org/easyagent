@@ -370,36 +370,6 @@ tools:
             zh: 可选超时秒数（最大 120）。
       required: [url]
 
-  # ---- brave-search ----
-  - name: brave-search
-    description: >-
-      Search the web using the session's Brave Search provider. Use this for current
-      information beyond knowledge cutoff. This is a provider-independent local tool backed
-      by the Brave Search API. The current year is 2026; use this year when searching for
-      recent information or current events.
-    descriptions:
-      zh: >-
-        使用本会话的 Brave 搜索服务搜索网页。用于获取超出知识截止时间的最新信息。这是一个基于 Brave Search API、
-        与提供商无关的本地工具。当前年份为 2026，搜索近期信息或时事时请使用此年份。
-    input_schema:
-      type: object
-      properties:
-        query:
-          type: string
-          description: Web search query.
-          descriptions:
-            zh: 网页搜索关键词。
-        count:
-          type: integer
-          minimum: 1
-          maximum: 20
-          description: Number of search results to return (default 8, maximum 20).
-          descriptions:
-            zh: 返回的搜索结果条数（默认 8，最大 20）。
-      required: [query]
-    required_config: [brave_api_key]
-
-  # ---- image-generate / image-edit ----
   - name: image-generate
     description: >-
       Generate an image from a natural-language prompt using the configured image
@@ -722,10 +692,3 @@ config:
     scope: global
     default: ''
 
-  - name: brave_api_key
-    description: Brave Search API key (X-Subscription-Token) for brave-search.
-    descriptions:
-      zh: "brave-search 使用的 Brave Search API 密钥（X-Subscription-Token）。"
-    type: string
-    scope: global
-    default: ''

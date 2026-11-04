@@ -2,8 +2,6 @@ package bundled
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -18,10 +16,6 @@ const (
 	webFetchDefaultTimeout = 30
 	webFetchMaxTimeout     = 120
 	webFetchUserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-	braveAPIBase           = "https://api.search.brave.com/res/v1/web/search"
-	braveMaxResults        = 20
-	braveMaxBytes          = 256 * 1024
-	braveTimeout           = 25 * time.Second
 )
 
 func acceptHeader(format string) string {
@@ -138,90 +132,4 @@ func convertHTML(content, contentType, format string) string {
 	default:
 		return content
 	}
-}
-
-// braveSearch searches the web via the Brave Search API.
-func (e *Extension) braveSearch(ctx context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
-	locale := e.localeOf(tenant, session)
-	query := strings.TrimSpace(strArg(args, "query"))
-	if query == "" {
-		return agent.ToolOutcome{}, &toolError{msg: tr(locale, "queryRequired", nil)}
-	}
-	count := 8
-	if f, ok := numArg(args, "count"); ok && f >= 1 {
-		count = int(f)
-	}
-	if count > braveMaxResults {
-		count = braveMaxResults
-	}
-	apiKey := strings.TrimSpace(e.deps.ResolveConfig("brave_api_key", session, tenant))
-	if apiKey == "" {
-		return agent.ToolOutcome{}, &toolError{msg: tr(locale, "braveKeyMissing", nil)}
-	}
-
-	rctx, cancel := context.WithTimeout(ctx, braveTimeout)
-	defer cancel()
-	q := url.Values{}
-	q.Set("q", query)
-	q.Set("count", fmt.Sprintf("%d", count))
-	req, err := http.NewRequestWithContext(rctx, http.MethodGet, braveAPIBase+"?"+q.Encode(), nil)
-	if err != nil {
-		return agent.ToolOutcome{}, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Subscription-Token", apiKey)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return agent.ToolOutcome{}, &toolError{msg: tr(locale, "braveFailed", map[string]any{"detail": err.Error()})}
-	}
-	defer resp.Body.Close()
-	buf, _ := io.ReadAll(io.LimitReader(resp.Body, braveMaxBytes+1))
-	if len(buf) > braveMaxBytes {
-		return agent.ToolOutcome{}, &toolError{msg: tr(locale, "braveTooLarge", map[string]any{"bytes": braveMaxBytes})}
-	}
-	if resp.StatusCode != http.StatusOK {
-		var e2 struct {
-			Message string `json:"message"`
-			Error   string `json:"error"`
-		}
-		_ = json.Unmarshal(buf, &e2)
-		msg := e2.Message
-		if msg == "" {
-			msg = e2.Error
-		}
-		status := fmt.Sprintf("%d", resp.StatusCode)
-		if msg != "" {
-			status += " " + msg
-		}
-		return agent.ToolOutcome{}, &toolError{msg: tr(locale, "braveHttp", map[string]any{"status": status})}
-	}
-	var body struct {
-		Web struct {
-			Results []struct {
-				Title       string `json:"title"`
-				URL         string `json:"url"`
-				Description string `json:"description"`
-				Age         string `json:"age"`
-			} `json:"results"`
-		} `json:"web"`
-	}
-	if err := json.Unmarshal(buf, &body); err != nil {
-		return agent.ToolOutcome{}, &toolError{msg: tr(locale, "braveFailed", map[string]any{"detail": err.Error()})}
-	}
-	raw := body.Web.Results
-	if len(raw) == 0 {
-		return agent.ToolOutcome{Content: tr(locale, "braveNoResults", nil), Metadata: map[string]any{"provider": "brave", "query": query, "results": []any{}}}, nil
-	}
-	results := make([]map[string]any, 0, len(raw))
-	var lines []string
-	for _, r := range raw {
-		lines = append(lines, fmt.Sprintf("**%s**\n%s\n%s", r.Title, r.URL, r.Description))
-		entry := map[string]any{"title": r.Title, "url": r.URL, "description": r.Description}
-		if r.Age != "" {
-			entry["age"] = r.Age
-		}
-		results = append(results, entry)
-	}
-	content := fmt.Sprintf("Result of searching for %q (%d results):\n\n%s", query, len(raw), strings.Join(lines, "\n\n"))
-	return agent.ToolOutcome{Content: content, Metadata: map[string]any{"provider": "brave", "query": query, "results": results}}, nil
 }
