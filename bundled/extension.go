@@ -96,6 +96,9 @@ type ConfigField struct {
 	Kind        string
 	Capability  string
 	Default     string
+	// EnumValues are the allowed choices when Type is "enum". A client renders a picker from them;
+	// without them the knob is a text box and the only way to set it is to type a value from memory.
+	EnumValues []string
 	// Fields types a STRUCTURED knob (Type "list" or "object"): the keys of the
 	// object / of each list item. Empty means "untyped" — the knob is a `json`
 	// blob and the console shows a JSON textarea, which is the backward-compatible
@@ -210,6 +213,7 @@ func (e *Extension) ConfigFields() []ConfigField {
 		out = append(out, ConfigField{
 			Name: c.Name, Type: typ, Description: c.Description,
 			Scope: scopeOrGlobal(c), Kind: kind, Capability: c.Capability, Default: c.Default,
+			EnumValues: c.EnumValues,
 		})
 	}
 	return out
