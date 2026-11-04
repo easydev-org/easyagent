@@ -255,7 +255,6 @@ func (e *Extension) qualToBare(name string) (string, bool) {
 func (e *Extension) register() {
 	e.handlers["todo-write"] = e.todoWrite
 	e.handlers["web-fetch"] = e.webFetch
-	e.handlers["brave-search"] = e.braveSearch
 	e.handlers["history-search"] = e.historySearch
 	e.handlers["history-range-read"] = e.historyRangeRead
 	e.handlers["history-read"] = e.historyRead
