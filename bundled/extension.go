@@ -257,7 +257,8 @@ func (e *Extension) register() {
 	e.handlers["web-fetch"] = e.webFetch
 	e.handlers["brave-search"] = e.braveSearch
 	e.handlers["history-search"] = e.historySearch
-	e.handlers["history-range"] = e.historyRange
+	e.handlers["history-range-read"] = e.historyRangeRead
+	e.handlers["history-read"] = e.historyRead
 	e.handlers["file-info"] = e.fileInfo
 	e.handlers["file-read"] = e.fileRead
 	e.handlers["image-read"] = e.imageRead
