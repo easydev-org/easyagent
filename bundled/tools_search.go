@@ -17,19 +17,20 @@ import (
 )
 
 /**
- * WEB SEARCH, WITH SEVERAL BACKENDS.
+ * WEB SEARCH, WITH SEVERAL BACKENDS — ONE PER CALL.
  *
  * WHY MORE THAN ONE. Each of these is a third party that can rate-limit, change its terms, or start
- * requiring a key; no single one is a dependency worth having. The tool tries them in order and
- * reports which answered — so a degraded day is visible instead of silently thinner results.
+ * requiring a key; no single one is a dependency worth having. A deployment picks the one that works
+ * for it, and switching is a config change rather than a release.
  *
- * NONE OF THE FOUR NEEDS AN API KEY TODAY, which is why they are here rather than a paid vendor. That
- * is not a promise: it is checked at call time, and a provider that starts refusing is skipped with
- * its reason recorded.
+ * EXACTLY ONE RUNS. There is no fallback chain, and that was a deliberate reversal: a chain hides
+ * which source answered, makes a failing provider cost its timeout before the next is tried, and
+ * turns "where did this come from" into a property of the moment. `search_provider` says which; an
+ * unset value means `parallel`, not "whichever works".
  *
- * THE SHAPE IS THE PROVIDER'S, NOT OURS. `search_provider` names one to pin; empty means "try them
- * in order". A pinned provider that fails is an ERROR rather than a silent fallback, because a caller
- * that asked for a specific source wants to know it did not answer.
+ * NONE OF THEM NEEDS AN API KEY TODAY, which is why they are here rather than a paid vendor. That is
+ * not a promise — it is checked by calling them — so a backend that starts refusing fails loudly and
+ * the deployment can pin another.
  */
 
 // searchResult is one hit, normalized across providers.
@@ -43,10 +44,47 @@ type searchResult struct {
 	Published string
 }
 
-// providerFailure records why one backend produced nothing.
-type providerFailure struct {
-	Provider string
-	Reason   string
+// defaultSearchProvider is used when the deployment sets none.
+//
+// IT TAKES A QUERY LIST and returns excerpts written for a model to read, which is why it is the
+// default rather than the first name in a list. A deployment can pin any of the others.
+const defaultSearchProvider = "parallel"
+
+/**
+ * httpClientFor returns a client that REUSES CONNECTIONS.
+ *
+ * Every call used to build its own `&http.Client{Timeout: ...}`, which means a fresh TCP handshake
+ * and TLS negotiation per search per provider: a web search is a few hundred milliseconds of real
+ * work behind a connection setup that costs as much again. The default transport pools idle
+ * connections, so sharing one client is the difference between reconnecting every time and not.
+ *
+ * The TIMEOUT IS SET PER REQUEST, not on the client, because it is a parameter: a client-level
+ * deadline would be fixed at construction and the tool exposes it as an argument.
+ */
+var (
+	sharedClientOnce sync.Once
+	sharedClient     *http.Client
+)
+
+func httpClientFor() *http.Client {
+	sharedClientOnce.Do(func() {
+		sharedClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				// A SEARCH IS SMALL AND SHORT. Four idle connections per host is enough for the one
+				// provider a call uses; more would hold sockets the next search never asks for.
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 4,
+				IdleConnTimeout:     90 * time.Second,
+				// TLS handshakes are the expensive part for a provider called once per search, so they
+				// are kept alive rather than renegotiated.
+				ForceAttemptHTTP2:     true,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+		}
+	})
+	return sharedClient
 }
 
 // searchProvider is one backend.
@@ -57,13 +95,11 @@ type searchProvider struct {
 	search func(ctx context.Context, query string, count int, timeout time.Duration) ([]searchResult, error)
 }
 
-// searchProviders is the ordered list. Order is preference, not fallback drama: the first that answers
-// wins, and everything that failed is reported.
+// searchProviders is the registry.
 //
-// PARALLEL FIRST because it takes several queries at once and returns excerpts written for a model to
-// read. The others are single-query; when Parallel is unavailable the tool still works, one query at a
-// time.
-func searchProviders() []searchProvider {
+// A VARIABLE, NOT A FUNCTION, so a test can substitute recorders and observe WHICH backend ran — the
+// one property of this tool that a result alone cannot prove.
+var searchProviders = func() []searchProvider {
 	return []searchProvider{
 		{name: "parallel", search: searchParallel},
 		{name: "tavily", search: searchTavily},
@@ -74,6 +110,17 @@ func searchProviders() []searchProvider {
 }
 
 // webSearch is the tool handler.
+/**
+ * webSearch queries EXACTLY ONE backend — whichever `search_provider` names.
+ *
+ * TRYING THEM IN SEQUENCE WAS WRONG THREE WAYS. A caller that pinned `tinyfish` and silently got
+ * `parallel` had no way to know; a provider that failed cost its full timeout before the next was
+ * tried, so five of them could spend two minutes before returning anything; and a fallback chain
+ * makes "which source produced this answer" a property of the moment rather than of the deployment.
+ *
+ * The default is `parallel`, the only one that takes a query list and returns excerpts written for a
+ * model to read. It is a DEFAULT, not the head of a chain: if it fails, the call fails.
+ */
 func (e *Extension) webSearch(ctx context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
 	query := strings.TrimSpace(strArg(args, "query"))
 	if query == "" {
@@ -92,58 +139,40 @@ func (e *Extension) webSearch(ctx context.Context, tenant, session string, args 
 	}
 
 	providers := searchProviders()
-	if pin := strings.TrimSpace(e.deps.ResolveConfig("search_provider", session, tenant)); pin != "" {
-		var picked *searchProvider
-		for i := range providers {
-			if providers[i].name == pin {
-				picked = &providers[i]
-				break
-			}
-		}
-		if picked == nil {
-			names := make([]string, 0, len(providers))
-			for _, p := range providers {
-				names = append(names, p.name)
-			}
-			return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf(
-				"web-search: unknown search_provider %q (want %s)", pin, strings.Join(names, ", "))}
-		}
-		providers = []searchProvider{*picked}
+	name := strings.TrimSpace(e.deps.ResolveConfig("search_provider", session, tenant))
+	if name == "" {
+		// THE DEFAULT IS A CHOICE, NOT A FALLBACK: the same backend every time, so two searches on one
+		// deployment agree about where their answers came from.
+		name = defaultSearchProvider
 	}
 
-	var failures []providerFailure
-	for _, p := range providers {
-		res, err := p.search(ctx, query, count, timeout)
-		if err != nil {
-			// RECORDED, NOT SWALLOWED. A caller that gets fewer results deserves to know why, and a
-			// provider that starts failing every time is a fact nobody can see otherwise.
-			failures = append(failures, providerFailure{Provider: p.name, Reason: err.Error()})
-			continue
+	var picked *searchProvider
+	for i := range providers {
+		if providers[i].name == name {
+			picked = &providers[i]
+			break
 		}
-		if len(res) == 0 {
-			failures = append(failures, providerFailure{Provider: p.name, Reason: "no results"})
-			continue
+	}
+	if picked == nil {
+		names := make([]string, 0, len(providers))
+		for _, p := range providers {
+			names = append(names, p.name)
 		}
-		return renderSearchOutcome(query, res, failures, p.name), nil
+		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf(
+			"web-search: unknown search_provider %q (want %s)", name, strings.Join(names, ", "))}
 	}
 
-	// EVERY PROVIDER FAILED. Reporting "no results" would blame the query for a transport problem.
-	if len(failures) > 0 {
-		parts := make([]string, 0, len(failures))
-		for _, f := range failures {
-			parts = append(parts, f.Provider+": "+f.Reason)
-		}
-		return agent.ToolOutcome{}, &toolError{msg: "web-search failed — " + strings.Join(parts, "; ")}
+	res, err := picked.search(ctx, query, count, timeout)
+	if err != nil {
+		// THE PROVIDER IS NAMED IN THE ERROR, because the fix depends on which one it was: a rate
+		// limit is wait-and-retry, a timeout is try another backend, a 401 is a credential problem.
+		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf("web-search: %s failed — %v", name, err)}
 	}
-	return renderSearchOutcome(query, nil, nil, ""), nil
+	return renderSearchOutcome(query, res, name), nil
 }
 
 // renderSearchOutcome writes the model-facing text plus the structured payload.
-//
-// THE FAILURES GO IN THE TEXT, not only in the metadata: a model reads the prose, and "here are 8
-// results" without "the other two providers were rate-limited" is a partial answer presented as a
-// complete one.
-func renderSearchOutcome(query string, results []searchResult, failures []providerFailure, used string) agent.ToolOutcome {
+func renderSearchOutcome(query string, results []searchResult, used string) agent.ToolOutcome {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d result(s) for %q", len(results), query)
 	if used != "" {
@@ -167,14 +196,10 @@ func renderSearchOutcome(query string, results []searchResult, failures []provid
 			fmt.Fprintf(&b, "(published: %s)\n", r.Published)
 		}
 	}
-	if len(failures) > 0 {
-		b.WriteString("\nNote: ")
-		parts := make([]string, 0, len(failures))
-		for _, f := range failures {
-			parts = append(parts, f.Provider+" did not answer ("+f.Reason+")")
-		}
-		b.WriteString(strings.Join(parts, "; "))
-		b.WriteString(". Results above are from the remaining provider(s); coverage may be narrower.\n")
+	if len(results) == 0 {
+		// NO RESULTS FROM A PROVIDER THAT ANSWERED is a real answer, not a failure — and it reads very
+		// differently from "the call failed", so it is said plainly.
+		fmt.Fprintf(&b, "No results from %s. Try different wording, or pin another backend.\n", used)
 	}
 
 	rows := make([]map[string]any, 0, len(results))
@@ -191,14 +216,10 @@ func renderSearchOutcome(query string, results []searchResult, failures []provid
 		}
 		rows = append(rows, row)
 	}
-	failed := make([]map[string]any, 0, len(failures))
-	for _, f := range failures {
-		failed = append(failed, map[string]any{"provider": f.Provider, "reason": f.Reason})
-	}
 	return agent.ToolOutcome{
 		Content: strings.TrimSpace(b.String()),
 		Metadata: map[string]any{
-			"provider": used, "query": query, "results": rows, "failed": failed,
+			"provider": used, "query": query, "results": rows,
 		},
 	}
 }
@@ -230,8 +251,12 @@ func mcpEndpoint(ctx context.Context, url, tool string, args map[string]any, hea
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	// PER-REQUEST DEADLINE, because the timeout is an argument.
+	reqCtx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(reqCtx)
+
+	resp, err := httpClientFor().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -365,8 +390,11 @@ func searchTavily(ctx context.Context, query string, count int, timeout time.Dur
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tavily-Access-Mode", "keyless")
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	reqCtx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(reqCtx)
+
+	resp, err := httpClientFor().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -587,5 +615,3 @@ func tinyfishContent(snippet, site string) string {
 	}
 	return strings.TrimSpace(snippet + " (" + site + ")")
 }
-
-var _ = sync.Mutex{}

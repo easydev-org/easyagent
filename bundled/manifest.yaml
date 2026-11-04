@@ -344,15 +344,14 @@ tools:
       Search the web and return titles, URLs and excerpts. Use this for current information beyond
       your knowledge cutoff. The current year is 2026; use this year when searching for recent
       information or current events.
-      Several backends are tried in order and the response names which one answered; if a backend
-      failed, the result says so — a partially covered search is reported as partial rather than
-      presented as complete.
+      The response names the backend that answered. If a backend was tried and failed, the result says
+      so — a partially covered search is reported as partial rather than presented as complete.
     descriptions:
       zh: >-
         搜索网页并返回标题、URL 与摘要。用于获取超出知识截止时间的最新信息。当前年份为 2026，搜索近期信息或
         时事时请使用此年份。
-        会按顺序尝试多个后端，并在结果中说明实际使用了哪一个；若有后端失败，结果会写明——覆盖不完整的搜索会被
-        明确告知，而不是伪装成完整结果。
+        结果中会说明实际使用的后端。若某个后端尝试后失败，结果会写明——覆盖不完整的搜索会被明确告知，
+        而不是伪装成完整结果。
     input_schema:
       type: object
       properties:
@@ -637,20 +636,22 @@ tools:
 config:
   - name: search_provider
     description: >-
-      Which web-search backend to use. Empty tries them in order and uses the first that answers.
-      Pinning one does NOT fall back silently: if it fails, the call fails, because a caller that
-      chose a specific source wants to know it did not answer.
+      Which web-search backend to use. EXACTLY ONE runs — there is no fallback chain. Empty means
+      the default, parallel. If the chosen backend fails, the call fails: a caller that picked a
+      source needs to know it did not answer, and a silent switch would make "where did this result
+      come from" a property of the moment instead of the deployment.
     descriptions:
       zh: >-
-        使用哪个 web-search 后端。留空则按顺序尝试、使用第一个可用的。固定某一个时不会静默回退：
-        它失败就用失败，因为指定了来源的人需要知道它没有响应。
+        使用哪个 web-search 后端。只调用这一个，没有回退链。留空表示默认值 parallel。
+        选定的后端失败时调用会失败：指定了来源的人需要知道它没有响应，静默切换会让
+        「这个结果来自哪里」取决于当时而非部署。
     # type: enum IS WHAT RENDERS THIS AS A DROPDOWN. As a plain `string` the console showed a text box
     # and `enum_values` was ignored — the values were in the manifest and nowhere a user could pick
     # them, so the only way to set this was to type a backend name from memory and hope it was spelled
     # the way the code expects.
     type: enum
     scope: global
-    default: ''
+    default: parallel
     enum_values: [parallel, tavily, exa, firecrawl, tinyfish]
   # Model-reference knobs. `kind: model` + `capability` let the UI render a
   # picker scoped to the registered modality instead of a free-form text field

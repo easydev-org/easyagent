@@ -1,71 +1,12 @@
 package bundled
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
-
-/**
- * THE FAILURE NOTE IS THE POINT.
- *
- * Several backends are tried in order, so a degraded day produces FEWER results, not an error. Without
- * a note saying which ones did not answer, the caller reads a short list as "the web has little on
- * this" — the failure is invisible precisely when it matters.
- *
- * This is not hypothetical: with one backend rate-limited, a search returned 8 results and looked
- * complete while two of three sources had refused.
- */
-func TestSearchOutcomeNamesTheProvidersThatFailed(t *testing.T) {
-	out := renderSearchOutcome("golang", []searchResult{
-		{URL: "https://go.dev/", Title: "The Go Programming Language", Content: "Go is...", Provider: "parallel"},
-	}, []providerFailure{
-		{Provider: "tavily", Reason: "HTTP 429: rate limited"},
-		{Provider: "exa", Reason: "request failed: timeout"},
-	}, "parallel")
-
-	for _, want := range []string{"tavily", "rate limited", "exa", "timeout", "narrower"} {
-		if !strings.Contains(out.Content, want) {
-			t.Errorf("the note does not mention %q:\n%s", want, out.Content)
-		}
-	}
-	// And the provider that answered is named too, so a reader knows where it came from.
-	if !strings.Contains(out.Content, "via parallel") {
-		t.Errorf("the answering provider is not named:\n%s", out.Content)
-	}
-}
-
-// No failures means no note: a clean search must not carry a paragraph about nothing.
-func TestSearchOutcomeHasNoNoteWithoutFailures(t *testing.T) {
-	out := renderSearchOutcome("golang", []searchResult{
-		{URL: "https://go.dev/", Provider: "parallel"},
-	}, nil, "parallel")
-	if strings.Contains(out.Content, "did not answer") {
-		t.Fatalf("a clean search carried a failure note:\n%s", out.Content)
-	}
-}
-
-// The structured payload carries the same facts, for anything reading it machine-wise.
-func TestSearchOutcomeDataCarriesFailures(t *testing.T) {
-	out := renderSearchOutcome("q", []searchResult{
-		{URL: "https://a.example/", Provider: "parallel"},
-	}, []providerFailure{{Provider: "tavily", Reason: "HTTP 500"}}, "parallel")
-
-	meta, ok := out.Metadata.(map[string]any)
-	if !ok {
-		t.Fatalf("metadata = %T", out.Metadata)
-	}
-	failed, ok := meta["failed"].([]map[string]any)
-	if !ok || len(failed) != 1 {
-		t.Fatalf("failed = %#v", meta["failed"])
-	}
-	if failed[0]["provider"] != "tavily" || failed[0]["reason"] != "HTTP 500" {
-		t.Fatalf("failed row = %#v", failed[0])
-	}
-	rows, _ := meta["results"].([]map[string]any)
-	if len(rows) != 1 || rows[0]["provider"] != "parallel" {
-		t.Fatalf("results = %#v", meta["results"])
-	}
-}
 
 /**
  * EXA ANSWERS WITH PRE-FORMATTED TEXT, NOT JSON.
@@ -229,5 +170,141 @@ func TestSearchProviderIsAnEnumThatReachesTheClient(t *testing.T) {
 		if found.EnumValues[i] != want[i] {
 			t.Fatalf("enum values = %v, want %v", found.EnumValues, want)
 		}
+	}
+}
+
+/**
+ * EXACTLY ONE BACKEND RUNS, AND IT IS THE CONFIGURED ONE.
+ *
+ * A fallback chain was wrong three ways: a caller that pinned `tinyfish` and silently got `parallel`
+ * had no way to know; a failing provider cost its full timeout before the next was tried; and "which
+ * source produced this answer" became a property of the moment rather than of the deployment.
+ *
+ * The test asserts the ORDER, not just the result: a resolver that walked the list would still return
+ * a correct-looking answer from the wrong provider.
+ */
+func TestWebSearchRunsOnlyTheConfiguredProvider(t *testing.T) {
+	var called []string
+	d := &stubDeps{}
+	e, err := New(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replace the registry with recorders so the test observes which providers were reached, without
+	// any network.
+	orig := searchProviders
+	t.Cleanup(func() { searchProviders = orig })
+	searchProviders = func() []searchProvider {
+		return []searchProvider{
+			{name: "parallel", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+				called = append(called, "parallel")
+				return []searchResult{{URL: "https://p.example/", Provider: "parallel"}}, nil
+			}},
+			{name: "tavily", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+				called = append(called, "tavily")
+				return []searchResult{{URL: "https://t.example/", Provider: "tavily"}}, nil
+			}},
+		}
+	}
+
+	// No config: the DEFAULT runs, and only it.
+	out, err := e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 1 || called[0] != defaultSearchProvider {
+		t.Fatalf("called %v, want only %q", called, defaultSearchProvider)
+	}
+	if meta := out.Metadata.(map[string]any); meta["provider"] != defaultSearchProvider {
+		t.Fatalf("reported provider = %v", meta["provider"])
+	}
+
+	// Pinned: that one runs, and only it.
+	called = nil
+	d.cfg = map[string]string{"search_provider": "tavily"}
+	out, err = e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(called) != 1 || called[0] != "tavily" {
+		t.Fatalf("called %v, want only tavily", called)
+	}
+	if meta := out.Metadata.(map[string]any); meta["provider"] != "tavily" {
+		t.Fatalf("reported provider = %v", meta["provider"])
+	}
+}
+
+/**
+ * A FAILING PINNED PROVIDER IS AN ERROR, NOT A QUIET FALLBACK.
+ *
+ * The whole point of pinning is to know where results came from. Falling back would answer the
+ * question with a different source and never say so.
+ */
+func TestWebSearchDoesNotFallBackWhenTheProviderFails(t *testing.T) {
+	var called []string
+	e, err := New(&stubDeps{cfg: map[string]string{"search_provider": "tavily"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := searchProviders
+	t.Cleanup(func() { searchProviders = orig })
+	searchProviders = func() []searchProvider {
+		return []searchProvider{
+			{name: "parallel", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+				called = append(called, "parallel")
+				return []searchResult{{URL: "https://p.example/"}}, nil
+			}},
+			{name: "tavily", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+				called = append(called, "tavily")
+				return nil, errors.New("HTTP 429: rate limited")
+			}},
+		}
+	}
+
+	_, err = e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err == nil {
+		t.Fatal("a failing pinned provider returned success")
+	}
+	// THE ERROR NAMES THE PROVIDER: a rate limit is wait-and-retry, a timeout is pick another backend,
+	// a 401 is a credential problem — and the reader cannot tell which without the name.
+	if !strings.Contains(err.Error(), "tavily") || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("the error does not name the provider and reason: %v", err)
+	}
+	if len(called) != 1 {
+		t.Fatalf("called %v; a failure must not trigger another provider", called)
+	}
+}
+
+// An unknown name is refused with the valid ones, rather than silently using the default.
+func TestWebSearchRejectsUnknownProvider(t *testing.T) {
+	e, _ := New(&stubDeps{cfg: map[string]string{"search_provider": "bogus"}})
+	_, err := e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err == nil {
+		t.Fatal("an unknown provider was accepted")
+	}
+	for _, want := range []string{"bogus", "parallel", "tinyfish"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// A provider that answered with nothing is a real answer, said plainly — not an error, and not a
+// silent empty page.
+func TestWebSearchEmptyResultIsStated(t *testing.T) {
+	e, _ := New(&stubDeps{})
+	orig := searchProviders
+	t.Cleanup(func() { searchProviders = orig })
+	searchProviders = func() []searchProvider {
+		return []searchProvider{{name: "parallel", search: func(context.Context, string, int, time.Duration) ([]searchResult, error) {
+			return nil, nil
+		}}}
+	}
+	out, err := e.webSearch(context.Background(), "t1", "s1", map[string]any{"query": "x"})
+	if err != nil {
+		t.Fatalf("an empty answer was treated as a failure: %v", err)
+	}
+	if !strings.Contains(out.Content, "No results from parallel") {
+		t.Fatalf("the empty answer is not stated:\n%s", out.Content)
 	}
 }
