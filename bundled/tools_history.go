@@ -321,7 +321,7 @@ func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars in
 		 * window a reader is scanning. `(session, seq)` is the address a caller can hold; the id
 		 * stays inside the tool as the store's key.
 		 */
-		block := fmt.Sprintf("[seq %d] %s (%s)\n%s\n", en.Seq, en.role(), en.Time, body)
+		block := fmt.Sprintf("[seq %d] %s (%s)\n%s\n", en.Seq, en.role(inc), en.Time, body)
 		if cut {
 			// The marker names the id and the command that returns the rest, so the model does not
 			// have to guess either.
@@ -395,7 +395,17 @@ func entryBody(en historyEntry, previewChars int, inc includeSet) (string, bool)
 	return body[:end], true
 }
 
-func (en historyEntry) role() string {
+/**
+ * role labels the entry with the tool names it ran — BUT ONLY WHEN TOOLS WERE ASKED FOR.
+ *
+ * The label is part of the page's content, so a caller that asked for text only must not get a line
+ * reading `assistant:sandbox-job-start` above its prose: that names a tool the caller excluded, and
+ * it is the one thing about the entry they said they did not want.
+ */
+func (en historyEntry) role(inc includeSet) string {
+	if !inc.has(includeTool) {
+		return en.Role
+	}
 	names := make([]string, 0, len(en.Tools))
 	for _, t := range en.Tools {
 		if t.Name != "" {
@@ -432,7 +442,7 @@ func entriesToData(entries []historyEntry, previewChars int, inc includeSet) []m
 		if len(en.Matched) > 0 {
 			row["matched"] = en.Matched
 		}
-		if len(en.Tools) > 0 {
+		if len(en.Tools) > 0 && inc.has(includeTool) {
 			names := make([]string, 0, len(en.Tools))
 			for _, t := range en.Tools {
 				if t.Name != "" {

@@ -498,3 +498,20 @@ func TestIncludeGovernsWhatIsRendered(t *testing.T) {
 		t.Error("include=[text] rendered a tool call")
 	}
 }
+
+// The role LABEL is content too: asking for text only must not name the tools that ran.
+func TestIncludeTextHidesToolNamesInTheLabel(t *testing.T) {
+	out := callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"text"},
+	})
+	if strings.Contains(out.Content, "sandbox-job-start") {
+		t.Fatalf("include=[text] still named the tool in the entry label:\n%s", out.Content)
+	}
+	// And the label is there in full when tools were asked for.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"tool"},
+	})
+	if !strings.Contains(out.Content, "assistant:sandbox-job-start") {
+		t.Fatalf("include=[tool] did not label the entry with its tool:\n%s", out.Content)
+	}
+}
