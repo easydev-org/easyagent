@@ -23,10 +23,10 @@ import (
  * requiring a key; no single one is a dependency worth having. A deployment picks the one that works
  * for it, and switching is a config change rather than a release.
  *
- * EXACTLY ONE RUNS. There is no fallback chain, and that was a deliberate reversal: a chain hides
- * which source answered, makes a failing provider cost its timeout before the next is tried, and
- * turns "where did this come from" into a property of the moment. `search_provider` says which; an
- * unset value means `parallel`, not "whichever works".
+ * EXACTLY ONE RUNS, AND IT IS THE DEPLOYMENT'S CHOICE. There is no fallback chain and NO DEFAULT:
+ * `search_provider` is a required config, so while it is empty the agent is never offered this tool.
+ * A default would put web-search in every deployment's tool list and then either fail on first use or
+ * quietly use a source nobody picked.
  *
  * NONE OF THEM NEEDS AN API KEY TODAY, which is why they are here rather than a paid vendor. That is
  * not a promise — it is checked by calling them — so a backend that starts refusing fails loudly and
@@ -38,17 +38,13 @@ type searchResult struct {
 	URL     string
 	Title   string
 	Content string
-	// Provider records which backend produced this, so a caller can see where an answer came from.
+	// Provider records which backend produced this. IT IS NOT SHOWN TO THE MODEL — the tool never
+	// names the vendor, because the model cannot act on it. It exists so a provider's own parser can
+	// be tested against the shape it returns.
 	Provider string
 	// Published is the provider's own date, when it gives one.
 	Published string
 }
-
-// defaultSearchProvider is used when the deployment sets none.
-//
-// IT TAKES A QUERY LIST and returns excerpts written for a model to read, which is why it is the
-// default rather than the first name in a list. A deployment can pin any of the others.
-const defaultSearchProvider = "parallel"
 
 /**
  * httpClientFor returns a client that REUSES CONNECTIONS.
@@ -138,14 +134,26 @@ func (e *Extension) webSearch(ctx context.Context, tenant, session string, args 
 		timeout = time.Duration(f) * time.Second
 	}
 
-	providers := searchProviders()
+	/**
+	 * THE BACKEND IS THE DEPLOYMENT'S BUSINESS, NOT THE MODEL'S.
+	 *
+	 * Nothing below names it: not the tool description, not the result, not the error. Which vendor
+	 * fronted the request is an operational detail the model cannot act on — it cannot switch
+	 * providers, and telling it invites commentary about the tool instead of the answer. The one
+	 * party that needs to know is the operator, and the console's config page already says.
+	 *
+	 * THIS IS WHY THE REFUSAL BELOW IS PLAIN. `required_config` normally hides the tool, so an
+	 * unconfigured call should never arrive; if it does (a stale plan, a config cleared mid-turn),
+	 * the answer is that the tool is unavailable — not which knob the reader should have set.
+	 */
 	name := strings.TrimSpace(e.deps.ResolveConfig("search_provider", session, tenant))
 	if name == "" {
-		// THE DEFAULT IS A CHOICE, NOT A FALLBACK: the same backend every time, so two searches on one
-		// deployment agree about where their answers came from.
-		name = defaultSearchProvider
+		return agent.ToolOutcome{}, &toolError{msg: "web-search is not available: no search backend is configured"}
 	}
 
+	// ASSIGNED ONCE: calling the registry twice inside the loop would build the list twice and make
+	// the pointer taken from one list refer into the other.
+	providers := searchProviders()
 	var picked *searchProvider
 	for i := range providers {
 		if providers[i].name == name {
@@ -154,31 +162,23 @@ func (e *Extension) webSearch(ctx context.Context, tenant, session string, args 
 		}
 	}
 	if picked == nil {
-		names := make([]string, 0, len(providers))
-		for _, p := range providers {
-			names = append(names, p.name)
-		}
-		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf(
-			"web-search: unknown search_provider %q (want %s)", name, strings.Join(names, ", "))}
+		return agent.ToolOutcome{}, &toolError{msg: "web-search is not available: its configured backend is not recognized"}
 	}
 
 	res, err := picked.search(ctx, query, count, timeout)
 	if err != nil {
-		// THE PROVIDER IS NAMED IN THE ERROR, because the fix depends on which one it was: a rate
-		// limit is wait-and-retry, a timeout is try another backend, a 401 is a credential problem.
-		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf("web-search: %s failed — %v", name, err)}
+		// THE REASON STAYS, THE VENDOR GOES. "rate limited", "timed out" and "unauthorized" are
+		// actionable — they tell the model whether to retry, rephrase, or give up; the provider's
+		// name adds nothing it can use.
+		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf("web-search failed: %v", err)}
 	}
-	return renderSearchOutcome(query, res, name), nil
+	return renderSearchOutcome(query, res), nil
 }
 
 // renderSearchOutcome writes the model-facing text plus the structured payload.
-func renderSearchOutcome(query string, results []searchResult, used string) agent.ToolOutcome {
+func renderSearchOutcome(query string, results []searchResult) agent.ToolOutcome {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d result(s) for %q", len(results), query)
-	if used != "" {
-		fmt.Fprintf(&b, " (via %s)", used)
-	}
-	b.WriteString("\n")
+	fmt.Fprintf(&b, "%d result(s) for %q\n", len(results), query)
 
 	for i, r := range results {
 		title := r.Title
@@ -197,14 +197,14 @@ func renderSearchOutcome(query string, results []searchResult, used string) agen
 		}
 	}
 	if len(results) == 0 {
-		// NO RESULTS FROM A PROVIDER THAT ANSWERED is a real answer, not a failure — and it reads very
-		// differently from "the call failed", so it is said plainly.
-		fmt.Fprintf(&b, "No results from %s. Try different wording, or pin another backend.\n", used)
+		// NO RESULTS IS A REAL ANSWER, not a failure — and it reads very differently from "the call
+		// failed", so it is said plainly.
+		b.WriteString("No results. Try different wording, or drop a restrictive term.\n")
 	}
 
 	rows := make([]map[string]any, 0, len(results))
 	for _, r := range results {
-		row := map[string]any{"url": r.URL, "provider": r.Provider}
+		row := map[string]any{"url": r.URL}
 		if r.Title != "" {
 			row["title"] = r.Title
 		}
@@ -217,10 +217,8 @@ func renderSearchOutcome(query string, results []searchResult, used string) agen
 		rows = append(rows, row)
 	}
 	return agent.ToolOutcome{
-		Content: strings.TrimSpace(b.String()),
-		Metadata: map[string]any{
-			"provider": used, "query": query, "results": rows,
-		},
+		Content:  strings.TrimSpace(b.String()),
+		Metadata: map[string]any{"query": query, "results": rows},
 	}
 }
 
