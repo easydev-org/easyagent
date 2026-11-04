@@ -41,110 +41,189 @@ tools:
 
   - name: history-search
     description: >-
-      Search this session's chat history by keyword (case-insensitive substring over
-      parts(type=text) text, tool names and change ids), optionally constrained to a time
-      range [from, to] (YYYY-MM-DD HH:MM:SS). Searches the FULL chain (no depth cap),
-      newest-first, and returns one page [offset, offset+limit) with role, depth (0 =
-      newest), tool name, workspace change id and the message content in full (a single
-      message is never truncated). Each entry's `data.entries[].content` is complete;
-      `max_total_chars` bounds the rendered text only.
+      Search a conversation's chat history by keyword. Matches are case-insensitive substrings.
+      WHICH CONTENT IS SEARCHED IS EXPLICIT: `include` defaults to ["text"] — the messages' own
+      prose — so a long tool log cannot drown the conversational hits. Add "tool" to match tool
+      names and their arguments, and "result" to match tool OUTPUT. Searches the FULL chain (no
+      depth cap), newest-first, and returns one page [offset, offset+limit). Each entry's content is
+      cut to `preview_chars` (default 2000) and marked `truncated` with `full_chars`; call
+      "history-read" with that entry's `id` to get the rest.
+      Pass `session` to search ANOTHER conversation in the same tenant (empty = this one).
     descriptions:
       zh: >-
-        按关键词搜索本会话的聊天历史（对 parts(type=text) 文本、工具名、change id 做大小写不敏感的子串匹配），可选时间范围
-        [from, to]（YYYY-MM-DD HH:MM:SS）。搜索整条链（无深度上限），按最新在前分页返回
-        [offset, offset+limit) 一页，含角色、深度（0=最新）、工具名、工作区 change id 与完整消息内容（单条永不截断）。
-        每条 `data.entries[].content` 均为全量；`max_total_chars` 仅约束 text 渲染长度。
+        按关键词搜索会话历史（大小写不敏感子串）。搜索范围是显式的：`include` 默认 ["text"]
+        （消息自身的文本），避免长工具日志淹没对话命中；加 "tool" 匹配工具名与调用参数，加 "result"
+        匹配工具输出。搜索整条链（无深度上限），最新在前，返回 [offset, offset+limit) 一页。每条内容按
+        `preview_chars`（默认 2000）截断并标记 `truncated` 与 `full_chars`；用该条 `id` 调
+        "history-read" 取剩余部分。传 `session` 可搜索同租户下的另一个会话（留空 = 本会话）。
     input_schema:
       type: object
       properties:
         query:
           type: string
-          description: Case-insensitive keyword matched against message text, tool names and change ids.
+          description: Case-insensitive keyword matched against the selected content kinds.
           descriptions:
-            zh: 不区分大小写的关键词，匹配消息文本、工具名与 change id。
+            zh: 不区分大小写的关键词，在选定的内容类型中匹配。
+        include:
+          type: array
+          items:
+            type: string
+            enum: [text, tool, result]
+          description: >-
+            Content kinds to search. Default ["text"]. "tool" matches tool names and call
+            arguments; "result" matches tool output (often large — include it deliberately).
+          descriptions:
+            zh: >-
+              要搜索的内容类型。默认 ["text"]。"tool" 匹配工具名与调用参数；"result" 匹配工具输出
+              （通常很大，请有意地开启）。
+        session:
+          type: string
+          description: >-
+            Conversation to search. Empty = this session. Another name must exist in the same
+            tenant; an unknown name is an error, not an empty result.
+          descriptions:
+            zh: >-
+              要搜索的会话。留空 = 本会话。其他名字必须存在于同一租户；未知名字会报错而不是返回空结果。
         from:
           type: string
-          description: "Inclusive lower time bound (YYYY-MM-DD HH:MM:SS)."
+          description: "Inclusive lower TIME bound (YYYY-MM-DD HH:MM:SS)."
           descriptions:
             zh: "含端点的下界时间（YYYY-MM-DD HH:MM:SS）。"
         to:
           type: string
-          description: "Inclusive upper time bound (YYYY-MM-DD HH:MM:SS)."
+          description: "Inclusive upper TIME bound (YYYY-MM-DD HH:MM:SS)."
           descriptions:
             zh: "含端点的上界时间（YYYY-MM-DD HH:MM:SS）。"
         offset:
           type: integer
           description: >-
-            Pagination offset into the match list (default 0). Pairs with `limit`;
-            the response reports `has_more` and `next_offset`.
+            Pagination offset into the match list (default 0). Pairs with `limit`; the response
+            reports `has_more` and `next_offset`.
           descriptions:
             zh: 匹配结果的分页偏移（默认 0）。与 `limit` 搭配；返回 `has_more` 与 `next_offset`。
         limit:
           type: integer
           description: >-
-            Page size: maximum number of matched messages to return (default 50;
-            0 = no page cap).
+            Page size: maximum number of matched messages to return (default 50; 0 = no page cap).
           descriptions:
             zh: 页大小：最多返回的匹配消息数（默认 50；0 = 不分页）。
+        preview_chars:
+          type: integer
+          description: >-
+            Maximum characters of content per entry (default 2000; 0 = no limit). A cut entry is
+            marked `truncated` and reports `full_chars`, and history-read returns the rest.
+          descriptions:
+            zh: >-
+              每条内容的字符上限（默认 2000；0 = 不限）。被截断的条目会标记 `truncated` 并给出
+              `full_chars`，可用 history-read 取剩余内容。
         max_total_chars:
           type: integer
           description: >-
-            Total budget for the rendered text (default 100000; 0 = unlimited).
-            Entries accumulate (meta + full content); a single message is NEVER
-            truncated. When adding the next entry would exceed the budget, that entry
-            is still emitted in full and the list then stops (the total may slightly
-            exceed the budget). `data.entries[].content` is always the full content.
+            Total budget for the rendered text (default 100000; 0 = unlimited). Entries accumulate;
+            a single entry is never cut by THIS budget. `preview_chars` is the per-entry limit.
           descriptions:
             zh: >-
-              text 渲染的总字符预算（默认 100000；0 = 不限）。逐条累加（元信息 + 完整 content），
-              单条永不截断；加上下一条会超预算时，仍完整输出该条并停止（总量可略超预算）。
-              `data.entries[].content` 始终为完整内容。
+              text 渲染的总字符预算（默认 100000；0 = 不限）。逐条累加；单条不会被本预算截断。
+              单条上限由 `preview_chars` 控制。
       required: [query]
 
-  - name: history-range
+  - name: history-range-read
     description: >-
-      Read this session's chat history by position (depth) window. depth 0 = the newest
-      message; positive numbers go back in time; negative numbers count from the newest side
-      (-1 = newest). Traverses the FULL chain (the window depth is never capped by `limit`)
-      and returns [depth_from, depth_to) oldest-first with role, content, tool name and
-      change id. `limit` caps only the number of returned messages (0 = no cap), and
-      `max_total_chars` bounds the rendered text.
+      Read a conversation's chat history by POSITION (depth) window. depth 0 = the newest message;
+      positive numbers go back in time. Returns [depth_from, depth_to) oldest-first with role,
+      content and tool names. `limit` caps only the number of returned messages (0 = no cap).
+      `preview_chars` cuts each entry (default 2000, 0 = no limit) and marks it `truncated`; use
+      "history-read" with the entry's `id` for the rest. Pass `session` to read another
+      conversation in the same tenant.
     descriptions:
       zh: >-
-        按位置（深度）窗口读取本会话的聊天历史。depth 0 = 最新消息；正数向更早回溯；负数从最新一侧计数（-1 = 最新）。返回
-        [depth_from, depth_to)，最旧在前，含角色、内容、工具名与 change id。遍历整条链（窗口深度不受 `limit` 限制）；
-        `limit` 仅限制返回条数（0 = 不限），`max_total_chars` 约束 text 渲染长度。
+        按位置（深度）窗口读取会话历史。depth 0 = 最新消息；正数向更早回溯。返回
+        [depth_from, depth_to)，最旧在前，含角色、内容与工具名。`limit` 仅限制返回条数（0 = 不限）。
+        `preview_chars` 截断每条（默认 2000，0 = 不限）并标记 `truncated`；用该条 `id` 调
+        "history-read" 取剩余部分。传 `session` 可读取同租户下的另一个会话。
     input_schema:
       type: object
       properties:
-        from:
+        depth_from:
           type: integer
-          description: Starting depth offset (0 = newest message).
+          description: Starting depth (0 = newest message).
           descriptions:
-            zh: 起始深度偏移（0 = 最新一条消息）。
-        to:
+            zh: 起始深度（0 = 最新一条消息）。
+        depth_to:
           type: integer
-          description: Exclusive depth bound.
+          description: Exclusive depth bound (0 = no upper bound).
           descriptions:
-            zh: 不含端点的深度上界。
+            zh: 不含端点的深度上界（0 = 不限）。
+        include:
+          type: array
+          items:
+            type: string
+            enum: [text, tool, result]
+          description: >-
+            Content kinds to RENDER. Default ["text"]. "tool" adds call names and arguments;
+            "result" adds tool output.
+          descriptions:
+            zh: >-
+              要渲染的内容类型。默认 ["text"]。"tool" 追加调用名与参数；"result" 追加工具输出。
+        session:
+          type: string
+          description: Conversation to read. Empty = this session.
+          descriptions:
+            zh: 要读取的会话。留空 = 本会话。
         limit:
           type: integer
           description: >-
-            Maximum number of messages to RETURN (default 200; 0 = no cap). Does not
-            bound the traversal depth.
+            Maximum number of messages to RETURN (default 200; 0 = no cap). Does not bound the
+            traversal depth.
           descriptions:
             zh: 最多返回的消息数（默认 200；0 = 不限）。不限制遍历深度。
+        preview_chars:
+          type: integer
+          description: >-
+            Maximum characters of content per entry (default 2000; 0 = no limit).
+          descriptions:
+            zh: 每条内容的字符上限（默认 2000；0 = 不限）。
         max_total_chars:
           type: integer
           description: >-
             Total budget for the rendered text (default 100000; 0 = unlimited).
-            Entries accumulate (meta + full content); a single message is NEVER
-            truncated. When adding the next entry would exceed the budget, that entry
-            is still emitted in full and the list then stops.
           descriptions:
-            zh: >-
-              text 渲染的总字符预算（默认 100000；0 = 不限）。逐条累加（元信息 + 完整 content），
-              单条永不截断；加上下一条会超预算时，仍完整输出该条并停止。
+            zh: text 渲染的总字符预算（默认 100000；0 = 不限）。
+
+  - name: history-read
+    description: >-
+      Return ONE message from a conversation in FULL, by id. This is the other half of the
+      truncation the other history tools apply: when a search entry says `truncated`, pass its `id`
+      here. `part` selects what to return — "text" (the message's own prose), "tool" (call names
+      and arguments), "result" (tool output only) — and omitting it returns everything. Output is
+      never truncated. Pass `session` when the id came from another conversation.
+    descriptions:
+      zh: >-
+        按 id 返回会话中某条消息的完整内容。这是其他历史工具所做截断的另一半：当搜索结果标记
+        `truncated` 时，把该条 `id` 传进来。`part` 选择返回内容——"text"（消息自身文本）、
+        "tool"（调用名与参数）、"result"（仅工具输出）——省略则返回全部。输出永不截断。
+        若 id 来自另一个会话，请传 `session`。
+    input_schema:
+      type: object
+      properties:
+        id:
+          type: string
+          description: The message id an entry reported.
+          descriptions:
+            zh: 条目的消息 id。
+        part:
+          type: string
+          enum: [text, tool, result]
+          description: >-
+            Which part to return. Omit for everything.
+          descriptions:
+            zh: 返回哪一部分。省略则返回全部。
+        session:
+          type: string
+          description: Conversation the id belongs to. Empty = this session.
+          descriptions:
+            zh: id 所属的会话。留空 = 本会话。
+      required: [id]
 
   - name: file-info
     description: >-

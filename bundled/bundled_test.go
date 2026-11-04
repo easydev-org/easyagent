@@ -17,6 +17,14 @@ type stubDeps struct {
 		data []byte
 	}
 	mails []string
+
+	// Conversation state, for the history tools. Zero value = an empty session, which is what most
+	// tests want.
+	chain      []ChainEntry
+	parts      []MessagePartRow
+	tips       map[string]string
+	chainByTip map[string][]ChainEntry
+	existing   map[string]bool
 }
 
 func (d *stubDeps) SessionVariable(string, string, string) (string, bool) { return "", false }
@@ -36,9 +44,22 @@ func (d *stubDeps) BlobGet(_, code string) (map[string]any, []byte, bool) {
 func (d *stubDeps) IngestBlob(_, _, name string, data []byte) (string, string, string, error) {
 	return "code1234567890ab", "image/png", name, nil
 }
-func (d *stubDeps) SessionGroup(string, string) string        { return "" }
-func (d *stubDeps) SessionExists(string, sid string) bool     { return sid == "parent" || sid == "child" }
-func (d *stubDeps) SessionTip(string, string) string          { return "" }
+func (d *stubDeps) SessionGroup(string, string) string { return "" }
+func (d *stubDeps) SessionExists(_ string, sid string) bool {
+	if d.existing != nil {
+		return d.existing[sid]
+	}
+	return sid == "parent" || sid == "child"
+}
+func (d *stubDeps) SessionTip(_ string, sid string) string {
+	if d.tips != nil {
+		return d.tips[sid]
+	}
+	if len(d.chain) > 0 {
+		return d.chain[0].ID
+	}
+	return ""
+}
 func (d *stubDeps) SessionsInGroup(string, string) []string   { return nil }
 func (d *stubDeps) ForkSession(string, string, string) error  { return nil }
 func (d *stubDeps) DeleteSessionRow(string, string) error     { return nil }
@@ -47,8 +68,13 @@ func (d *stubDeps) PublishMailbox(_, session string, _ mailbox.Type, _ any, _ st
 	d.mails = append(d.mails, session)
 	return nil
 }
-func (d *stubDeps) MessageChain(string, string, int) []ChainEntry  { return nil }
-func (d *stubDeps) MessageParts(string, []string) []MessagePartRow { return nil }
+func (d *stubDeps) MessageChain(_ string, tip string, _ int) []ChainEntry {
+	if d.chainByTip != nil {
+		return d.chainByTip[tip]
+	}
+	return d.chain
+}
+func (d *stubDeps) MessageParts(string, []string) []MessagePartRow { return d.parts }
 func (d *stubDeps) TodosReplace(string, string, []TodoRow) error   { return nil }
 
 // NO JOBS IN THE STUB. A test that needs them sets jobs; the default is the ordinary case, which
