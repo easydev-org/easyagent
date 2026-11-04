@@ -69,6 +69,7 @@ func searchProviders() []searchProvider {
 		{name: "tavily", search: searchTavily},
 		{name: "exa", search: searchExa},
 		{name: "firecrawl", search: searchFirecrawl},
+		{name: "tinyfish", search: searchTinyfish},
 	}
 }
 
@@ -468,6 +469,62 @@ func parseExaText(text string, count int) []searchResult {
 	return out
 }
 
+/**
+ * searchTinyfish queries TinyFish's MCP endpoint.
+ *
+ * TWO THINGS DIFFER FROM THE OTHERS, both verified against the live endpoint:
+ *   - the tool is named `search`, not `web_search` or `web_search_exa`;
+ *   - the keyless mode is a HEADER (`X-TinyFish-Access-Mode: keyless`). Without it the endpoint
+ *     answers 401, which reads as "this provider needs a key" when it does not.
+ *
+ * Its reply is a JSON string in `content[0].text`, like Parallel's — the MCP wrapper is the same
+ * shape even though the payloads differ.
+ */
+func searchTinyfish(ctx context.Context, query string, count int, timeout time.Duration) ([]searchResult, error) {
+	res, err := mcpEndpoint(ctx, "https://agent.tinyfish.ai/mcp", "search", map[string]any{
+		"query": query,
+	}, map[string]string{"X-TinyFish-Access-Mode": "keyless"}, timeout)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(res, &wrapper); err != nil {
+		return nil, fmt.Errorf("unexpected result shape: %w", err)
+	}
+	if len(wrapper.Content) == 0 {
+		return nil, errors.New("empty content")
+	}
+	var payload struct {
+		Results []struct {
+			URL      string `json:"url"`
+			Title    string `json:"title"`
+			Snippet  string `json:"snippet"`
+			SiteName string `json:"site_name"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(wrapper.Content[0].Text), &payload); err != nil {
+		return nil, fmt.Errorf("unexpected payload: %w", err)
+	}
+	out := make([]searchResult, 0, len(payload.Results))
+	for _, r := range payload.Results {
+		if r.URL == "" {
+			continue
+		}
+		content := tinyfishContent(r.Snippet, r.SiteName)
+		out = append(out, searchResult{
+			URL: r.URL, Title: r.Title, Content: content, Provider: "tinyfish",
+		})
+		if len(out) >= count {
+			break
+		}
+	}
+	return out, nil
+}
+
 // searchFirecrawl queries Firecrawl's MCP endpoint.
 func searchFirecrawl(ctx context.Context, query string, count int, timeout time.Duration) ([]searchResult, error) {
 	res, err := mcpEndpoint(ctx, "https://mcp.firecrawl.dev/v2/mcp", "firecrawl_search", map[string]any{
@@ -514,6 +571,21 @@ func searchFirecrawl(ctx context.Context, query string, count int, timeout time.
 		}
 	}
 	return out, nil
+}
+
+/**
+ * tinyfishContent appends the site name to a snippet, unless the snippet already names it.
+ *
+ * THE SITE NAME IS PART OF THE USEFUL ANSWER when the snippet is short: "go.dev" tells a reader more
+ * about whether a hit is authoritative than the URL alone. Appending it twice is worse than not
+ * appending it at all, hence the check.
+ */
+func tinyfishContent(snippet, site string) string {
+	snippet = strings.TrimSpace(snippet)
+	if site == "" || strings.Contains(snippet, site) {
+		return snippet
+	}
+	return strings.TrimSpace(snippet + " (" + site + ")")
 }
 
 var _ = sync.Mutex{}

@@ -151,3 +151,42 @@ func TestExtractRPCResultHandlesBothTransports(t *testing.T) {
 		}
 	})
 }
+
+/**
+ * TINYFISH'S SHAPE, PINNED.
+ *
+ * It is the one provider whose tool is named `search` and whose keyless mode is a header; both were
+ * discovered by calling the live endpoint, where a missing header answers 401 and reads as "needs a
+ * key". Its payload is a JSON string inside the MCP wrapper, like Parallel's.
+ */
+func TestSearchTinyfishIsRegistered(t *testing.T) {
+	var names []string
+	for _, p := range searchProviders() {
+		names = append(names, p.name)
+	}
+	for _, want := range []string{"parallel", "tavily", "exa", "firecrawl", "tinyfish"} {
+		found := false
+		for _, n := range names {
+			if n == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("provider %q is not registered", want)
+		}
+	}
+}
+
+// The site name is appended only when the snippet does not already carry it — a snippet that ends in
+// "(go.dev)" twice is worse than one that says it once.
+func TestTinyfishContentAppendsSiteNameOnce(t *testing.T) {
+	if got := tinyfishContent("some text", "go.dev"); got != "some text (go.dev)" {
+		t.Errorf("got %q", got)
+	}
+	if got := tinyfishContent("already mentions go.dev", "go.dev"); got != "already mentions go.dev" {
+		t.Errorf("the name was appended twice: %q", got)
+	}
+	if got := tinyfishContent("no site", ""); got != "no site" {
+		t.Errorf("an empty site name changed the text: %q", got)
+	}
+}

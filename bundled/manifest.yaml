@@ -647,7 +647,7 @@ config:
     type: string
     scope: global
     default: ''
-    enum_values: [parallel, tavily, exa, firecrawl]
+    enum_values: [parallel, tavily, exa, firecrawl, tinyfish]
   # Model-reference knobs. `kind: model` + `capability` let the UI render a
   # picker scoped to the registered modality instead of a free-form text field
   # (no variable-name heuristics). Each knob resolves at runtime via
