@@ -26,6 +26,18 @@ type StoreDeps struct {
 	BlobPutFn func(ctx context.Context, tenant, code string, data []byte) error
 	// Config resolves a tenant config knob (the agent's `cfg` KV view).
 	ConfigFn func(tenant, key string) (string, bool)
+	/**
+	 * ExtConfigFn reads an EXTENSION-SCOPED knob.
+	 *
+	 * IT IS A SEPARATE READER BECAUSE THE TWO ARE STORED IN DIFFERENT KEYSPACES. `SetExtensionConfig`
+	 * writes through `config.SetExt`, whose key carries the extension id; `ConfigFn` reads the
+	 * tenant-wide keyspace. A bundled tool that only had `ConfigFn` therefore NEVER saw a value the
+	 * console had saved for it — the knob displayed as set and the code read "".
+	 *
+	 * The bundled extension is the only one affected: an out-of-process extension reads its values
+	 * through the SDK's `GetConfig`, which already uses the scoped lookup.
+	 */
+	ExtConfigFn func(tenant, name, session string) (string, bool)
 	// SessionVar reads a projected session variable (e.g. locale).
 	SessionVarFn func(tenant, session, name string) (string, bool)
 	// Mail publishes a mailbox message (bus when wired, else the store queue).
@@ -42,8 +54,17 @@ func (d *StoreDeps) SessionVariable(tenant, session, name string) (string, bool)
 	return d.SessionVarFn(tenant, session, name)
 }
 
-// ResolveConfig implements Deps (session override → global).
+// ResolveConfig implements Deps (session override → extension-scoped → tenant-wide).
+//
+// THE EXTENSION-SCOPED LOOKUP COMES FIRST because that is where the console writes. Checking the
+// tenant-wide keyspace first would find an unrelated value under the same name and shadow the one the
+// user actually set for this extension.
 func (d *StoreDeps) ResolveConfig(name, session, tenant string) string {
+	if d.ExtConfigFn != nil {
+		if v, ok := d.ExtConfigFn(tenant, name, session); ok && v != "" {
+			return v
+		}
+	}
 	if d.ConfigFn == nil {
 		return ""
 	}

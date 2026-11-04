@@ -531,6 +531,11 @@ func bundledDeps(
 ) *bundled.StoreDeps {
 	d := &bundled.StoreDeps{DB: db}
 	d.ConfigFn = func(tenant, key string) (string, bool) { return cfg.Get(tenant, key) }
+	// AN EXTENSION-SCOPED READER, because the console writes there and `cfg.Get` does not look: the
+	// bundled tools read "" for every knob a user had set. See StoreDeps.ExtConfigFn.
+	d.ExtConfigFn = func(tenant, name, session string) (string, bool) {
+		return cfg.GetExt(tenant, "bundled", "", name)
+	}
 	d.SessionVarFn = func(tenant, session, name string) (string, bool) {
 		if name != "locale" {
 			return "", false
