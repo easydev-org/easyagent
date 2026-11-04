@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
+	easybus "github.com/easydev-org/easybus-sdk"
 	"github.com/easydev-org/easybus-sdk/bus"
 	"github.com/easydev-org/easybus-sdk/protocol"
 )
@@ -21,7 +22,7 @@ import (
 // store and returns the reference; the caller reads it.
 //
 // Returns a stop func; call it on shutdown.
-func (s *Server) ServeFileRPC(ctx context.Context, b bus.Bus) (func(), error) {
+func (s *Server) ServeFileRPC(ctx context.Context, b fileRPCBus) (func(), error) {
 	ingest, err := b.Subscribe(ctx, protocol.FileIngestWildcard, bus.SubscribeOpts{})
 	if err != nil {
 		return nil, err
@@ -38,7 +39,7 @@ func (s *Server) ServeFileRPC(ctx context.Context, b bus.Bus) (func(), error) {
 
 // ingestLoop answers `easybus.<tenant>.file.ingest`: read the referenced
 // object, store it, reply {ok, code, mime}.
-func (s *Server) ingestLoop(ctx context.Context, b bus.Bus, sub bus.Subscription) {
+func (s *Server) ingestLoop(ctx context.Context, b fileRPCBus, sub bus.Subscription) {
 	for {
 		env, ok := sub.Next(ctx)
 		if !ok {
@@ -75,7 +76,7 @@ func (s *Server) ingestLoop(ctx context.Context, b bus.Bus, sub bus.Subscription
 
 // getLoop answers `easybus.<tenant>.file.get`: look the file up, write its bytes
 // to the transient object store, reply {ok, meta, object}.
-func (s *Server) getLoop(ctx context.Context, b bus.Bus, sub bus.Subscription) {
+func (s *Server) getLoop(ctx context.Context, b fileRPCBus, sub bus.Subscription) {
 	for {
 		env, ok := sub.Next(ctx)
 		if !ok {
@@ -111,7 +112,7 @@ func (s *Server) getLoop(ctx context.Context, b bus.Bus, sub bus.Subscription) {
 }
 
 // replyFile publishes a file RPC reply as a Go-compatible JSON payload.
-func (s *Server) replyFile(ctx context.Context, b bus.Bus, replyTo, tenant string, v any) error {
+func (s *Server) replyFile(ctx context.Context, b fileRPCBus, replyTo, tenant string, v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -121,4 +122,18 @@ func (s *Server) replyFile(ctx context.Context, b bus.Bus, replyTo, tenant strin
 		return err
 	}
 	return b.Publish(ctx, replyTo, payload, bus.PublishOpts{Tenant: tenant})
+}
+
+// fileRPCBus is the file-transfer server's view: answer a request, move bytes through the transient
+// object bucket.
+//
+// THE BYTES GO THROUGH THE OBJECT STORE AND THE REFERENCE THROUGH THE MESSAGE, which is why these
+// five methods and nothing else are needed — this is not a general-purpose bus dependency.
+type fileRPCBus interface {
+	Request(ctx context.Context, ch string, payload any, opts bus.RequestOpts) (*easybus.Envelope, error)
+	Publish(ctx context.Context, ch string, payload any, opts bus.PublishOpts) error
+	Subscribe(ctx context.Context, ch string, opts bus.SubscribeOpts) (bus.Subscription, error)
+	ObjectPut(ctx context.Context, name string, data []byte) error
+	ObjectGet(ctx context.Context, name string) ([]byte, error)
+	Close() error
 }

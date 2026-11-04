@@ -170,11 +170,11 @@ func TestDistributePayloadCarriesProvenance(t *testing.T) {
 	_, _ = d.Distribute(context.Background(), bus.ChannelMessage{
 		Tenant: "alice", Channel: "gitea", Topic: "tag.v1", Payload: "the-tag", Source: "gitea",
 	})
-	body, ok := (*got)[0].payload.(map[string]any)
+	body, ok := (*got)[0].payload.(mailbox.Body)
 	if !ok {
-		t.Fatalf("payload shape = %T", (*got)[0].payload)
+		t.Fatalf("payload shape = %T, want mailbox.Body — producers must use the shared type", (*got)[0].payload)
 	}
-	if body["channel"] != "gitea" || body["topic"] != "tag.v1" || body["payload"] != "the-tag" {
+	if body.Channel != "gitea" || body.Topic != "tag.v1" || body.Data != "the-tag" {
 		t.Errorf("payload lost provenance: %+v", body)
 	}
 }

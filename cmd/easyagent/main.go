@@ -271,38 +271,15 @@ func run(cfgPath string) error {
 	}
 	rt := agent.NewRuntime(rtDeps)
 
-	srv := server.New(server.Deps{
-		DB: db, Runtime: rt, Hub: hub,
-		Config: server.Config{
-			AuthMode: cfg.Auth.Mode, AdminToken: cfg.Auth.AdminToken, AdminUsername: cfg.Auth.AdminUsername, DefaultTenant: cfg.Tenant.Default,
-		},
-		// THE SAME QUEUE THE RUNTIME DRAINS. A prompt is written by the server and taken by the runtime, so
-		// two instances would each look correct and deliver nothing — the failure reads as "the turn never
-		// ran", which is exactly how this was first wired.
-		Presets: presets, ConfigKV: tenantConfig, Bus: runtimeBus, Mailbox: queue,
-	})
-	server.SetDefaultTenant(cfg.Tenant.Default)
-	if toolExec != nil {
-		srv.SetTools(toolExec)
-	}
-	srv.SetBundledTools(bundledExt)
-	srv.SetBundledConfigFields(bundledExt)
-	// A runtime-created tenant is seeded immediately (boot seeding only covers
-	// tenants known at startup) — mirrors the TS seedTenantDefaults.
-	srv.SetTenantSeeder(func(tenant string) {
-		seedTenantDefaults(presets, tenantConfig, db, cfg, tenant)
-	})
-	if runtimeBus != nil {
-		srv.SetStreamSource(runtimeBus)
-		// Every session gets a default channel so anything can reach it by name.
-		if subIdx != nil {
-			srv.SetChannelProvisioner(agentbus.NewDefaultChannelProvisioner(runtimeBus.Transport()))
-			srv.SetSubscriptions(agentbus.NewSubscriptionStore(runtimeBus.Transport(), subIdx))
-		}
-	}
 	// Durable file bytes live in S3 when configured (AGENT_BLOB_BACKEND=s3).
+	//
+	// BUILT BEFORE THE SERVER, not patched into it afterwards: the server takes its dependencies in
+	// one struct now, so a backend that arrives later would have to be a mutation — the pattern this
+	// replaces.
+	var store3 *blob.Store
 	if strings.EqualFold(cfg.Blob.Backend, "s3") {
-		store3, err := blob.NewS3(context.Background(), blob.S3Config{
+		var berr error
+		store3, berr = blob.NewS3(context.Background(), blob.S3Config{
 			Bucket:          cfg.Blob.S3.Bucket,
 			Region:          cfg.Blob.S3.Region,
 			Endpoint:        cfg.Blob.S3.Endpoint,
@@ -311,10 +288,9 @@ func run(cfgPath string) error {
 			ForcePathStyle:  cfg.Blob.S3.ForcePathStyle,
 			Prefix:          cfg.Blob.S3.Prefix,
 		})
-		if err != nil {
-			return fmt.Errorf("s3 blob: %w", err)
+		if berr != nil {
+			return fmt.Errorf("s3 blob: %w", berr)
 		}
-		srv.SetBlob(store3)
 		fileBlobGet = func(code string) ([]byte, bool) {
 			b, ok, _ := store3.Get(context.Background(), code)
 			return b, ok
@@ -325,6 +301,41 @@ func run(cfgPath string) error {
 		slog.Info("file bytes backed by S3", "bucket", cfg.Blob.S3.Bucket)
 	}
 
+	// Channel wiring exists only with a broker; each field is nil without one, which the server reads
+	// as "channels are not configured" rather than "nothing is subscribed".
+	var (
+		prov     server.ChannelProvisioner
+		subStore server.SubscriptionStore
+		stream   server.StreamSource
+	)
+	if runtimeBus != nil {
+		stream = runtimeBus
+		if subIdx != nil {
+			prov = agentbus.NewDefaultChannelProvisioner(runtimeBus.Transport())
+			subStore = agentbus.NewSubscriptionStore(runtimeBus.Transport(), subIdx)
+		}
+	}
+
+	srv := server.New(server.Deps{
+		DB: db, Runtime: rt, Hub: hub,
+		Config: server.Config{
+			AuthMode: cfg.Auth.Mode, AdminToken: cfg.Auth.AdminToken, AdminUsername: cfg.Auth.AdminUsername, DefaultTenant: cfg.Tenant.Default,
+		},
+		// THE SAME QUEUE THE RUNTIME DRAINS. A prompt is written by the server and taken by the runtime, so
+		// two instances would each look correct and deliver nothing — the failure reads as "the turn never
+		// ran", which is exactly how this was first wired.
+		Presets: presets, ConfigKV: tenantConfig, Bus: runtimeBus, Mailbox: queue,
+		Tools:         toolExec,
+		BundledTools:  bundledExt,
+		BundledFields: bundledExt,
+		// A runtime-created tenant is seeded immediately (boot seeding only covers tenants known at
+		// startup) — mirrors the TS seedTenantDefaults.
+		SeedTenant: func(tenant string) {
+			seedTenantDefaults(presets, tenantConfig, db, cfg, tenant)
+		},
+		Stream: stream, Channels: prov, Subs: subStore, Blob: store3,
+	})
+	server.SetDefaultTenant(cfg.Tenant.Default)
 	// Mailbox consumer: each replica joins the durable consumer and processes
 	// exactly-once; every delivered message wakes the session.
 	if runtimeBus != nil {

@@ -2,26 +2,9 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/easydev-org/easybus-sdk/mailbox"
 )
-
-/**
- * decodeWakePayload reads a mailbox payload into a wake payload.
- *
- * IT TOLERATES BOTH SHAPES, because the queue holds whatever the producer wrote: an object from the
- * extension path, and historically a JSON string from the row-based table. Encoding to JSON and decoding
- * back handles both without the caller having to know which it got — and a producer that sends a string
- * containing JSON is not making a mistake, it is using the shape the old storage required.
- */
-func decodeWakePayload(v any, p *WakePayload) error {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(raw, p)
-}
 
 /**
  * MailboxQueue is the runtime's view of the delivery queue.

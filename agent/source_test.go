@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/easydev-org/easybus-sdk/mailbox"
@@ -37,10 +36,11 @@ func TestTriggerSourceIsCarriedThrough(t *testing.T) {
 	}
 
 	// AND THE PAYLOAD'S TEXT MUST STILL DECODE: the source is carried alongside it, not instead.
-	raw, _ := json.Marshal(WakePayload{MessageID: "m1", Text: "<job ...>"})
-	var p WakePayload
-	if err := json.Unmarshal(raw, &p); err != nil || p.Text == "" {
-		t.Fatalf("the wake payload still has to decode: %+v %v", p, err)
+	// Through the SHARED accessor, because that is what the runtime uses — a body that only decodes
+	// with a bespoke struct would be one the fold cannot read.
+	p, err := mailbox.BodyOf(mailbox.Body{MessageID: "m1", Text: "<job ...>"})
+	if err != nil || p.Text == "" {
+		t.Fatalf("the body still has to decode: %+v %v", p, err)
 	}
 }
 

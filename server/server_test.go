@@ -31,6 +31,16 @@ func newTestServer(t *testing.T) (*httptest.Server, *store.DB) {
 // newTestServerWithSrv also returns the *Server so a test can install stubs.
 func newTestServerWithSrv(t *testing.T) (*httptest.Server, *store.DB, *Server) {
 	t.Helper()
+	return newTestServerWith(t, nil)
+}
+
+// newTestServerWith lets a test supply the surfaces it wants the server built with.
+//
+// THE TWEAK RUNS BEFORE New, because dependencies are no longer mutable afterwards — which is the
+// point of collapsing the Set* installers. A test that needs a stub declares it here instead of
+// reaching into a live server.
+func newTestServerWith(t *testing.T, tweak func(*Deps)) (*httptest.Server, *store.DB, *Server) {
+	t.Helper()
 	db, err := store.Open(store.SQLite, ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -48,17 +58,21 @@ func newTestServerWithSrv(t *testing.T) (*httptest.Server, *store.DB, *Server) {
 	rt := agent.NewRuntime(agent.RuntimeDeps{
 		DB: db, Mailbox: q, Lease: agent.NewMemoryLease(), Emit: hub.Emitter("", ""), Presets: agent.PresetStore{P: presets},
 	})
-	srv := New(Deps{
+	deps := Deps{
 		DB: db, Runtime: rt, Hub: hub,
 		Config:   Config{AuthMode: "required", AdminToken: adminToken, DefaultTenant: "default"},
 		Presets:  presets,
 		ConfigKV: agent.NewConfig(kv),
 		Mailbox:  q,
-	})
-	// A runtime-created tenant is seeded (mirrors the TS seedTenantDefaults):
-	// record the tenants the seeder was invoked for.
+		// A runtime-created tenant is seeded (mirrors the TS seedTenantDefaults):
+		// record the tenants the seeder was invoked for.
+		SeedTenant: func(tenant string) { seededFor = append(seededFor, tenant) },
+	}
+	if tweak != nil {
+		tweak(&deps)
+	}
+	srv := New(deps)
 	seededFor = nil
-	srv.SetTenantSeeder(func(tenant string) { seededFor = append(seededFor, tenant) })
 
 	mux := http.NewServeMux()
 	cs := connect.NewServer(srv.AuthInterceptor())

@@ -29,9 +29,6 @@ type SubscriptionStore interface {
 	Delete(ctx context.Context, tenant, session, id string) error
 }
 
-// SetSubscriptions installs the subscription store.
-func (s *Server) SetSubscriptions(st SubscriptionStore) { s.subs = st }
-
 // ListSubscriptions returns what a session follows.
 func (s *Server) ListSubscriptions(ctx context.Context, req *agentv1.ListSubscriptionsRequest) (*agentv1.ListSubscriptionsResponse, error) {
 	tenant := tenantOf(ctx)
