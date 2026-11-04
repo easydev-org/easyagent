@@ -100,8 +100,12 @@ func (d *DB) Migrate() error {
  * It is a ONE-TIME cost gated on "any row still at seq 0", so a normal boot does one cheap count.
  */
 func (d *DB) backfillMessageSeq() error {
+	// NULL **OR** 0, and both are real: AutoMigrate adds the column as NULLABLE on PostgreSQL and
+	// MySQL, so pre-existing rows arrive as NULL; SQLite fills a numeric default, so the same rows
+	// arrive as 0. Checking only 0 skipped every row on the deployed database — the migration ran,
+	// reported success, and changed nothing.
 	var unnumbered int64
-	if err := d.g.Model(&Message{}).Where("seq = 0").Count(&unnumbered).Error; err != nil {
+	if err := d.g.Model(&Message{}).Where("seq IS NULL OR seq = 0").Count(&unnumbered).Error; err != nil {
 		return err
 	}
 	if unnumbered == 0 {

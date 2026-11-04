@@ -118,3 +118,81 @@ func TestBackfillSkipsAbandonedMessages(t *testing.T) {
 		t.Fatalf("reachable message a seq = %d, want 1", a.Seq)
 	}
 }
+
+/**
+ * THE BACKFILL MUST TREAT NULL AS UNNUMBERED, NOT ONLY 0.
+ *
+ * PostgreSQL and MySQL add a column as NULLABLE, so rows written before it exist arrive as NULL.
+ * SQLite fills a numeric default, so the same rows arrive as 0. The gate checked only 0 — so on the
+ * deployed database the migration RAN, REPORTED SUCCESS, AND CHANGED NOTHING: 60 messages, all still
+ * NULL, and a positional read would have found none of them.
+ *
+ * The test forces the NULL form directly, because SQLite will not produce it.
+ */
+func TestBackfillTreatsNullAsUnnumbered(t *testing.T) {
+	d := newTestDB(t)
+	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range []string{"a", "b"} {
+		var prev *string
+		if i > 0 {
+			prev = ptr("a")
+		}
+		if _, err := d.InsertMessage("t", id, "user", prev, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.AppendMessageTip("t", "s", "b"); err != nil {
+		t.Fatal(err)
+	}
+	// The shape PostgreSQL leaves behind.
+	if err := d.g.Exec("UPDATE messages SET seq = NULL WHERE tenant = ?", "t").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	for i, id := range []string{"a", "b"} {
+		m, ok, err := d.GetMessage("t", id)
+		if err != nil || !ok {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if m.Seq != int64(i+1) {
+			t.Errorf("%s seq = %d, want %d (a NULL row was skipped)", id, m.Seq, i+1)
+		}
+	}
+}
+
+/**
+ * A NULL ROW MUST NOT BREAK THE CHAIN READ.
+ *
+ * Scanning NULL into an int64 fails the query, which would take a session's ENTIRE history down for
+ * one un-backfilled row — turning a missing number into a missing conversation.
+ */
+func TestChainToleratesANullSeq(t *testing.T) {
+	d := newTestDB(t)
+	for i, id := range []string{"a", "b"} {
+		var prev *string
+		if i > 0 {
+			prev = ptr("a")
+		}
+		if _, err := d.InsertMessage("t", id, "user", prev, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.g.Exec("UPDATE messages SET seq = NULL WHERE tenant = ? AND id = ?", "t", "b").Error; err != nil {
+		t.Fatal(err)
+	}
+	chain, err := d.Chain("t", "b", 100, "")
+	if err != nil {
+		t.Fatalf("a NULL seq broke the chain read: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("chain = %d messages, want 2", len(chain))
+	}
+	if chain[1].Seq != 0 {
+		t.Fatalf("a NULL seq should read as 0, got %d", chain[1].Seq)
+	}
+}
