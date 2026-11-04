@@ -87,7 +87,16 @@ type Session struct {
 	//                   user stopped. Empty when no turn has finished yet.
 	LastTurnReason string `protobuf:"bytes,26,opt,name=last_turn_reason,json=lastTurnReason,proto3" json:"last_turn_reason,omitempty"`
 	// RFC3339 timestamp of that turn's end; empty when none has finished.
-	LastTurnAt    string `protobuf:"bytes,27,opt,name=last_turn_at,json=lastTurnAt,proto3" json:"last_turn_at,omitempty"`
+	LastTurnAt string `protobuf:"bytes,27,opt,name=last_turn_at,json=lastTurnAt,proto3" json:"last_turn_at,omitempty"`
+	// Session picture, as a `file:<code>` from the agent's blob store. Empty is
+	// NOT "no picture": clients render a deterministic identicon seeded by the
+	// session name, which is what every session showed before this field existed.
+	AvatarFile string `protobuf:"bytes,28,opt,name=avatar_file,json=avatarFile,proto3" json:"avatar_file,omitempty"`
+	// One line describing WHAT THIS SESSION IS ("maintainer of repo acme/app").
+	// It rides in the turn's <env> block so the model knows its own role without
+	// the user restating it. NOT a system prompt: that field REPLACES the preset
+	// prompt wholesale, so a role change would mean rewriting everything.
+	Intro         string `protobuf:"bytes,29,opt,name=intro,proto3" json:"intro,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -307,6 +316,20 @@ func (x *Session) GetLastTurnReason() string {
 func (x *Session) GetLastTurnAt() string {
 	if x != nil {
 		return x.LastTurnAt
+	}
+	return ""
+}
+
+func (x *Session) GetAvatarFile() string {
+	if x != nil {
+		return x.AvatarFile
+	}
+	return ""
+}
+
+func (x *Session) GetIntro() string {
+	if x != nil {
+		return x.Intro
 	}
 	return ""
 }
@@ -4542,7 +4565,12 @@ type UpdateSettingsRequest struct {
 	Preset string                 `protobuf:"bytes,3,opt,name=preset,proto3" json:"preset,omitempty"`
 	Locale string                 `protobuf:"bytes,4,opt,name=locale,proto3" json:"locale,omitempty"`
 	// Selected reasoning variant id (empty clears it).
-	Variant       string `protobuf:"bytes,5,opt,name=variant,proto3" json:"variant,omitempty"`
+	Variant string `protobuf:"bytes,5,opt,name=variant,proto3" json:"variant,omitempty"`
+	// `optional` IS THE POINT: proto3 cannot tell an absent string from an empty one, and these two
+	// need both meanings. Absent = leave the value alone; present-but-empty = CLEAR it, which is how a
+	// session goes back to the derived identicon or to saying nothing about itself.
+	AvatarFile    *string `protobuf:"bytes,6,opt,name=avatar_file,json=avatarFile,proto3,oneof" json:"avatar_file,omitempty"`
+	Intro         *string `protobuf:"bytes,7,opt,name=intro,proto3,oneof" json:"intro,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4608,6 +4636,20 @@ func (x *UpdateSettingsRequest) GetLocale() string {
 func (x *UpdateSettingsRequest) GetVariant() string {
 	if x != nil {
 		return x.Variant
+	}
+	return ""
+}
+
+func (x *UpdateSettingsRequest) GetAvatarFile() string {
+	if x != nil && x.AvatarFile != nil {
+		return *x.AvatarFile
+	}
+	return ""
+}
+
+func (x *UpdateSettingsRequest) GetIntro() string {
+	if x != nil && x.Intro != nil {
+		return *x.Intro
 	}
 	return ""
 }
@@ -9445,7 +9487,7 @@ var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x14agent/v1/agent.proto\x12\bagent.v1\x1a\x1cgoogle/protobuf/struct.proto\"\xd1\x06\n" +
+	"\x14agent/v1/agent.proto\x12\bagent.v1\x1a\x1cgoogle/protobuf/struct.proto\"\x88\a\n" +
 	"\aSession\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x16\n" +
@@ -9479,7 +9521,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06status\x18\x19 \x01(\tR\x06status\x12(\n" +
 	"\x10last_turn_reason\x18\x1a \x01(\tR\x0elastTurnReason\x12 \n" +
 	"\flast_turn_at\x18\x1b \x01(\tR\n" +
-	"lastTurnAt\"\xa3\x01\n" +
+	"lastTurnAt\x12\x1f\n" +
+	"\vavatar_file\x18\x1c \x01(\tR\n" +
+	"avatarFile\x12\x14\n" +
+	"\x05intro\x18\x1d \x01(\tR\x05intro\"\xa3\x01\n" +
 	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\x12\x17\n" +
@@ -9798,13 +9843,18 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x0fMailboxResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x120\n" +
 	"\amailbox\x18\x02 \x03(\v2\x16.agent.v1.MailboxEntryR\amailbox\x12\x19\n" +
-	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\x87\x01\n" +
+	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\xe2\x01\n" +
 	"\x15UpdateSettingsRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x16\n" +
 	"\x06preset\x18\x03 \x01(\tR\x06preset\x12\x16\n" +
 	"\x06locale\x18\x04 \x01(\tR\x06locale\x12\x18\n" +
-	"\avariant\x18\x05 \x01(\tR\avariant\"E\n" +
+	"\avariant\x18\x05 \x01(\tR\avariant\x12$\n" +
+	"\vavatar_file\x18\x06 \x01(\tH\x00R\n" +
+	"avatarFile\x88\x01\x01\x12\x19\n" +
+	"\x05intro\x18\a \x01(\tH\x01R\x05intro\x88\x01\x01B\x0e\n" +
+	"\f_avatar_fileB\b\n" +
+	"\x06_intro\"E\n" +
 	"\x16UpdateSettingsResponse\x12+\n" +
 	"\asession\x18\x01 \x01(\v2\x11.agent.v1.SessionR\asession\"\"\n" +
 	"\x10InterruptRequest\x12\x0e\n" +
@@ -10595,6 +10645,7 @@ func file_agent_v1_agent_proto_init() {
 	if File_agent_v1_agent_proto != nil {
 		return
 	}
+	file_agent_v1_agent_proto_msgTypes[69].OneofWrappers = []any{}
 	file_agent_v1_agent_proto_msgTypes[125].OneofWrappers = []any{}
 	file_agent_v1_agent_proto_msgTypes[140].OneofWrappers = []any{}
 	type x struct{}

@@ -37,6 +37,31 @@ type Session struct {
 	// List-row projection (derived from the chain, written on append).
 	LastMessagePreview string  `gorm:"column:last_message_preview"`
 	LastMessageAt      *string `gorm:"column:last_message_at"`
+	/**
+	 * AvatarFile is the session's picture, as a `file:<code>` from the agent's own blob store.
+	 *
+	 * EMPTY MEANS "DERIVE ONE", not "no picture": the console renders a honeycomb identicon seeded by
+	 * the session name, which is what every session showed before this column existed. Storing a
+	 * generated image instead would make every new session cost a blob for no visible difference.
+	 *
+	 * A CODE, NOT A URL: the bytes already live in the blob store behind `image-generate` and the
+	 * upload RPC, and a session that pointed at an external URL would break when the remote disappeared
+	 * — with nothing on this side able to tell a missing picture from a broken link.
+	 */
+	AvatarFile string `gorm:"column:avatar_file;size:64"`
+	/**
+	 * Intro is the session's one-line description of WHAT IT IS — "maintainer of repo acme/app",
+	 * "CI triage". It rides in the turn's <env> block, so the model knows its own role without being
+	 * told in every prompt.
+	 *
+	 * IT IS NOT A SYSTEM PROMPT. That field REPLACES the preset's prompt wholesale when set, so a user
+	 * changing their session's role would have to restate the entire instruction set. This is one line
+	 * that adds to whatever prompt is already in play.
+	 *
+	 * EMPTY MEANS "SAY NOTHING", and the <env> block omits the section rather than emitting an empty
+	 * tag — a model reading "<intro></intro>" would reasonably ask what it is supposed to be.
+	 */
+	Intro string `gorm:"column:intro;size:512"`
 	// Why the last turn ended: "stop" | "interrupted" | "locklost" (empty = none).
 	LastTurnReason string  `gorm:"column:last_turn_reason"`
 	LastTurnAt     *string `gorm:"column:last_turn_at"`

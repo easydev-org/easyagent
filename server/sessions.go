@@ -179,6 +179,16 @@ func (s *Server) UpdateSettings(ctx context.Context, req *agentv1.UpdateSettings
 	if req.Variant != "" {
 		patch["variant"] = req.Variant
 	}
+	// ABSENT MEANS "LEAVE IT", PRESENT-BUT-EMPTY MEANS "CLEAR IT". The request fields are `optional`
+	// precisely so both are expressible: clearing is how a session goes back to the derived identicon,
+	// or to saying nothing about itself, and a non-optional string would make clearing impossible
+	// without a second RPC.
+	if req.AvatarFile != nil {
+		patch["avatar_file"] = req.GetAvatarFile()
+	}
+	if req.Intro != nil {
+		patch["intro"] = req.GetIntro()
+	}
 	if err := s.db.UpdateSessionSettings(tenant, req.Id, patch); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}

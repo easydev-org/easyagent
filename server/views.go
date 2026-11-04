@@ -31,6 +31,8 @@ func sessionToMsg(s store.Session, status string) *agentv1.Session {
 		UnreadCount:      int32(unread(s)),
 		Status:           status,
 		Variant:          s.Variant,
+		AvatarFile:       s.AvatarFile,
+		Intro:            s.Intro,
 	}
 	if s.TipID != nil {
 		msg.TipId = *s.TipID

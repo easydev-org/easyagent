@@ -597,7 +597,8 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 	plan, err := Plan(ctx, r.deps, PlanInput{
 		Tenant: tenant, SessionPreset: s.Preset, SessionLocale: s.Locale,
 		SessionSystem: s.SystemPrompt, SessionMax: s.MaxTurns,
-		DeniedTools: r.deps.DeniedTools, Now: r.deps.Now(),
+		SessionIntro: s.Intro,
+		DeniedTools:  r.deps.DeniedTools, Now: r.deps.Now(),
 		Grants: r.grantLines(tenant, session),
 	})
 	if err != nil {

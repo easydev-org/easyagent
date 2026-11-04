@@ -37,12 +37,33 @@ func LanguageDirective(locale string) string {
 // BuildEnvBlock is the per-turn <env> block appended to the model's system
 // prompt (always carries the language directive).
 func BuildEnvBlock(locale string, now time.Time) string {
-	return strings.Join([]string{
+	return BuildEnvBlockWithIntro(locale, now, "")
+}
+
+/**
+ * BuildEnvBlockWithIntro is the turn's environment, plus the session's own description of itself.
+ *
+ * WHY <intro> IS AN ELEMENT AND NOT A SENTENCE. The model reads a tagged block, and a tag says what
+ * the text IS: "maintainer of repo acme/app" in the middle of a paragraph could be mistaken for an
+ * instruction or for something the user said. A tag also lets a reader skip it, and the block is
+ * omitted entirely when the session has no intro — an empty "<intro></intro>" would prompt a model to
+ * ask what it is supposed to be.
+ *
+ * IT GOES IN <env> BECAUSE IT CHANGES RARELY AND APPLIES TO EVERY TURN. Putting it in the system
+ * prompt would mean rewriting that prompt on a role change, and `system_prompt` REPLACES the preset's
+ * prompt wholesale — so a one-line edit would cost the user everything else in it.
+ */
+func BuildEnvBlockWithIntro(locale string, now time.Time, intro string) string {
+	lines := []string{
 		"<env>",
 		"  Today's date: " + now.UTC().Format("2006-01-02"),
 		"  " + LanguageDirective(locale),
-		"</env>",
-	}, "\n")
+	}
+	if intro = strings.TrimSpace(intro); intro != "" {
+		lines = append(lines, "  <intro>"+intro+"</intro>")
+	}
+	lines = append(lines, "</env>")
+	return strings.Join(lines, "\n")
 }
 
 // BuildEnvBlockWithGrants appends what this session is allowed to do.
@@ -55,7 +76,12 @@ func BuildEnvBlock(locale string, now time.Time) string {
 // An empty grant list is stated explicitly rather than omitted: "you hold no permissions"
 // is information, and a model that is not told will assume it can do anything.
 func BuildEnvBlockWithGrants(locale string, now time.Time, grants []GrantLine) string {
-	block := BuildEnvBlock(locale, now)
+	return BuildEnvBlockAll(locale, now, "", grants)
+}
+
+// BuildEnvBlockAll is the full block: date, language, the session's intro, and its permissions.
+func BuildEnvBlockAll(locale string, now time.Time, intro string, grants []GrantLine) string {
+	block := BuildEnvBlockWithIntro(locale, now, intro)
 	if len(grants) == 0 {
 		// Nothing granted: say so. Silence reads as "unrestricted" to a model.
 		zh := primaryOf(NormalizeLocale(locale)) == "zh"
