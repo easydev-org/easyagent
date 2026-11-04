@@ -3,6 +3,7 @@ package bundled
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -112,7 +113,7 @@ func TestHistorySearchDefaultsToTextOnly(t *testing.T) {
 	// A prose match still works.
 	out = callHistory(t, "history-search", map[string]any{"query": "deploy the app"})
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "m1" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(1) {
 		t.Fatalf("prose search = %+v", entries)
 	}
 }
@@ -124,7 +125,7 @@ func TestHistorySearchCanIncludeResults(t *testing.T) {
 		"include": []any{"text", "result"},
 	})
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "m2" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(2) {
 		t.Fatalf("result search = %+v", entries)
 	}
 	got, _ := entries[0]["matched"].([]string)
@@ -140,7 +141,7 @@ func TestHistorySearchToolKindMatchesNameAndArgs(t *testing.T) {
 		"include": []any{"tool"},
 	})
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "m2" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(2) {
 		t.Fatalf("tool search = %+v", entries)
 	}
 }
@@ -213,7 +214,7 @@ func TestHistorySearchPreviewZeroIsUnlimited(t *testing.T) {
  * without re-running a search with a bigger preview (which re-scans the chain).
  */
 func TestHistoryReadReturnsFullContent(t *testing.T) {
-	out := callHistory(t, "history-read", map[string]any{"id": "m2", "part": "result"})
+	out := callHistory(t, "history-read", map[string]any{"seq": 2, "part": "result"})
 	if !strings.Contains(out.Content, "DEPLOY-OK") {
 		t.Fatalf("history-read did not return the full result:\n%s", out.Content)
 	}
@@ -222,13 +223,13 @@ func TestHistoryReadReturnsFullContent(t *testing.T) {
 	}
 
 	// part=text returns only the prose.
-	out = callHistory(t, "history-read", map[string]any{"id": "m2", "part": "text"})
+	out = callHistory(t, "history-read", map[string]any{"seq": 2, "part": "text"})
 	if strings.TrimSpace(out.Content) != "deploying now" {
 		t.Fatalf("part=text = %q", out.Content)
 	}
 
 	// Omitting part returns everything: prose AND the tool call AND its result.
-	out = callHistory(t, "history-read", map[string]any{"id": "m2"})
+	out = callHistory(t, "history-read", map[string]any{"seq": 2})
 	for _, want := range []string{"deploying now", "sandbox-job-start", "DEPLOY-OK"} {
 		if !strings.Contains(out.Content, want) {
 			t.Errorf("history-read without part omitted %q", want)
@@ -239,7 +240,7 @@ func TestHistoryReadReturnsFullContent(t *testing.T) {
 // An id from another conversation is a miss, not a silent empty answer.
 func TestHistoryReadUnknownIDIsAnError(t *testing.T) {
 	e, _ := New(historyStubDeps())
-	if _, err := e.Execute(context.Background(), "t1", "s1", "c1", "history-read", `{"id":"nope"}`); err == nil {
+	if _, err := e.Execute(context.Background(), "t1", "s1", "c1", "history-read", `{"seq":99}`); err == nil {
 		t.Fatal("an unknown message id was accepted")
 	}
 }
@@ -273,7 +274,7 @@ func TestHistorySearchReadsAnotherSession(t *testing.T) {
 		t.Fatalf("cross-session search: %v", rerr)
 	}
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "x1" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(1) {
 		t.Fatalf("cross-session entries = %+v", entries)
 	}
 	if historyMeta(t, out, "session") != "other" {
@@ -306,7 +307,7 @@ func TestHistorySearchUnknownSessionIsAnError(t *testing.T) {
 func TestHistoryRangeReadWindowsBySeq(t *testing.T) {
 	out := callHistory(t, "history-range-read", map[string]any{"from_seq": 2, "to_seq": 3})
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "m2" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(2) {
 		t.Fatalf("seq window = %+v", entries)
 	}
 
@@ -321,7 +322,7 @@ func TestHistoryRangeReadWindowsBySeq(t *testing.T) {
 func TestHistoryRangeReadToSeqIsExclusive(t *testing.T) {
 	out := callHistory(t, "history-range-read", map[string]any{"from_seq": 1, "to_seq": 2})
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "m1" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(1) {
 		t.Fatalf("to_seq is not exclusive: %+v", entries)
 	}
 }
@@ -330,7 +331,7 @@ func TestHistoryRangeReadToSeqIsExclusive(t *testing.T) {
 func TestHistoryRangeReadLastKeepsNewest(t *testing.T) {
 	out := callHistory(t, "history-range-read", map[string]any{"last": 1})
 	entries := historyEntries(t, out)
-	if len(entries) != 1 || entries[0]["id"] != "m2" {
+	if len(entries) != 1 || entries[0]["seq"] != int64(2) {
 		t.Fatalf("last=1 = %+v, want the newest message", entries)
 	}
 }
@@ -353,8 +354,8 @@ func TestHistoryRangeReadIsOldestFirst(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("entries = %+v", entries)
 	}
-	if entries[0]["id"] != "m1" || entries[1]["id"] != "m2" {
-		t.Fatalf("order = %v, %v; want oldest first", entries[0]["id"], entries[1]["id"])
+	if entries[0]["seq"] != int64(1) || entries[1]["seq"] != int64(2) {
+		t.Fatalf("order = %v, %v; want oldest first", entries[0]["seq"], entries[1]["seq"])
 	}
 }
 
@@ -367,39 +368,49 @@ func TestHistoryRangeReadZeroBoundMeansUnbounded(t *testing.T) {
 }
 
 /**
- * THE RENDERED TEXT MUST SHOW THE ID.
+ * THE RENDERED TEXT NAMES THE SEQ, AND THE ID APPEARS NOWHERE.
  *
- * A model reads the text, not `metadata`. The id used to live ONLY in the metadata, so a search hit
- * gave the model a `[depth]` number and nothing to hand `history-read` — and a model that tried the
- * depth anyway got "no such message", which reads as a broken tool rather than a missing field.
+ * The id is a 36-character UUID that shows up in no other part of the model's context, and there are
+ * two of them for every pair of turns. `(session, seq)` is the address a caller can hold, so the id
+ * is noise in a window a reader is scanning — and worse, it is a SECOND address that neither tool
+ * accepts, which is how a model ends up trying one and being told the message does not exist.
  *
- * Found in the cluster: the model reported that it could not find an id and had guessed wrong twice.
+ * It stays inside the tool as the store's key. It just is not shown.
  */
-func TestHistorySearchShowsTheIDInTheRenderedText(t *testing.T) {
+func TestHistoryShowsSeqAndNeverTheID(t *testing.T) {
 	out := callHistory(t, "history-search", map[string]any{"query": "deploy the app"})
-	if !strings.Contains(out.Content, "id=m1") {
-		t.Fatalf("the rendered line does not name the id:\n%s", out.Content)
+	if !strings.Contains(out.Content, "[seq 1]") {
+		t.Fatalf("the rendered line does not name the seq:\n%s", out.Content)
 	}
-	// The depth is still there, and it is LABELLED, so the two numbers cannot be confused.
-	if !strings.Contains(out.Content, "seq 1") {
-		t.Fatalf("the rendered line lost the seq:\n%s", out.Content)
+	// The stored ids are m1/m2 in this fixture; neither may leak into the text.
+	for _, id := range []string{"m1", "m2"} {
+		if strings.Contains(out.Content, "id="+id) || strings.Contains(out.Content, "id:"+id) {
+			t.Fatalf("the rendered text still shows a message id:\n%s", out.Content)
+		}
+	}
+	entries := historyEntries(t, out)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	if _, ok := entries[0]["id"]; ok {
+		t.Fatalf("the structured entry still carries an id: %+v", entries[0])
 	}
 }
 
-// The id in the rendered text is the one history-read accepts — the two must not drift.
-func TestHistoryRenderedIDIsReadable(t *testing.T) {
+// The seq the text prints is the one history-read accepts — the two must not drift.
+func TestHistoryRenderedSeqIsReadable(t *testing.T) {
 	out := callHistory(t, "history-search", map[string]any{"query": "deploy the app"})
 	entries := historyEntries(t, out)
 	if len(entries) != 1 {
 		t.Fatalf("entries = %+v", entries)
 	}
-	id, _ := entries[0]["id"].(string)
-	if !strings.Contains(out.Content, "id="+id) {
-		t.Fatalf("rendered text names a different id than metadata (%q):\n%s", id, out.Content)
+	seq := entries[0]["seq"]
+	if !strings.Contains(out.Content, fmt.Sprintf("[seq %v]", seq)) {
+		t.Fatalf("rendered text names a different seq than metadata (%v):\n%s", seq, out.Content)
 	}
-	// And history-read accepts it.
-	if got := callHistory(t, "history-read", map[string]any{"id": id}); strings.TrimSpace(got.Content) == "" {
-		t.Fatal("history-read returned nothing for the id the search printed")
+	got := callHistory(t, "history-read", map[string]any{"seq": seq})
+	if strings.TrimSpace(got.Content) == "" {
+		t.Fatal("history-read returned nothing for the seq the search printed")
 	}
 }
 
@@ -431,12 +442,59 @@ func TestHistoryOutputHasNoDepth(t *testing.T) {
 	}
 
 	// history-read reports the position too, and must report the stable one.
-	out := callHistory(t, "history-read", map[string]any{"id": "m2"})
+	out := callHistory(t, "history-read", map[string]any{"seq": 2})
 	meta, _ := out.Metadata.(map[string]any)
 	if _, ok := meta["depth"]; ok {
 		t.Error("history-read still reports a depth")
 	}
 	if meta["seq"] != int64(2) {
 		t.Errorf("history-read seq = %v, want 2", meta["seq"])
+	}
+}
+
+/**
+ * `include` GOVERNS WHAT IS RENDERED, NOT ONLY WHAT IS MATCHED.
+ *
+ * `history-range-read` parsed it and then never consulted it, so a caller who asked for text-only
+ * still got every tool's output in the page. The bug hid well: `preview_chars` cut the result when
+ * it was long, so the page looked filtered until something short enough slipped through.
+ *
+ * `preview_chars: 0` in these cases, so nothing is hidden by length and the assertion is about the
+ * filter alone.
+ */
+func TestIncludeGovernsWhatIsRendered(t *testing.T) {
+	// Default is ["text"]: prose only, no tool output.
+	out := callHistory(t, "history-range-read", map[string]any{"preview_chars": 0})
+	if strings.Contains(out.Content, "DEPLOY-OK") {
+		t.Error("the default include=[text] still rendered a tool result")
+	}
+	if !strings.Contains(out.Content, "deploying now") {
+		t.Error("the message's own text was not rendered")
+	}
+
+	// Asking for results brings them back.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"text", "result"},
+	})
+	if !strings.Contains(out.Content, "DEPLOY-OK") {
+		t.Error("include=[text,result] did not render the tool output")
+	}
+
+	// Tool names and arguments are their own kind, separate from output.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"tool"},
+	})
+	if !strings.Contains(out.Content, "make deploy") {
+		t.Error("include=[tool] did not render the call arguments")
+	}
+	if strings.Contains(out.Content, "DEPLOY-OK") {
+		t.Error("include=[tool] also rendered the result; the kinds are not separable")
+	}
+	// And a text-only request must not leak the call either.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"text"},
+	})
+	if strings.Contains(out.Content, "make deploy") {
+		t.Error("include=[text] rendered a tool call")
 	}
 }

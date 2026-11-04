@@ -30,6 +30,47 @@ const (
 	includeResult = "result"
 )
 
+// includeSet is which content kinds a request asked for.
+//
+// IT IS USED TWICE, FOR TWO DIFFERENT QUESTIONS, and keeping one type is what stops them drifting:
+//   - `history-search` asks "what should the KEYWORD match against?";
+//   - `history-range-read` asks "what should be RENDERED?".
+//
+// The second was overlooked: the parameter was parsed and then never consulted, so a caller who
+// asked for text-only still got every tool's output in the page — with `preview_chars` hiding it
+// only when the log happened to be long enough to be cut.
+type includeSet map[string]bool
+
+// has reports whether a kind was requested. An EMPTY set means the default, not "nothing" — a
+// caller that names no kinds gets exactly what a caller that names the defaults gets.
+func (i includeSet) has(kind string) bool {
+	if len(i) == 0 {
+		for _, k := range defaultIncludes {
+			if k == kind {
+				return true
+			}
+		}
+		return false
+	}
+	return i[kind]
+}
+
+func allIncludes() includeSet {
+	return includeSet{includeText: true, includeTool: true, includeResult: true}
+}
+
+// toSet converts a parsed list into a lookup.
+func toSet(list []string) includeSet {
+	if len(list) == 0 {
+		return nil // the default applies at read time
+	}
+	out := make(includeSet, len(list))
+	for _, k := range list {
+		out[k] = true
+	}
+	return out
+}
+
 // defaultIncludes is what a query searches when the caller names nothing.
 //
 // TEXT ONLY, DELIBERATELY. A single `sandbox-job-start` result can be tens of thousands of
@@ -263,29 +304,29 @@ func applyHistoryFilter(entries []historyEntry, f historyFilter) []historyEntry 
 // is the behaviour the old tools documented and callers came to rely on. What changed is that the
 // PER-ENTRY limit is now separate and always announced: a page of fifty entries where one is a
 // 40k-character build log used to be one unusable page.
-func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars int) (string, int) {
+func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars int, inc includeSet) (string, int) {
 	var b strings.Builder
 	used := 0
 	emitted := 0
 	for _, en := range entries {
-		body, cut := entryBody(en, previewChars)
+		body, cut := entryBody(en, previewChars, inc)
 		/**
 		 * THE RENDERED LINE CARRIES THE ID.
 		 *
-		 * SEQ AND THE ID ARE THE TWO HANDLES, and both are in the text because both are taken as
-		 * arguments: seq by `history-range-read`, id by `history-read`.
+		 * ONE HANDLE, AND IT IS THE SEQ. Both tools address by it: `history-range-read` windows on
+		 * it and `history-read` looks a message up by it.
 		 *
-		 * IT USED TO PRINT A DEPTH INSTEAD OF A SEQ, and put the id only in `metadata.entries[].id`.
-		 * A model reads the text, not the metadata, so it had one number and nothing to pass to
-		 * either tool — and one tried the depth as an id, got "no such message", and read that as a
-		 * broken tool. Depth is gone now: it looked like an address and moved on every append.
+		 * THE MESSAGE ID IS NOT SHOWN. It is a 36-character UUID, it appears nowhere else in the
+		 * model's context, and there are two of them for every pair of turns — pure noise in a
+		 * window a reader is scanning. `(session, seq)` is the address a caller can hold; the id
+		 * stays inside the tool as the store's key.
 		 */
-		block := fmt.Sprintf("[seq %d] id=%s %s (%s)\n%s\n", en.Seq, en.ID, en.role(), en.Time, body)
+		block := fmt.Sprintf("[seq %d] %s (%s)\n%s\n", en.Seq, en.role(), en.Time, body)
 		if cut {
 			// The marker names the id and the command that returns the rest, so the model does not
 			// have to guess either.
-			block += fmt.Sprintf("[truncated: %d of %d chars — history-read(id=%q) for the rest]\n",
-				len(body), entryChars(en), en.ID)
+			block += fmt.Sprintf("[truncated: %d of %d chars — history-read(seq=%d) for the rest]\n",
+				len(body), entryChars(en), en.Seq)
 		}
 		if maxChars > 0 && used+len(block) > maxChars && emitted > 0 {
 			break
@@ -307,25 +348,35 @@ func entryChars(en historyEntry) int {
 }
 
 // entryBody renders an entry's content, truncated to previewChars (0 = no limit).
-func entryBody(en historyEntry, previewChars int) (string, bool) {
+func entryBody(en historyEntry, previewChars int, inc includeSet) (string, bool) {
 	var parts []string
-	if en.Text != "" {
+	if inc.has(includeText) && en.Text != "" {
 		parts = append(parts, en.Text)
 	}
-	for _, t := range en.Tools {
-		label := t.Name
-		if label == "" {
-			label = "tool"
-		}
-		head := fmt.Sprintf("<%s %s>", label, t.Input)
-		if t.Content != "" {
-			state := t.State
-			if state == "" {
-				state = "ok"
+	if inc.has(includeTool) || inc.has(includeResult) {
+		for _, t := range en.Tools {
+			label := t.Name
+			if label == "" {
+				label = "tool"
 			}
-			head += fmt.Sprintf("\n<%s result state=%s>\n%s", label, state, t.Content)
+			head := ""
+			if inc.has(includeTool) {
+				head = fmt.Sprintf("<%s %s>", label, t.Input)
+			}
+			if inc.has(includeResult) && t.Content != "" {
+				state := t.State
+				if state == "" {
+					state = "ok"
+				}
+				if head != "" {
+					head += "\n"
+				}
+				head += fmt.Sprintf("<%s result state=%s>\n%s", label, state, t.Content)
+			}
+			if head != "" {
+				parts = append(parts, head)
+			}
 		}
-		parts = append(parts, head)
 	}
 	body := strings.Join(parts, "\n")
 	if previewChars <= 0 || len(body) <= previewChars {
@@ -361,12 +412,18 @@ func (en historyEntry) role() string {
 //
 // THE PREVIEW AND THE RENDERED TEXT MUST AGREE. When they did not, a caller reading `data` saw the
 // full content while the model saw a truncated one, and neither knew the other existed.
-func entriesToData(entries []historyEntry, previewChars int) []map[string]any {
+func entriesToData(entries []historyEntry, previewChars int, inc includeSet) []map[string]any {
 	out := make([]map[string]any, 0, len(entries))
 	for _, en := range entries {
-		body, cut := entryBody(en, previewChars)
+		body, cut := entryBody(en, previewChars, inc)
+		// NO id EITHER. The structured output feeds the same reader as the text, and an id here
+		// would be a second address that the tools do not accept — see the note in the renderer.
+		//
+		// `created_at` IS EMITTED because the console groups a history page by when things were said,
+		// and `tool_name` because it labels the row with what ran. Both were missing: the card read
+		// fields nobody sent and rendered every entry with an empty time and no tool.
 		row := map[string]any{
-			"id": en.ID, "role": en.Role, "seq": en.Seq, "content": body,
+			"role": en.Role, "seq": en.Seq, "content": body, "created_at": en.Time,
 		}
 		if cut {
 			row["truncated"] = true
@@ -384,6 +441,9 @@ func entriesToData(entries []historyEntry, previewChars int) []map[string]any {
 			}
 			if len(names) > 0 {
 				row["tools"] = names
+				// The FIRST tool's name, singular, because a card shows one label per row. The full
+				// list stays under `tools` for anything that wants all of them.
+				row["tool_name"] = names[0]
 			}
 		}
 		out = append(out, row)
@@ -490,12 +550,15 @@ func (e *Extension) historySearch(ctx context.Context, tenant, session string, a
 		page = page[:limit]
 		hasMore = true
 	}
-	rendered, emitted := renderHistoryWithPreviews(page, maxChars, preview)
+	// THE SAME KINDS GOVERN WHAT IS RENDERED, not only what was matched: a search that asked for
+	// text-only must not answer with a page full of tool logs.
+	inc := toSet(include)
+	rendered, emitted := renderHistoryWithPreviews(page, maxChars, preview, inc)
 	return agent.ToolOutcome{
 		Content: rendered,
 		Metadata: map[string]any{
 			"session": target, "total": total, "has_more": hasMore, "next_offset": offset + emitted,
-			"entries": entriesToData(page, preview),
+			"entries": entriesToData(page, preview, inc),
 		},
 	}, nil
 }
@@ -569,13 +632,17 @@ func (e *Extension) historyRangeRead(ctx context.Context, tenant, session string
 		window = window[:limit]
 		hasMore = true
 	}
-	rendered, _ := renderHistoryWithPreviews(window, maxChars, preview)
+	// `include` was parsed and then ignored here, so a caller who asked for text-only still got
+	// every tool's output — hidden only when it happened to be long enough for `preview_chars` to
+	// cut it. It now governs the render.
+	inc := toSet(include)
+	rendered, _ := renderHistoryWithPreviews(window, maxChars, preview, inc)
 
 	// THE BOUNDS ARE REPORTED so a caller can page without re-deriving them: an empty window still
 	// says what the conversation's range is, which distinguishes "you asked past the end" from
 	// "this conversation has no messages".
 	meta := map[string]any{
-		"session": target, "has_more": hasMore, "entries": entriesToData(window, preview),
+		"session": target, "has_more": hasMore, "entries": entriesToData(window, preview, inc),
 	}
 	if len(all) > 0 {
 		meta["seq_min"] = all[0].Seq
@@ -597,9 +664,13 @@ func (e *Extension) historyRangeRead(ctx context.Context, tenant, session string
  * message needs.
  */
 func (e *Extension) historyRead(ctx context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
-	id := strings.TrimSpace(strArg(args, "id"))
-	if id == "" {
-		return agent.ToolOutcome{}, &toolError{msg: "history-read: missing \"id\""}
+	seqArg, ok := numArg(args, "seq")
+	if !ok {
+		return agent.ToolOutcome{}, &toolError{msg: "history-read: missing \"seq\""}
+	}
+	want := int64(seqArg)
+	if want <= 0 {
+		return agent.ToolOutcome{}, &toolError{msg: "history-read: \"seq\" must be positive (oldest message is 1)"}
 	}
 	target, err := historyTarget(args, session)
 	if err != nil {
@@ -617,9 +688,20 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 			"history-read: unknown part %q (want text, tool or result)", part)}
 	}
 
+	/**
+	 * LOOKED UP BY POSITION, NOT BY ID.
+	 *
+	 * `(session, seq)` is UNIQUE WITHIN ONE SESSION, which is the only thing a caller can name —
+	 * and that is exactly what this tool needs, because the caller just read that seq out of a
+	 * listing. Two forked sessions can each have a seq 3 (they share a chain until they diverge),
+	 * but they are different conversations, so the session name disambiguates them.
+	 *
+	 * Out of range is an ERROR rather than an empty answer: "no message" would read as "the
+	 * conversation is empty", and the caller needs to know that its seq was wrong.
+	 */
 	var found *historyEntry
 	for _, en := range e.collectHistory(tenant, target) {
-		if en.ID == id {
+		if en.Seq == want {
 			e := en
 			found = &e
 			break
@@ -627,7 +709,7 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 	}
 	if found == nil {
 		return agent.ToolOutcome{}, &toolError{msg: fmt.Sprintf(
-			"history-read: no message %q in session %q", id, target)}
+			"history-read: session %q has no message at seq %d", target, want)}
 	}
 
 	// UNTRUNCATED, ALWAYS: this tool exists to return what the search withheld.
@@ -645,15 +727,14 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 	return agent.ToolOutcome{
 		Content: body,
 		Metadata: map[string]any{
-			"session": target, "id": found.ID, "role": found.Role,
-			"seq": found.Seq, "chars": len(body),
+			"session": target, "seq": found.Seq, "role": found.Role, "chars": len(body),
 		},
 	}, nil
 }
 
 // entryBodyAll renders an entry with no limit.
 func entryBodyAll(en historyEntry) string {
-	body, _ := entryBody(en, 0)
+	body, _ := entryBody(en, 0, allIncludes())
 	return body
 }
 

@@ -54,22 +54,26 @@ type Message struct {
 	Source    string  `gorm:"column:source"`
 	CreatedAt string  `gorm:"column:created_at"`
 	/**
-	 * Seq is the message's POSITION IN ITS CHAIN: the oldest message is 1, and every append adds one.
+	 * Seq is the message's POSITION FROM ITS SESSION'S TIP: the oldest reachable message is 1, and an
+	 * append adds one to the end.
 	 *
-	 * IT IS NOT A SESSION COLUMN AND NOT A GLOBAL COUNTER.
+	 * THE VALUE DEPENDS ON WHICH SESSION YOU ASK FROM, and that is the whole design rather than an
+	 * accident of storage.
 	 *
-	 * A conversation is a prev_id chain; `sessions.tip_id` is a POINTER into it. A fork shares the
-	 * chain (`ForkSession` copies the tip, not the messages), so two sessions can reach the same rows.
-	 * Numbering by session would therefore need a row per (message, session) to stay unique — and
-	 * numbering globally would make "the 4th message in this conversation" mean nothing.
+	 * A conversation is a prev_id chain and `sessions.tip_id` is a POINTER into it. A fork copies the
+	 * tip, so parent and child share every message up to the fork point and then DIVERGE: from the
+	 * parent, position 3 is `p3`; from the child, position 3 is `c3`. Both are correct, because "the
+	 * third message of this conversation" is a fact about the conversation, not about the row.
 	 *
-	 * POSITION IN THE CHAIN is the only reading that survives both:
-	 *   - a fork's new message continues from its parent's tip, so it is seq(tip)+1;
-	 *   - an undo moves the tip back and leaves the rows, so the abandoned messages have seqs that
-	 *     are simply no longer reachable — which is what an undo means.
+	 * SO THERE IS NO UNIQUENESS CONSTRAINT ON (prev_id, seq). Two children of one message legitimately
+	 * both occupy the next position in their own chains — that is exactly what a fork IS, and a
+	 * constraint there would break `subsession-create` on its first use.
 	 *
-	 * IT NEVER CHANGES once written, unlike depth (`len(chain) - 1 - i`), which shifts for every
-	 * message each time one is appended.
+	 * IT NEVER CHANGES FOR A GIVEN SESSION, unlike depth (`len(chain) - 1 - i`), which was recomputed
+	 * from the chain length on every read and shifted for every message each time one was appended.
+	 *
+	 * AN UNDO moves the tip back and leaves the rows: the abandoned messages keep their positions and
+	 * simply stop being reachable from that session, which is what an undo means.
 	 */
 	Seq int64 `gorm:"column:seq;index:idx_messages_tenant_seq,priority:2"`
 }

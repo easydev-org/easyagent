@@ -47,14 +47,14 @@ tools:
       names and their arguments, and "result" to match tool OUTPUT. Searches the WHOLE conversation
       (no cap), newest-first, and returns one page [offset, offset+limit). Each entry's content is
       cut to `preview_chars` (default 2000) and marked `truncated` with `full_chars`; call
-      "history-read" with that entry's `id` to get the rest.
+      "history-read" with that entry's `seq` to get the rest.
       Pass `session` to search ANOTHER conversation in the same tenant (empty = this one).
     descriptions:
       zh: >-
         按关键词搜索会话历史（大小写不敏感子串）。搜索范围是显式的：`include` 默认 ["text"]
         （消息自身的文本），避免长工具日志淹没对话命中；加 "tool" 匹配工具名与调用参数，加 "result"
         匹配工具输出。搜索整条链（无深度上限），最新在前，返回 [offset, offset+limit) 一页。每条内容按
-        `preview_chars`（默认 2000）截断并标记 `truncated` 与 `full_chars`；用该条 `id` 调
+        `preview_chars`（默认 2000）截断并标记 `truncated` 与 `full_chars`；用该条 `seq` 调
         "history-read" 取剩余部分。传 `session` 可搜索同租户下的另一个会话（留空 = 本会话）。
     input_schema:
       type: object
@@ -135,14 +135,14 @@ tools:
       "the most recent N" (a seq window cannot ask that without knowing the count). Returns
       oldest-first with seq, id, role, content and tool names. `preview_chars` cuts each entry
       (default 2000, 0 = no limit) and marks it `truncated`; call "history-read" with the entry's
-      `id` for the rest. The response reports `seq_min`/`seq_max` so you can page without guessing.
+      `seq` for the rest. The response reports `seq_min`/`seq_max` so you can page without guessing.
       Pass `session` to read another conversation in the same tenant.
     descriptions:
       zh: >-
         按位置读取会话历史。`from_seq`/`to_seq` 按消息在链中的位置限定窗口：最旧一条是 1，且一条消息的编号
         永不改变——上一轮记下的位置这一轮仍指向同一条消息。要「最近 N 条」用 `last`（seq 窗口无法在不知道
         总数的情况下表达它）。返回最旧在前，含 seq、id、角色、内容与工具名。`preview_chars` 截断每条
-        （默认 2000，0 = 不限）并标记 `truncated`；用该条 `id` 调 "history-read" 取剩余部分。返回中包含
+        （默认 2000，0 = 不限）并标记 `truncated`；用该条 `seq` 调 "history-read" 取剩余部分。返回中包含
         `seq_min`/`seq_max`，便于翻页。传 `session` 可读取同租户下的另一个会话。
     input_schema:
       type: object
@@ -205,25 +205,28 @@ tools:
 
   - name: history-read
     description: >-
-      Return ONE message from a conversation in FULL, by id. This is the other half of the
-      truncation the other history tools apply: when a search entry says `truncated`, pass its `id`
-      here. `part` selects what to return — "text" (the message's own prose), "tool" (call names
-      and arguments), "result" (tool output only) — and omitting it returns everything. Output is
-      never truncated. Pass `session` when the id came from another conversation.
+      Return ONE message from a conversation in FULL, by its `seq` position — the number the other
+      history tools print as `[seq N]`. This is the other half of the truncation they apply: when an
+      entry says `truncated`, pass its seq here. `part` selects what to return — "text" (the
+      message's own prose), "tool" (call names and arguments), "result" (tool output only) — and
+      omitting it returns everything. Output is never truncated. Pass `session` when the seq came
+      from another conversation.
     descriptions:
       zh: >-
-        按 id 返回会话中某条消息的完整内容。这是其他历史工具所做截断的另一半：当搜索结果标记
-        `truncated` 时，把该条 `id` 传进来。`part` 选择返回内容——"text"（消息自身文本）、
-        "tool"（调用名与参数）、"result"（仅工具输出）——省略则返回全部。输出永不截断。
-        若 id 来自另一个会话，请传 `session`。
+        按 `seq` 位置返回会话中某条消息的完整内容——即其他历史工具输出里的 `[seq N]`。这是它们所做
+        截断的另一半：当条目标记 `truncated` 时，把它的 seq 传进来。`part` 选择返回内容——"text"
+        （消息自身文本）、"tool"（调用名与参数）、"result"（仅工具输出）——省略则返回全部。输出永不
+        截断。若 seq 来自另一个会话，请传 `session`。
     input_schema:
       type: object
       properties:
-        id:
-          type: string
-          description: The message id an entry reported.
+        seq:
+          type: integer
+          description: >-
+            The message's position in the conversation (oldest = 1), as printed by the other history
+            tools.
           descriptions:
-            zh: 条目的消息 id。
+            zh: 消息在会话中的位置（最旧 = 1），即其他历史工具打印的值。
         part:
           type: string
           enum: [text, tool, result]
@@ -233,10 +236,10 @@ tools:
             zh: 返回哪一部分。省略则返回全部。
         session:
           type: string
-          description: Conversation the id belongs to. Empty = this session.
+          description: Conversation the seq belongs to. Empty = this session.
           descriptions:
-            zh: id 所属的会话。留空 = 本会话。
-      required: [id]
+            zh: seq 所属的会话。留空 = 本会话。
+      required: [seq]
 
   - name: file-info
     description: >-
