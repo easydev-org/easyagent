@@ -111,7 +111,7 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		 * them are two messages rather than one delivered twice. Deriving the id from the session would
 		 * make a second resume overwrite the first, which is the opposite of what a retry needs.
 		 */
-		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.Name, newUUID(), mailbox.Trigger, WakePayload{
+		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.Name, newUUID(), mailbox.Trigger, mailbox.Body{
 			MessageID: newUUID(),
 			Text:      resumeText(s.LastTurnReason),
 		}, "system:resume")

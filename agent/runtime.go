@@ -20,28 +20,6 @@ import (
 // Every other type is CONTEXT-ONLY (folded into the chain lazily).
 var WakeTypes = []mailbox.Type{mailbox.Trigger, mailbox.Compact}
 
-// WakePayload is a mailbox message body.
-//
-// THERE IS NO `Type` FIELD, and it is worth saying why rather than leaving a blank: the queue's own
-// `Message.Type` says what the message asks for, and a copy of it inside the body was written by two
-// producers and read by NOTHING. Two fields for one fact is a chance for them to disagree, and the
-// losing half of that disagreement is silent — a trigger whose body claims a different type would be
-// dispatched by the queue's field anyway.
-type WakePayload struct {
-	MessageID   string    `json:"message_id"`
-	Text        string    `json:"text"`
-	Attachments []FileRef `json:"attachments,omitempty"`
-}
-
-// FileRef is a resolved attachment reference (metadata comes from the stored
-// record, never the caller).
-type FileRef struct {
-	Code string `json:"code"`
-	Name string `json:"name"`
-	Mime string `json:"mime"`
-	Size int    `json:"size"`
-}
-
 // RuntimeDeps are the session runtime's collaborators.
 type RuntimeDeps struct {
 	DB *store.DB
@@ -477,15 +455,15 @@ func (r *Runtime) clearActive(tenant, session string) {
 // foldUserMessage persists a user prompt (role=user) under its logical id,
 // idempotently, and bumps the chain counter.
 func (r *Runtime) foldUserMessage(tenant, session string, it mailbox.Message) error {
-	var p WakePayload
 	/**
-	 * THE PAYLOAD ARRIVES DECODED, NOT AS TEXT.
+	 * THE BODY IS READ THROUGH ONE ACCESSOR, not decoded here.
 	 *
-	 * The queue stores an object, so what reaches this function is a value rather than a JSON string that
-	 * the old table held. Re-encoding it to parse it back would be a round trip through two lossy
-	 * representations, and it is the step where `message_id` versus `messageId` used to go wrong.
+	 * Three producers write this queue and each had its own shape; the decoding rules used to be
+	 * restated at every use site, which is where `message_id` versus `messageId` went wrong.
+	 * `mailbox.BodyOf` knows the accepted shapes; this function only asks for the text and the id.
 	 */
-	if err := decodeWakePayload(it.Payload, &p); err != nil {
+	p, err := mailbox.BodyOf(it.Payload)
+	if err != nil {
 		return fmt.Errorf("agent: bad trigger payload: %w", err)
 	}
 	id := p.MessageID
@@ -518,7 +496,7 @@ func (r *Runtime) foldUserMessage(tenant, session string, it mailbox.Message) er
 		return err
 	}
 	seq := 0
-	for _, a := range p.Attachments {
+	for _, a := range p.FileRefs {
 		seq++
 		_ = r.deps.DB.InsertPart(tenant, id, "file", seq, map[string]any{
 			"code": a.Code, "name": a.Name, "mime": a.Mime, "size": a.Size,

@@ -65,11 +65,14 @@ type SubscriptionIndex struct {
 
 	// kv is the source of truth; nil means subscriptions are not configured, and every
 	// message is dropped rather than guessed at.
-	kv bus.Bus
+	//
+	// KeyValue, NOT Bus. This index reads a bucket and follows it; it never publishes, consumes or
+	// stores objects, and a nineteen-method dependency said otherwise.
+	kv bus.KeyValue
 }
 
 // NewSubscriptionIndex returns an empty index.
-func NewSubscriptionIndex(kv bus.Bus) *SubscriptionIndex {
+func NewSubscriptionIndex(kv bus.KeyValue) *SubscriptionIndex {
 	return &SubscriptionIndex{byTenant: map[string]map[string][]Subscription{}, kv: kv}
 }
 

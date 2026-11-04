@@ -105,9 +105,11 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 		return connect.NewError(connect.CodeNotFound, "session not found")
 	}
 	messageID := newUUID()
-	payload := agent.WakePayload{MessageID: messageID, Text: req.Prompt}
+	// ONE BODY TYPE, shared by every producer. The queue's `Payload` stays untyped on the wire
+	// because an extension may send fields this agent does not know; what the AGENT writes is this.
+	payload := mailbox.Body{MessageID: messageID, Text: req.Prompt}
 	for _, a := range req.Attachments {
-		payload.Attachments = append(payload.Attachments, agent.FileRef{
+		payload.FileRefs = append(payload.FileRefs, mailbox.FileRef{
 			Code: a.Code, Name: a.Name, Size: int(a.Size),
 		})
 	}

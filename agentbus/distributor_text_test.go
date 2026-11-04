@@ -24,9 +24,9 @@ func TestWakingChannelEventCarriesText(t *testing.T) {
 		Value: `{"channel":"gitea","pattern":"tag.acme/app.>","wake":true}`,
 	})
 
-	var got map[string]any
+	var got mailbox.Body
 	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
-		got, _ = payload.(map[string]any)
+		got, _ = payload.(mailbox.Body)
 		return nil
 	})
 
@@ -40,10 +40,10 @@ func TestWakingChannelEventCarriesText(t *testing.T) {
 		t.Fatalf("distribute: %v", err)
 	}
 
-	if got == nil {
+	if got.Text == "" && got.Data == nil {
 		t.Fatal("publisher was not called")
 	}
-	text, _ := got["text"].(string)
+	text := got.Text
 	if strings.TrimSpace(text) == "" {
 		t.Fatal("a waking event carried no text: the trigger would fold into an empty user " +
 			"message, and a session with no history would send the model an empty messages array")
@@ -55,7 +55,7 @@ func TestWakingChannelEventCarriesText(t *testing.T) {
 		}
 	}
 	// The authoritative body must still be present for tools that want it structurally.
-	if _, ok := got["payload"]; !ok {
+	if got.Data == nil {
 		t.Error("the structured payload was dropped; the summary must not replace it")
 	}
 }
@@ -68,9 +68,9 @@ func TestNonWakingChannelEventHasNoText(t *testing.T) {
 		Value: `{"channel":"gitea","pattern":"tag.acme/app.>","wake":false}`,
 	})
 
-	var got map[string]any
+	var got mailbox.Body
 	d := NewDistributor(idx, func(ctx context.Context, tenant, session string, typ mailbox.Type, payload any, source string) error {
-		got, _ = payload.(map[string]any)
+		got, _ = payload.(mailbox.Body)
 		return nil
 	})
 	if _, err := d.Distribute(context.Background(), bus.ChannelMessage{
@@ -78,7 +78,7 @@ func TestNonWakingChannelEventHasNoText(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("distribute: %v", err)
 	}
-	if _, ok := got["text"]; ok {
+	if got.Text != "" {
 		t.Error("a non-waking event carried text; it would be folded into a user message " +
 			"and start a turn nobody asked for")
 	}

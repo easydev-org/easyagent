@@ -48,7 +48,7 @@ func (e *Extension) subsessionCreate(_ context.Context, tenant, session string, 
 		return agent.ToolOutcome{}, err
 	}
 	handoff := s.forkPreamble(session) + "\n\n" + prompt + s.handoff(session)
-	if err := e.deps.PublishMailbox(tenant, child, mailbox.Trigger, map[string]any{"text": handoff}, "session:"+session); err != nil {
+	if err := e.deps.PublishMailbox(tenant, child, mailbox.Trigger, mailbox.Body{Text: handoff}, "session:"+session); err != nil {
 		return agent.ToolOutcome{}, err
 	}
 	desc := strings.TrimSpace(strArg(args, "description"))
@@ -73,7 +73,7 @@ func (e *Extension) mailSend(_ context.Context, tenant, session string, args map
 	if !e.deps.SessionExists(tenant, to) {
 		return agent.ToolOutcome{Content: s.errTargetMissing(to)}, nil
 	}
-	if err := e.deps.PublishMailbox(tenant, to, mailbox.Trigger, map[string]any{"text": text}, "session:"+session); err != nil {
+	if err := e.deps.PublishMailbox(tenant, to, mailbox.Trigger, mailbox.Body{Text: text}, "session:"+session); err != nil {
 		return agent.ToolOutcome{}, err
 	}
 	return agent.ToolOutcome{Content: s.delivered(to), Metadata: map[string]any{"to": to}}, nil

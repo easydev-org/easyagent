@@ -93,13 +93,10 @@ type MailboxQueue interface {
 
 // Deps are the server's collaborators.
 type Deps struct {
-	DB       *store.DB
-	Runtime  *agent.Runtime
-	Hub      *EventHub
-	Config   Config
-	Presets  *agent.Presets
-	ConfigKV *agent.Config
-	Bus      *agentbus.Bus
+	// ---- required ----
+	DB      *store.DB
+	Runtime *agent.Runtime
+	Config  Config
 	/**
 	 * Mailbox is the delivery queue the prompt path writes to and the mailbox page reads from.
 	 *
@@ -111,33 +108,93 @@ type Deps struct {
 	 * either knowing which it was given.
 	 */
 	Mailbox MailboxQueue
+
+	// ---- optional, each nil meaning something specific ----
+	// Hub is the in-process event fan-out. nil builds one, which is what every deployment wants; a
+	// caller supplies one only to observe the stream in a test.
+	Hub *EventHub
+	// Presets and ConfigKV resolve a tenant's presets and config. nil means no preset system, and a
+	// session then runs with its own settings only.
+	Presets  *agent.Presets
+	ConfigKV *agent.Config
+	// Bus is the agent bus. nil is IN-MEMORY MODE: no broker, so no discovery, no channels and no
+	// cross-replica events. A prompt still runs; it just cannot reach an extension.
+	Bus *agentbus.Bus
+	// Tools is the discovered extension tool surface. nil means discovery is not wired.
+	Tools *agentbus.ToolExecutor
+	// BundledTools and BundledFields are the in-process extension's tool and config surfaces.
+	BundledTools  ToolSource
+	BundledFields ConfigFieldSource
+	// Stream is the durable session-event source. nil falls back to the in-process hub, so a
+	// reconnect resumes only within this process.
+	Stream StreamSource
+	// Lifecycle broadcasts created/forked/renamed/deleted. nil disables the broadcast.
+	Lifecycle LifecyclePublisher
+	// Channels provisions each session's built-in subscription. nil means no broker, so a session
+	// has no default channel — the truthful state, not an empty one.
+	Channels ChannelProvisioner
+	// Subs lists and edits channel subscriptions. nil means channels are not configured, and the RPCs
+	// answer with that rather than an empty list.
+	Subs SubscriptionStore
+	// SeedTenant applies deployment-pinned defaults to a tenant created at runtime. nil means a new
+	// tenant gets no presets, which is what boot-time seeding covers for the known ones.
+	SeedTenant func(tenant string)
+	// Blob is the durable S3 backend for file bytes. nil uses the in-memory map.
+	Blob *blob.Store
 }
 
+/**
+ * THE DEPENDENCIES ARE IN ONE PLACE, REQUIRED AND OPTIONAL TOGETHER.
+ *
+ * THEY USED TO BE SPLIT between this struct and fourteen `Set*` methods called from main, and the
+ * split was not harmless. A `Set` returns nothing and checks nothing, so a missing call removed a
+ * feature with no compile error and no log — `SetChannelProvisioner` sat next to
+ * `SetSubscriptions`, controlling two halves of one thing, and forgetting either left sessions
+ * half-addressable. Worse, several OPTIONAL fields were also fields here, which made "is this nil?"
+ * a question you answered by reading every use site.
+ *
+ * NOW every collaborator is a field. The required group is checked in New, so a missing one is a
+ * panic at startup instead of a nil dereference on the first request that touches it. The optional
+ * group is documented in place — nil there is a MEANING (an in-memory deployment, no broker, no
+ * durable blob backend), never an oversight.
+ */
+
 // New builds the server.
+//
+// IT PANICS ON A MISSING REQUIRED DEPENDENCY, deliberately. Carrying the nil until the first request
+// that needs it turns a wiring mistake into a failed prompt somewhere else, where the error reads as
+// a data problem rather than a configuration one.
 func New(d Deps) *Server {
+	for name, missing := range map[string]bool{
+		"DB":      d.DB == nil,
+		"Runtime": d.Runtime == nil,
+		"Mailbox": d.Mailbox == nil,
+	} {
+		if missing {
+			panic("server.New: " + name + " is required")
+		}
+	}
 	if d.Hub == nil {
 		d.Hub = NewEventHub()
 	}
 	return &Server{
 		db: d.DB, rt: d.Runtime, hub: d.Hub, cfg: d.Config,
 		presets: d.Presets, config: d.ConfigKV, runtimeBus: d.Bus, mail: d.Mailbox,
-		blobs: map[string][]byte{},
+		tools: d.Tools, bundledTools: d.BundledTools, bundledFields: d.BundledFields,
+		stream: d.Stream, lifecycle: d.Lifecycle,
+		channels: d.Channels, subs: d.Subs, seedTenant: d.SeedTenant,
+		blobStore: d.Blob,
+		blobs:     map[string][]byte{},
 	}
 }
 
 // Hub exposes the event hub (the runtime's emitter target).
 func (s *Server) Hub() *EventHub { return s.hub }
 
-// SetTools installs the discovered tool surface (for ListTools/ToolConfig).
-func (s *Server) SetTools(t *agentbus.ToolExecutor) { s.tools = t }
-
 // ToolSource is a read-only tool surface (the bundled extension).
 type ToolSource interface {
 	Tools() []agent.ToolDef
 }
-
-// SetBundledTools installs the in-process bundled tool surface (for ListTools).
-func (s *Server) SetBundledTools(t ToolSource) { s.bundledTools = t }
 
 // ConfigFieldSource exposes a tool's declared config fields (for ListTools) and
 // the extension's WHOLE config surface (for the extension-config page).
@@ -145,19 +202,6 @@ type ConfigFieldSource interface {
 	ConfigFieldsFor(toolName string) []bundled.ConfigField
 	ConfigFields() []bundled.ConfigField
 }
-
-// SetBundledConfigFields installs the bundled config-field source.
-func (s *Server) SetBundledConfigFields(src ConfigFieldSource) { s.bundledFields = src }
-
-// SetBlob installs the durable S3 blob backend for file bytes.
-func (s *Server) SetBlob(b *blob.Store) { s.blobStore = b }
-
-// SetStreamSource installs the durable session-event source (for WatchSession
-// since_seq resume). When nil, WatchSession falls back to the in-process hub.
-func (s *Server) SetStreamSource(src StreamSource) { s.stream = src }
-
-// SetLifecycle installs the lifecycle publisher (created/forked/renamed/deleted).
-func (s *Server) SetLifecycle(p LifecyclePublisher) { s.lifecycle = p }
 
 // ChannelProvisioner writes the built-in channel subscription for a session.
 //
@@ -167,12 +211,6 @@ func (s *Server) SetLifecycle(p LifecyclePublisher) { s.lifecycle = p }
 type ChannelProvisioner interface {
 	EnsureDefault(ctx context.Context, tenant, session string) error
 }
-
-// SetChannelProvisioner installs the default-subscription writer.
-func (s *Server) SetChannelProvisioner(p ChannelProvisioner) { s.channels = p }
-
-// SetTenantSeeder installs the per-tenant default seeder (for CreateTenant).
-func (s *Server) SetTenantSeeder(fn func(tenant string)) { s.seedTenant = fn }
 
 // LifecyclePublisher broadcasts a session lifecycle event (best-effort).
 type LifecyclePublisher interface {

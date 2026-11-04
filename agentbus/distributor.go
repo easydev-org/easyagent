@@ -108,14 +108,17 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 			typ = mailbox.Trigger
 		}
 
-		// The payload keeps the channel and topic alongside the event body, so the session
-		// knows where the message came from without having to guess from its content.
-		body := map[string]any{
-			"channel": msg.Channel,
-			"topic":   msg.Topic,
-			"source":  msg.Source,
-			"payload": msg.Payload,
-		}
+		/**
+		 * THE BODY IS A mailbox.Body, with the channel context on its own fields.
+		 *
+		 * It used to be an ad-hoc map, which worked only because the runtime's decoder happened to read
+		 * the same names. Three producers, three shapes, one consumer guessing — `mailbox.BodyOf` is now
+		 * the only place that knows, and a producer has one type to write.
+		 *
+		 * PROVENANCE IS KEPT, not folded into the sentence: a tool that wants the event itself should
+		 * not have to parse prose written for the model.
+		 */
+		body := mailbox.Body{Channel: msg.Channel, Topic: msg.Topic, Origin: msg.Source, Data: msg.Payload}
 		// A `trigger` becomes a USER MESSAGE, and the runtime builds it from `text`. Without this
 		// the trigger folded to an empty text part, so a session with no history sent the model an
 		// empty `messages` array and the request was rejected outright:
@@ -126,7 +129,7 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 		// payload rides alongside under "payload", so nothing is lost for a tool that wants to read
 		// it structurally.
 		if wake {
-			body["text"] = channelEventText(msg)
+			body.Text = channelEventText(msg)
 		}
 		if err := d.publish(ctx, msg.Tenant, session, typ, body, "channel:"+msg.Channel); err != nil {
 			// One failed delivery must not stop the others: a session whose mailbox is

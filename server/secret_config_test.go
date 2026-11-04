@@ -32,15 +32,15 @@ func (stubTools) Tools() []agent.ToolDef { return nil }
 // TestExtensionConfigSecretWithheld is the core guarantee: a secret knob's
 // VALUE never appears in any client response — only that it is set.
 func TestExtensionConfigSecretWithheld(t *testing.T) {
-	ts, db, srv := newTestServerWithSrv(t)
+	// The server's bundled field source declares one ordinary + one secret knob.
+	ts, db, _ := newTestServerWith(t, func(d *Deps) {
+		d.BundledFields = stubFields{fields: []bundled.ConfigField{
+			{Name: "poll-interval", Type: "number", Kind: bundled.ConfigKindValue},
+			{Name: "gh-token", Type: "string", Kind: bundled.ConfigKindSecret},
+		}}
+	})
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
-
-	// The server's bundled field source declares one ordinary + one secret knob.
-	srv.SetBundledConfigFields(stubFields{fields: []bundled.ConfigField{
-		{Name: "poll-interval", Type: "number", Kind: bundled.ConfigKindValue},
-		{Name: "gh-token", Type: "string", Kind: bundled.ConfigKindSecret},
-	}})
 
 	ctx := context.Background()
 	// Set both values (as the UI would).
@@ -83,14 +83,15 @@ func TestExtensionConfigSecretWithheld(t *testing.T) {
 // TestListExtensionsHidesSecretDefault: the declared default of a secret knob
 // must never be surfaced (it would be broadcast in the manifest).
 func TestListExtensionsHidesSecretDefault(t *testing.T) {
-	ts, db, srv := newTestServerWithSrv(t)
+	ts, db, _ := newTestServerWith(t, func(d *Deps) {
+		d.BundledTools = stubTools{}
+		d.BundledFields = stubFields{fields: []bundled.ConfigField{
+			{Name: "api-key", Type: "string", Kind: bundled.ConfigKindSecret, Default: "should-not-appear"},
+			{Name: "region", Type: "string", Kind: bundled.ConfigKindValue, Default: "us"},
+		}}
+	})
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
-	srv.SetBundledTools(stubTools{})
-	srv.SetBundledConfigFields(stubFields{fields: []bundled.ConfigField{
-		{Name: "api-key", Type: "string", Kind: bundled.ConfigKindSecret, Default: "should-not-appear"},
-		{Name: "region", Type: "string", Kind: bundled.ConfigKindValue, Default: "us"},
-	}})
 
 	res, err := c.ListExtensions(context.Background(), &agentv1.ListExtensionsRequest{})
 	if err != nil {
