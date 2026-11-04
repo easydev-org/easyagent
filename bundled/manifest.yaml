@@ -636,20 +636,22 @@ tools:
 config:
   - name: search_provider
     description: >-
-      Which web-search backend to use. Empty tries them in order and uses the first that answers.
-      Pinning one does NOT fall back silently: if it fails, the call fails, because a caller that
-      chose a specific source wants to know it did not answer.
+      Which web-search backend to use. EXACTLY ONE runs — there is no fallback chain. Empty means
+      the default, parallel. If the chosen backend fails, the call fails: a caller that picked a
+      source needs to know it did not answer, and a silent switch would make "where did this result
+      come from" a property of the moment instead of the deployment.
     descriptions:
       zh: >-
-        使用哪个 web-search 后端。留空则按顺序尝试、使用第一个可用的。固定某一个时不会静默回退：
-        它失败就用失败，因为指定了来源的人需要知道它没有响应。
+        使用哪个 web-search 后端。只调用这一个，没有回退链。留空表示默认值 parallel。
+        选定的后端失败时调用会失败：指定了来源的人需要知道它没有响应，静默切换会让
+        「这个结果来自哪里」取决于当时而非部署。
     # type: enum IS WHAT RENDERS THIS AS A DROPDOWN. As a plain `string` the console showed a text box
     # and `enum_values` was ignored — the values were in the manifest and nowhere a user could pick
     # them, so the only way to set this was to type a backend name from memory and hope it was spelled
     # the way the code expects.
     type: enum
     scope: global
-    default: ''
+    default: parallel
     enum_values: [parallel, tavily, exa, firecrawl, tinyfish]
   # Model-reference knobs. `kind: model` + `capability` let the UI render a
   # picker scoped to the registered modality instead of a free-form text field
