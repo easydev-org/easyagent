@@ -12,10 +12,14 @@ import (
 // Returns true when a row was created, false when the id already existed.
 // Uses RowsAffected (portable) instead of `INSERT ... RETURNING`.
 //
-// SEQ IS DERIVED FROM THE PREDECESSOR, IN THE SAME TRANSACTION. The position of a message in its
-// chain is `prev.seq + 1`, and a root message is 1. Reading the predecessor outside the insert would
-// let two concurrent appends compute the same number, and the chain would then have two messages
-// claiming one position — which is exactly what a positional read cannot tolerate.
+// SEQ IS DERIVED FROM THE PREDECESSOR, IN THE SAME TRANSACTION: `prev.seq + 1`, and a root is 1.
+// That makes it "this message's position in its own session's chain", which is the only reading that
+// survives a fork — parent and child share a prefix and then both continue at the same number,
+// each correct in its own conversation.
+//
+// THE TRANSACTION IS ABOUT READING A CONSISTENT PREDECESSOR, not about preventing duplicates. Two
+// messages appending to ONE predecessor is normal (a fork); two messages appending to one
+// predecessor and claiming to be the same message is not, and `id` is what distinguishes them.
 func (d *DB) InsertMessage(tenant, id, role string, prevID *string, source string) (bool, error) {
 	created := false
 	err := d.g.Transaction(func(tx *gorm.DB) error {
@@ -38,7 +42,14 @@ func (d *DB) InsertMessage(tenant, id, role string, prevID *string, source strin
 		if res.Error != nil {
 			return res.Error
 		}
-		created = res.RowsAffected > 0
+		if res.RowsAffected > 0 {
+			created = true
+			return nil
+		}
+		// A ROW WAS NOT INSERTED BECAUSE THIS ID ALREADY EXISTS. `DoNothing` exists for exactly that:
+		// an idempotent retry — a redelivered mailbox message, a re-fold after a crash — and the
+		// caller reads `created=false` as "already there". There is no other reason for it here;
+		// `seq` carries no uniqueness constraint (see Seq's note on forks).
 		return nil
 	})
 	return created, err
