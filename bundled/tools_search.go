@@ -49,6 +49,43 @@ type providerFailure struct {
 	Reason   string
 }
 
+/**
+ * httpClientFor returns a client that REUSES CONNECTIONS.
+ *
+ * Every call used to build its own `&http.Client{Timeout: ...}`, which means a fresh TCP handshake
+ * and TLS negotiation per search per provider: a web search is a few hundred milliseconds of real
+ * work behind a connection setup that costs as much again. The default transport pools idle
+ * connections, so sharing one client is the difference between reconnecting every time and not.
+ *
+ * The TIMEOUT IS SET PER REQUEST, not on the client, because it is a parameter: a client-level
+ * deadline would be fixed at construction and the tool exposes it as an argument.
+ */
+var (
+	sharedClientOnce sync.Once
+	sharedClient     *http.Client
+)
+
+func httpClientFor() *http.Client {
+	sharedClientOnce.Do(func() {
+		sharedClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				// A SEARCH IS SMALL AND SHORT. Ten idle connections cover the several providers tried in
+				// sequence; more would hold sockets the next search never asks for.
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 4,
+				IdleConnTimeout:     90 * time.Second,
+				// TLS handshakes are the expensive part for a provider called once per search, so they
+				// are kept alive rather than renegotiated.
+				ForceAttemptHTTP2:     true,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+		}
+	})
+	return sharedClient
+}
+
 // searchProvider is one backend.
 type searchProvider struct {
 	name string
@@ -230,8 +267,12 @@ func mcpEndpoint(ctx context.Context, url, tool string, args map[string]any, hea
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	// PER-REQUEST DEADLINE, because the timeout is an argument.
+	reqCtx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(reqCtx)
+
+	resp, err := httpClientFor().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -365,8 +406,11 @@ func searchTavily(ctx context.Context, query string, count int, timeout time.Dur
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Tavily-Access-Mode", "keyless")
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
+	reqCtx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(reqCtx)
+
+	resp, err := httpClientFor().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -587,5 +631,3 @@ func tinyfishContent(snippet, site string) string {
 	}
 	return strings.TrimSpace(snippet + " (" + site + ")")
 }
-
-var _ = sync.Mutex{}
