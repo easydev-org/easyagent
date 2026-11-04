@@ -78,8 +78,64 @@ func (d *DB) Migrate() error {
 	}
 	// Backfill: every pre-existing tenant becomes its own subtree root
 	// (scope_id = id, parent_id = NULL). Idempotent.
-	return d.g.Model(&Tenant{}).Where("scope_id = ? OR scope_id IS NULL", "").
-		Update("scope_id", gorm.Expr("id")).Error
+	if err := d.g.Model(&Tenant{}).Where("scope_id = ? OR scope_id IS NULL", "").
+		Update("scope_id", gorm.Expr("id")).Error; err != nil {
+		return err
+	}
+	return d.backfillMessageSeq()
+}
+
+/**
+ * backfillMessageSeq assigns positions to messages written before `seq` existed.
+ *
+ * AutoMigrate ADDS THE COLUMN AND NOTHING ELSE, so every existing row starts at seq 0 — and a
+ * positional read that filters on seq would then see those messages as "before the beginning" and
+ * skip them entirely. That is worse than an error: history would look SHORTER than it is.
+ *
+ * IT WALKS EACH CHAIN, because a position is a property of the chain and there is nowhere else to
+ * read it from. Chains are found by their tips, so messages abandoned by an undo (reachable from no
+ * tip) get no number — deliberately: they are not part of any conversation any more, and numbering
+ * them would make the range include messages nothing can reach.
+ *
+ * It is a ONE-TIME cost gated on "any row still at seq 0", so a normal boot does one cheap count.
+ */
+func (d *DB) backfillMessageSeq() error {
+	var unnumbered int64
+	if err := d.g.Model(&Message{}).Where("seq = 0").Count(&unnumbered).Error; err != nil {
+		return err
+	}
+	if unnumbered == 0 {
+		return nil
+	}
+
+	var sessions []Session
+	if err := d.g.Where("tip_id IS NOT NULL").Find(&sessions).Error; err != nil {
+		return err
+	}
+	numbered := map[string]bool{}
+	for _, s := range sessions {
+		if s.TipID == nil || *s.TipID == "" {
+			continue
+		}
+		// Walk the chain newest→oldest, collecting ids; Chain already returns oldest-first.
+		msgs, err := d.Chain(s.Tenant, *s.TipID, maxChainDepth, "")
+		if err != nil {
+			return err
+		}
+		for i, m := range msgs {
+			seq := int64(i + 1)
+			if numbered[m.ID] || m.Seq == seq {
+				numbered[m.ID] = true
+				continue
+			}
+			if err := d.g.Model(&Message{}).Where("tenant = ? AND id = ?", m.Tenant, m.ID).
+				Update("seq", seq).Error; err != nil {
+				return err
+			}
+			numbered[m.ID] = true
+		}
+	}
+	return nil
 }
 
 // nowStr is the canonical timestamp form (RFC3339, UTC) used by every column.

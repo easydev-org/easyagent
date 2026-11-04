@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -10,13 +11,37 @@ import (
 // InsertMessage inserts a message with a CLIENT-supplied id, idempotently.
 // Returns true when a row was created, false when the id already existed.
 // Uses RowsAffected (portable) instead of `INSERT ... RETURNING`.
+//
+// SEQ IS DERIVED FROM THE PREDECESSOR, IN THE SAME TRANSACTION. The position of a message in its
+// chain is `prev.seq + 1`, and a root message is 1. Reading the predecessor outside the insert would
+// let two concurrent appends compute the same number, and the chain would then have two messages
+// claiming one position — which is exactly what a positional read cannot tolerate.
 func (d *DB) InsertMessage(tenant, id, role string, prevID *string, source string) (bool, error) {
-	m := Message{ID: id, Tenant: tenant, Role: role, PrevID: prevID, Source: source, CreatedAt: nowStr()}
-	res := d.g.Clauses(clause.OnConflict{DoNothing: true}).Create(&m)
-	if res.Error != nil {
-		return false, res.Error
-	}
-	return res.RowsAffected > 0, nil
+	created := false
+	err := d.g.Transaction(func(tx *gorm.DB) error {
+		seq := int64(1)
+		if prevID != nil && *prevID != "" {
+			var prev Message
+			// A MISSING PREDECESSOR IS AN ERROR, not seq 1: appending to a message that does not
+			// exist means the caller has a stale tip, and silently starting a second chain at 1
+			// would corrupt every later position.
+			if err := tx.Where("tenant = ? AND id = ?", tenant, *prevID).First(&prev).Error; err != nil {
+				return fmt.Errorf("insert message %s: predecessor %s: %w", id, *prevID, err)
+			}
+			seq = prev.Seq + 1
+		}
+		m := Message{
+			ID: id, Tenant: tenant, Role: role, PrevID: prevID, Source: source,
+			CreatedAt: nowStr(), Seq: seq,
+		}
+		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&m)
+		if res.Error != nil {
+			return res.Error
+		}
+		created = res.RowsAffected > 0
+		return nil
+	})
+	return created, err
 }
 
 // GetMessage returns (message, true) or (nil, false).

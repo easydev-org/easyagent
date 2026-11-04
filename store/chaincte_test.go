@@ -15,7 +15,7 @@ func TestChainCTELongChain(t *testing.T) {
 	for i := range roles {
 		roles[i] = "user"
 	}
-	tip, logical := buildChain(t, d, "t", roles, seq(n))
+	tip, logical := buildChain(t, d, "t", roles)
 
 	got, err := d.Chain("t", tip, n, "")
 	if err != nil {
@@ -58,7 +58,7 @@ func TestChainIsSingleQuery(t *testing.T) {
 	for i := range roles {
 		roles[i] = "user"
 	}
-	tip, _ := buildChain(t, d, "t", roles, seq(n))
+	tip, _ := buildChain(t, d, "t", roles)
 
 	var count int
 	inc := func(*gorm.DB) { count++ }
@@ -82,14 +82,6 @@ func TestChainIsSingleQuery(t *testing.T) {
 	t.Logf("Chain of %d messages used %d query(s)", n, count)
 }
 
-func seq(n int) []int {
-	out := make([]int, n)
-	for i := range out {
-		out[i] = i
-	}
-	return out
-}
-
 // TestIsInChainSemantics pins the exact answers after the LIMIT 1 rewrite:
 // true for the tip and every ancestor, false for a stranger and for a
 // descendant (a message that came AFTER the queried start).
@@ -100,7 +92,7 @@ func TestIsInChainSemantics(t *testing.T) {
 	for i := range roles {
 		roles[i] = "user"
 	}
-	tip, logical := buildChain(t, d, "t", roles, seq(n))
+	tip, logical := buildChain(t, d, "t", roles)
 
 	// Every member is reachable from the tip.
 	for _, id := range logical {

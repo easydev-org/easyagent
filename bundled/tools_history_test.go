@@ -37,8 +37,8 @@ func historyStubDeps() *stubDeps {
 	// oldest message has the highest depth.
 	return &stubDeps{
 		chain: []ChainEntry{
-			{ID: "m1", Role: "user", CreatedAt: "2026-01-02 09:59:00", Depth: 1},
-			{ID: "m2", Role: "assistant", CreatedAt: "2026-01-02 10:00:00", Depth: 0},
+			{ID: "m1", Role: "user", CreatedAt: "2026-01-02 09:59:00", Depth: 1, Seq: 1},
+			{ID: "m2", Role: "assistant", CreatedAt: "2026-01-02 10:00:00", Depth: 0, Seq: 2},
 		},
 		parts: parts,
 	}
@@ -257,7 +257,7 @@ func TestHistorySearchReadsAnotherSession(t *testing.T) {
 	d.tips = map[string]string{"s1": "m2", "other": "x1"}
 	d.chainByTip = map[string][]ChainEntry{
 		"m2": d.chain,
-		"x1": {{ID: "x1", Role: "user", CreatedAt: "2026-02-01 08:00:00", Depth: 0}},
+		"x1": {{ID: "x1", Role: "user", CreatedAt: "2026-02-01 08:00:00", Depth: 0, Seq: 1}},
 	}
 	d.parts = append(d.parts, MessagePartRow{
 		MessageID: "x1", Type: "text", Seq: 0, Data: `{"text":"the other conversation is about caching"}`,
@@ -294,24 +294,55 @@ func TestHistorySearchUnknownSessionIsAnError(t *testing.T) {
 }
 
 /**
- * history-range-read USES depth_from/depth_to, NOT from/to.
+ * history-range-read WINDOWS BY seq, NOT depth.
  *
- * The old names collided with history-search's, where the same two words mean TIMESTAMPS: a model
- * that had just called one tool would send its arguments to the other and get an empty result
- * instead of an error.
+ * A DEPTH WINDOW IS NOT AN ADDRESS. `depth` is recomputed as `len(chain) - 1 - i`, so appending one
+ * message shifts every depth in the conversation. A model that read "depth 1 is where the deploy
+ * failed" and came back next turn would find different content there — no error, nothing to notice.
+ *
+ * `seq` is fixed when the message is written, so `from_seq: 2, to_seq: 3` means the second message
+ * today and the second message tomorrow.
  */
-func TestHistoryRangeReadUsesDepthNames(t *testing.T) {
-	out := callHistory(t, "history-range-read", map[string]any{"depth_from": 0, "depth_to": 1})
+func TestHistoryRangeReadWindowsBySeq(t *testing.T) {
+	out := callHistory(t, "history-range-read", map[string]any{"from_seq": 2, "to_seq": 3})
 	entries := historyEntries(t, out)
 	if len(entries) != 1 || entries[0]["id"] != "m2" {
-		t.Fatalf("depth window = %+v", entries)
+		t.Fatalf("seq window = %+v", entries)
 	}
 
-	// The OLD parameter names must not silently select a time window.
-	out = callHistory(t, "history-range-read", map[string]any{"from": 0, "to": 1})
-	entries = historyEntries(t, out)
-	if len(entries) != 2 {
-		t.Fatalf("from/to should be ignored (both messages), got %d entries", len(entries))
+	// The whole chain, when no bounds are given.
+	out = callHistory(t, "history-range-read", map[string]any{})
+	if n := len(historyEntries(t, out)); n != 2 {
+		t.Fatalf("unbounded read returned %d entries, want both", n)
+	}
+}
+
+// to_seq is EXCLUSIVE, matching every other half-open range in the codebase.
+func TestHistoryRangeReadToSeqIsExclusive(t *testing.T) {
+	out := callHistory(t, "history-range-read", map[string]any{"from_seq": 1, "to_seq": 2})
+	entries := historyEntries(t, out)
+	if len(entries) != 1 || entries[0]["id"] != "m1" {
+		t.Fatalf("to_seq is not exclusive: %+v", entries)
+	}
+}
+
+// `last` keeps the newest N, which a seq window cannot express without knowing the count.
+func TestHistoryRangeReadLastKeepsNewest(t *testing.T) {
+	out := callHistory(t, "history-range-read", map[string]any{"last": 1})
+	entries := historyEntries(t, out)
+	if len(entries) != 1 || entries[0]["id"] != "m2" {
+		t.Fatalf("last=1 = %+v, want the newest message", entries)
+	}
+}
+
+// The bounds are reported, so a caller can page without first counting the conversation.
+func TestHistoryRangeReadReportsSeqBounds(t *testing.T) {
+	out := callHistory(t, "history-range-read", map[string]any{})
+	if got := historyMeta(t, out, "seq_min"); got != int64(1) {
+		t.Fatalf("seq_min = %v, want 1", got)
+	}
+	if got := historyMeta(t, out, "seq_max"); got != int64(2) {
+		t.Fatalf("seq_max = %v, want 2", got)
 	}
 }
 
@@ -327,11 +358,11 @@ func TestHistoryRangeReadIsOldestFirst(t *testing.T) {
 	}
 }
 
-// depth_to=0 means "no upper bound", not "stop immediately".
-func TestHistoryRangeReadDepthToZeroMeansUnbounded(t *testing.T) {
-	out := callHistory(t, "history-range-read", map[string]any{"depth_from": 0})
+// Omitting the bounds (or passing 0) means "no bound", not "stop immediately".
+func TestHistoryRangeReadZeroBoundMeansUnbounded(t *testing.T) {
+	out := callHistory(t, "history-range-read", map[string]any{"from_seq": 0, "to_seq": 0})
 	if n := len(historyEntries(t, out)); n != 2 {
-		t.Fatalf("depth_to=0 returned %d entries, want both", n)
+		t.Fatalf("zero bounds returned %d entries, want both", n)
 	}
 }
 
@@ -350,8 +381,8 @@ func TestHistorySearchShowsTheIDInTheRenderedText(t *testing.T) {
 		t.Fatalf("the rendered line does not name the id:\n%s", out.Content)
 	}
 	// The depth is still there, and it is LABELLED, so the two numbers cannot be confused.
-	if !strings.Contains(out.Content, "depth 1") {
-		t.Fatalf("the rendered line lost the depth:\n%s", out.Content)
+	if !strings.Contains(out.Content, "seq 1") {
+		t.Fatalf("the rendered line lost the seq:\n%s", out.Content)
 	}
 }
 

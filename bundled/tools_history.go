@@ -48,10 +48,14 @@ const defaultPreviewChars = 2000
 
 // historyEntry is one message as the history tools surface it.
 type historyEntry struct {
-	ID    string
-	Role  string
+	ID   string
+	Role string
+	// Depth counts back from the tip and SHIFTS on every append — it answers "how far back", which
+	// is useful, and "which message", which it cannot.
 	Depth int
-	Time  string
+	// Seq is the message's position in its chain: oldest is 1, fixed when written.
+	Seq  int64
+	Time string
 	// Text is the message's own prose (text + summary parts).
 	Text string
 	// Tools is every tool call in this message, in order.
@@ -98,7 +102,7 @@ func (e *Extension) collectHistory(tenant, session string) []historyEntry {
 
 	out := make([]historyEntry, 0, len(chain))
 	for _, m := range chain {
-		en := historyEntry{ID: m.ID, Role: m.Role, Depth: m.Depth, Time: m.CreatedAt}
+		en := historyEntry{ID: m.ID, Role: m.Role, Depth: m.Depth, Seq: m.Seq, Time: m.CreatedAt}
 		// Tools are keyed by their call id so a result attaches to the call it belongs to. A
 		// result whose call is in a DIFFERENT message still attaches, because the id is the
 		// authority and a provider may split them.
@@ -172,9 +176,14 @@ type historyFilter struct {
 	// TimeFrom / TimeTo are inclusive bounds, "" for none.
 	TimeFrom string
 	TimeTo   string
-	// DepthFrom / DepthTo bound the window (depth 0 = newest); DepthTo 0 means no upper bound.
-	DepthFrom int
-	DepthTo   int
+	// SeqFrom / SeqTo bound the window by POSITION IN THE CHAIN (oldest = 1). SeqTo 0 means no upper
+	// bound. Position, not depth: a depth window silently moves as messages arrive, so a window a
+	// caller saved last turn would address different messages this turn.
+	SeqFrom int64
+	SeqTo   int64
+	// LastN selects the newest N messages, which is what a depth window is actually good for.
+	// Applied after the seq window so the two compose rather than one silently winning.
+	LastN int
 }
 
 // includes reports whether a kind is searched, with the default applied.
@@ -197,7 +206,10 @@ func (f historyFilter) includes(kind string) bool {
 
 // match reports whether one entry satisfies the filter, and records which kinds hit.
 func (f historyFilter) match(en *historyEntry) bool {
-	if en.Depth < f.DepthFrom || (f.DepthTo > 0 && en.Depth >= f.DepthTo) {
+	if f.SeqFrom > 0 && en.Seq < f.SeqFrom {
+		return false
+	}
+	if f.SeqTo > 0 && en.Seq >= f.SeqTo {
 		return false
 	}
 	if !inTimeRange(en.Time, f.TimeFrom, f.TimeTo) {
@@ -267,10 +279,11 @@ func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars in
 		 * — and one that tried anyway sent the depth as an id and got "no such message", which reads
 		 * as a broken tool rather than a missing field.
 		 *
-		 * Depth stays, because it is what a positional read takes; the id is appended because it is
-		 * what a content read takes. Two numbers with two jobs, both labelled.
+		 * SEQ IS THE ADDRESS A CALLER HOLDS ACROSS TURNS; depth is shown beside it because "how far
+		 * back" is a useful reading, but it is NOT what a window takes any more — it shifts on every
+		 * append, so a depth saved last turn addresses a different message this turn.
 		 */
-		block := fmt.Sprintf("[depth %d] id=%s %s (%s)\n%s\n", en.Depth, en.ID, en.role(), en.Time, body)
+		block := fmt.Sprintf("[seq %d] id=%s %s (%s)\n%s\n", en.Seq, en.ID, en.role(), en.Time, body)
 		if cut {
 			// The marker names the id and the command that returns the rest, so the model does not
 			// have to guess either.
@@ -356,7 +369,7 @@ func entriesToData(entries []historyEntry, previewChars int) []map[string]any {
 	for _, en := range entries {
 		body, cut := entryBody(en, previewChars)
 		row := map[string]any{
-			"id": en.ID, "role": en.Role, "depth": en.Depth, "content": body,
+			"id": en.ID, "role": en.Role, "seq": en.Seq, "depth": en.Depth, "content": body,
 		}
 		if cut {
 			row["truncated"] = true
@@ -490,11 +503,24 @@ func (e *Extension) historySearch(ctx context.Context, tenant, session string, a
 	}, nil
 }
 
-// historyRangeRead reads a positional window, oldest first.
-//
-// THE PARAMETERS ARE `depth_from` / `depth_to`, NOT `from` / `to`. The old names collided with
-// `history-search`, where the same two words mean TIMESTAMPS — so a model that had just called one
-// tool would send its arguments to the other and get nonsense instead of an error.
+/**
+ * historyRangeRead reads a window BY POSITION IN THE CHAIN, oldest first.
+ *
+ * THE ANCHOR IS `seq`, NOT `depth`, AND THE DIFFERENCE IS NOT COSMETIC.
+ *
+ * `depth` counts back from the tip, so it is recomputed from the chain's LENGTH: appending one
+ * message shifts every depth in the conversation by one. A model that read "depth 5 is where the
+ * deploy failed" and came back next turn would find different content there — with no error, and no
+ * way to notice. `depth` is an honest answer to "how far back is this" and a false one to "which
+ * message is this".
+ *
+ * `seq` is the message's position, oldest = 1, fixed when it is written. It survives new messages,
+ * forks (a child continues from its parent's tip) and undos (the abandoned rows keep their numbers
+ * and simply stop being reachable).
+ *
+ * `last` REMAINS, because "the most recent N" is a real question and a seq window cannot ask it
+ * without knowing the count first. The two compose: seq narrows to a stretch, last trims it.
+ */
 func (e *Extension) historyRangeRead(ctx context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
 	include, err := parseIncludes(args)
 	if err != nil {
@@ -509,12 +535,16 @@ func (e *Extension) historyRangeRead(ctx context.Context, tenant, session string
 			"history-range-read: no session named %q in this tenant", target)}
 	}
 
-	depthFrom, depthTo := 0, 0
-	if f, ok := numArg(args, "depth_from"); ok {
-		depthFrom = int(f)
+	var seqFrom, seqTo int64
+	if f, ok := numArg(args, "from_seq"); ok {
+		seqFrom = int64(f)
 	}
-	if f, ok := numArg(args, "depth_to"); ok {
-		depthTo = int(f)
+	if f, ok := numArg(args, "to_seq"); ok {
+		seqTo = int64(f)
+	}
+	last := 0
+	if f, ok := numArg(args, "last"); ok {
+		last = int(f)
 	}
 	limit := 200
 	if f, ok := numArg(args, "limit"); ok {
@@ -529,24 +559,36 @@ func (e *Extension) historyRangeRead(ctx context.Context, tenant, session string
 		preview = int(f)
 	}
 
+	all := e.collectHistory(tenant, target)
 	filter := historyFilter{
-		Include: include, Session: target, DepthFrom: depthFrom, DepthTo: depthTo,
+		Include: include, Session: target, SeqFrom: seqFrom, SeqTo: seqTo,
 	}
-	window := applyHistoryFilter(e.collectHistory(tenant, target), filter)
-	// A positional read is oldest-first: it is re-reading a stretch of conversation in the order it
-	// happened, not looking for the most recent mention.
+	window := applyHistoryFilter(all, filter)
+
+	// `last` trims to the NEWEST N of the window, then the window is read oldest-first like any
+	// other positional read.
 	hasMore := false
+	if last > 0 && len(window) > last {
+		window = window[len(window)-last:]
+		hasMore = true
+	}
 	if limit > 0 && len(window) > limit {
 		window = window[:limit]
 		hasMore = true
 	}
 	rendered, _ := renderHistoryWithPreviews(window, maxChars, preview)
-	return agent.ToolOutcome{
-		Content: rendered,
-		Metadata: map[string]any{
-			"session": target, "has_more": hasMore, "entries": entriesToData(window, preview),
-		},
-	}, nil
+
+	// THE BOUNDS ARE REPORTED so a caller can page without re-deriving them: an empty window still
+	// says what the conversation's range is, which distinguishes "you asked past the end" from
+	// "this conversation has no messages".
+	meta := map[string]any{
+		"session": target, "has_more": hasMore, "entries": entriesToData(window, preview),
+	}
+	if len(all) > 0 {
+		meta["seq_min"] = all[0].Seq
+		meta["seq_max"] = all[len(all)-1].Seq
+	}
+	return agent.ToolOutcome{Content: rendered, Metadata: meta}, nil
 }
 
 /**
@@ -611,7 +653,7 @@ func (e *Extension) historyRead(ctx context.Context, tenant, session string, arg
 		Content: body,
 		Metadata: map[string]any{
 			"session": target, "id": found.ID, "role": found.Role,
-			"depth": found.Depth, "chars": len(body),
+			"seq": found.Seq, "chars": len(body),
 		},
 	}, nil
 }

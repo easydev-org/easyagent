@@ -10,13 +10,25 @@ import (
 // backs every message read, so its invariants must hold for arbitrarily shaped
 // chains — including ones written out of order (concurrent/idempotent writers).
 
-func buildChain(t *testing.T, d *DB, tenant string, roles []string, insertOrder []int) (tip string, logical []string) {
+/**
+ * buildChain appends messages IN ORDER, and that is now a requirement rather than a convenience.
+ *
+ * IT USED TO INSERT IN A SHUFFLED ORDER, which worked while a message's identity was only its
+ * `prev_id`: two writes could name each other's predecessors in either sequence. A message now also
+ * carries its POSITION in the chain (`seq`, derived from its predecessor), so an out-of-order write
+ * would have to invent a predecessor that does not exist yet — and `InsertMessage` refuses that
+ * rather than silently starting a second chain at position 1.
+ *
+ * PRODUCTION NEVER WRITES OUT OF ORDER: every call site passes the current tip, which is by
+ * definition already stored. The shuffle was testing a property the system does not have.
+ */
+func buildChain(t *testing.T, d *DB, tenant string, roles []string) (tip string, logical []string) {
 	t.Helper()
 	logical = make([]string, len(roles))
 	for i := range roles {
 		logical[i] = fmt.Sprintf("m%d", i)
 	}
-	for _, i := range insertOrder {
+	for i := range roles {
 		var prev *string
 		if i > 0 {
 			prev = &logical[i-1]
@@ -26,16 +38,6 @@ func buildChain(t *testing.T, d *DB, tenant string, roles []string, insertOrder 
 		}
 	}
 	return logical[len(logical)-1], logical
-}
-
-func shuffle(n int, seed int64) []int {
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
-	}
-	r := rand.New(rand.NewSource(seed))
-	r.Shuffle(n, func(i, j int) { order[i], order[j] = order[j], order[i] })
-	return order
 }
 
 func rolesFor(n int, seed int64) []string {
@@ -55,7 +57,7 @@ func TestChainProperties(t *testing.T) {
 		d := newTestDB(t)
 		n := 1 + int(seed%60)
 		roles := rolesFor(n, seed)
-		tip, logical := buildChain(t, d, "t", roles, shuffle(n, seed))
+		tip, logical := buildChain(t, d, "t", roles)
 
 		got, err := d.Chain("t", tip, 1000, "")
 		if err != nil {
@@ -88,7 +90,7 @@ func TestDeltaSinceAnchor(t *testing.T) {
 	d := newTestDB(t)
 	n := 20
 	roles := rolesFor(n, 7)
-	tip, logical := buildChain(t, d, "t", roles, shuffle(n, 7))
+	tip, logical := buildChain(t, d, "t", roles)
 
 	anchor := logical[9]
 	delta, err := d.DeltaSince("t", tip, anchor, 1000)
@@ -141,7 +143,7 @@ func TestChainPagination(t *testing.T) {
 	d := newTestDB(t)
 	n := 10
 	roles := rolesFor(n, 3)
-	tip, logical := buildChain(t, d, "t", roles, shuffle(n, 3))
+	tip, logical := buildChain(t, d, "t", roles)
 
 	page1, err := d.Chain("t", tip, 4, "")
 	if err != nil {
@@ -187,7 +189,7 @@ func TestChainDepthLimit(t *testing.T) {
 	d := newTestDB(t)
 	n := 12
 	roles := rolesFor(n, 11)
-	tip, logical := buildChain(t, d, "t", roles, shuffle(n, 11))
+	tip, logical := buildChain(t, d, "t", roles)
 
 	// A positive limit caps the depth to the NEWEST `limit` messages.
 	capped, err := d.Chain("t", tip, 5, "")

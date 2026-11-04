@@ -53,6 +53,25 @@ type Message struct {
 	PrevID    *string `gorm:"column:prev_id;size:64;index"`
 	Source    string  `gorm:"column:source"`
 	CreatedAt string  `gorm:"column:created_at"`
+	/**
+	 * Seq is the message's POSITION IN ITS CHAIN: the oldest message is 1, and every append adds one.
+	 *
+	 * IT IS NOT A SESSION COLUMN AND NOT A GLOBAL COUNTER.
+	 *
+	 * A conversation is a prev_id chain; `sessions.tip_id` is a POINTER into it. A fork shares the
+	 * chain (`ForkSession` copies the tip, not the messages), so two sessions can reach the same rows.
+	 * Numbering by session would therefore need a row per (message, session) to stay unique — and
+	 * numbering globally would make "the 4th message in this conversation" mean nothing.
+	 *
+	 * POSITION IN THE CHAIN is the only reading that survives both:
+	 *   - a fork's new message continues from its parent's tip, so it is seq(tip)+1;
+	 *   - an undo moves the tip back and leaves the rows, so the abandoned messages have seqs that
+	 *     are simply no longer reachable — which is what an undo means.
+	 *
+	 * IT NEVER CHANGES once written, unlike depth (`len(chain) - 1 - i`), which shifts for every
+	 * message each time one is appended.
+	 */
+	Seq int64 `gorm:"column:seq;index:idx_messages_tenant_seq,priority:2"`
 }
 
 func (Message) TableName() string { return "messages" }
