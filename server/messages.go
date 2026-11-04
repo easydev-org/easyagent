@@ -105,7 +105,7 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 		return connect.NewError(connect.CodeNotFound, "session not found")
 	}
 	messageID := newUUID()
-	payload := agent.WakePayload{Type: "trigger", MessageID: messageID, Text: req.Prompt}
+	payload := agent.WakePayload{MessageID: messageID, Text: req.Prompt}
 	for _, a := range req.Attachments {
 		payload.Attachments = append(payload.Attachments, agent.FileRef{
 			Code: a.Code, Name: a.Name, Size: int(a.Size),
@@ -155,7 +155,20 @@ func (s *Server) WatchSession(ctx context.Context, req *agentv1.WatchSessionRequ
 		return err
 	}
 	if s.stream != nil {
-		ch, cancel, err := s.stream.SubscribeSessionEvents(ctx, tenant, req.Id, uint64(req.SinceSeq))
+		// A PAGE REFRESH HAS NO `seq`, only the newest message id it holds. Resolve that to a
+		// timestamp here, because by the time frames are read back the id is gone.
+		//
+		// Done only when since_seq is unset: the proto says the sequence wins, and resolving an id
+		// the client did not mean to use would filter out frames it needs.
+		var sinceAt int64
+		if req.SinceSeq == 0 && req.SinceMsg != "" {
+			if m, ok, merr := s.db.GetMessage(tenant, req.SinceMsg); merr == nil && ok && m != nil {
+				if t, terr := time.Parse(time.RFC3339Nano, m.CreatedAt); terr == nil {
+					sinceAt = t.UnixMilli()
+				}
+			}
+		}
+		ch, cancel, err := s.stream.SubscribeSessionEvents(ctx, tenant, req.Id, uint64(req.SinceSeq), sinceAt)
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, err.Error())
 		}
@@ -189,7 +202,11 @@ func (s *Server) WatchSession(ctx context.Context, req *agentv1.WatchSessionRequ
 			return nil
 		case ev := <-ch:
 			if err := stream.Send(&agentv1.WatchSessionResponse{
-				Event: ev.Name, Params: eventParams(ev), Seq: s.hub.NextSeq(),
+				Event: ev.Name, Params: eventParams(ev),
+				// THE FRAME'S OWN STAMP, not a fresh one. These are what the client resumes from
+				// and dedupes on, so they must be the frame's identity rather than a counter tick
+				// taken at send time.
+				Eid: ev.Eid, Seq: ev.Seq,
 			}); err != nil {
 				return err
 			}

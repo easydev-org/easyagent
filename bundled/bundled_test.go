@@ -86,6 +86,38 @@ func TestManifestToolsAndNoTimeWait(t *testing.T) {
 	}
 }
 
+// EVERY DECLARED TOOL MUST HAVE A HANDLER.
+//
+// The manifest is what the model SEES; the handlers map is what actually runs. A tool in one and
+// not the other is advertised and then fails at call time — the model believes it has a capability
+// it does not, calls it, and reads back "unknown tool".
+//
+// It happened: `job-list` and `job-wait` were removed from the code but left in the manifest, so
+// ListExtensions offered them in production. The old test only asserted that SOME tools existed,
+// which cannot notice a leftover.
+func TestEveryDeclaredToolHasAHandler(t *testing.T) {
+	m, err := ParseManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := New(&stubDeps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]bool{}
+	for _, tool := range m.Tools {
+		declared[tool.Name] = true
+		if _, ok := e.handlers[tool.Name]; !ok {
+			t.Errorf("manifest declares %q but no handler implements it; the model would call it and get 'unknown tool'", tool.Name)
+		}
+	}
+	for name := range e.handlers {
+		if !declared[name] {
+			t.Errorf("handler %q is not declared in the manifest, so the model can never call it", name)
+		}
+	}
+}
+
 func TestExecuteTodoWriteAndUnknown(t *testing.T) {
 	e, err := New(&stubDeps{})
 	if err != nil {

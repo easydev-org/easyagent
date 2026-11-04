@@ -230,6 +230,17 @@ func run(cfgPath string) error {
 		// easybus.<tenant>.tool.progress.<callID>; the turn re-emits each frame onto
 		// the session's durable event stream so a reconnecting client still sees it.
 		rtDeps.ToolProgress = agent.NewToolProgressSource(b.Agent())
+		// Cross-replica interrupt: watch the SAME queue a drain reads, so an `interrupt` that a
+		// different replica enqueued aborts this replica's running turn. Without this the field was
+		// declared and consumed but never assigned, so the only interrupt that worked was one
+		// arriving on the replica holding the turn — and a queued interrupt reached a turn only at
+		// its NEXT drain, which is after it had already finished.
+		rtDeps.InterruptWatch = agent.NewMailboxInterruptWatch(queue)
+		// A cancelled turn must stop the WORK, not only the waiting: an extension tool is a
+		// request over the bus, so letting this side's context expire leaves its handler running
+		// with nobody to read the result. The executor resolves the owning extension because only
+		// it knows which one a tool name refers to.
+		rtDeps.ToolInterrupt = exec.InterruptTool
 		toolExec = exec
 
 		// Channels: one consumer for every channel of every tenant, routed to sessions

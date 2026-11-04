@@ -620,6 +620,25 @@ func (e *ToolExecutor) resolve(name string) (extID, bare string) {
 	return "", ""
 }
 
+// InterruptTool tells the extension that owns `name` to stop running it for this session.
+//
+// THE RESOLUTION IS THE SAME ONE Execute USES, which is the point: a tool is reachable by its bare
+// name or its owner-qualified form, and only this map knows which extension either refers to.
+// Deriving an id from the name would guess, and one of the two naming conventions would lose.
+//
+// IT IS A BROADCAST, NOT A TARGETED CANCEL. The SDK's interrupt signal is addressed to an extension
+// and scoped by session, so every in-flight call that extension has for this session stops. There is
+// no per-call signal to send instead — and in practice a turn runs one tool at a time.
+func (e *ToolExecutor) InterruptTool(ctx context.Context, tenant, session, name string) {
+	extID, _ := e.resolve(name)
+	if extID == "" {
+		// A BUNDLED TOOL. It runs in this process, so its context already stopped it; there is no
+		// bus hop to make and nothing to report.
+		return
+	}
+	_ = e.agent.InterruptSession(ctx, tenant, extID, session, "tool timeout")
+}
+
 // Tools returns the discovered tool definitions (with description + schema).
 func (e *ToolExecutor) Tools() []agentpkg.ToolDef {
 	e.mu.RLock()
@@ -980,23 +999,43 @@ func (b *Bus) PushExtensionConfig(ctx context.Context, tenant, extID, name strin
 // SubscribeSessionEvents subscribes to a session's durable event stream. If
 // sinceSeq > 0 it first replays retained frames at/after that sequence, then
 // streams live (deduping by id). Returns a channel + a cancel func.
-func (b *Bus) SubscribeSessionEvents(ctx context.Context, tenant, session string, sinceSeq uint64) (<-chan []byte, func(), error) {
+// SINCE-SEQ IS A REAL FILTER, NOT A SWITCH.
+//
+// It used to mean only "replay something": `if sinceSeq > 0` then the whole retained window went out,
+// newest 2000 frames, and dedup on `eid` cleaned up the overlap. A client that echoed its newest
+// `seq` expecting "the frames after this one" got everything the stream still held, and the
+// comment promising an O(1) resume described behaviour nobody had implemented.
+//
+// `seq` is this replica's counter, so a reconnect served by a DIFFERENT replica gets frames numbered
+// under a different epoch and may replay more than asked. That is acceptable and safe — `eid` dedup
+// at the client collapses the overlap — but it is why the anchor is not treated as a durable
+// offset. The alternative is a cluster-wide sequence, which is a change to what `seq` means rather
+// than a fix to what this function does with it.
+func (b *Bus) SubscribeSessionEvents(ctx context.Context, tenant, session string, sinceSeq uint64, sinceAtMillis int64) (<-chan []byte, func(), error) {
 	subject := protocol.ChSessionEvents(tenant, session)
 	out := make(chan []byte, 128)
 	sub, err := b.transport.Subscribe(ctx, subject, bus.SubscribeOpts{})
 	if err != nil {
 		return nil, nil, err
 	}
-	// Replay the retained window (best-effort).
+	// Replay the retained window (best-effort), keeping only frames the client has not seen.
+	//
+	// TWO ANCHORS, ONE PRECEDENCE: `sinceSeq` wins when set, because it is exact. `sinceAtMillis` is
+	// the page-refresh fallback — a refresh has no in-memory sequence, only the newest message id it
+	// holds, which the server resolves to a timestamp. Without it a refresh replayed the whole
+	// retained window and relied on the client to dedupe.
 	seen := map[string]bool{}
-	if sinceSeq > 0 {
+	if sinceSeq > 0 || sinceAtMillis > 0 {
 		if envs, rerr := b.transport.Replay(ctx, subject); rerr == nil {
 			for _, e := range envs {
-				id := derefStr(e.Id)
 				raw, err := json.Marshal(e.Payload)
 				if err != nil {
 					continue
 				}
+				if !frameAfter(raw, sinceSeq, sinceAtMillis) {
+					continue
+				}
+				id := derefStr(e.Id)
 				if id != "" && seen[id] {
 					continue
 				}
@@ -1036,6 +1075,25 @@ func (b *Bus) SubscribeSessionEvents(ctx context.Context, tenant, session string
 		}
 	}()
 	return out, func() { _ = sub.Close() }, nil
+}
+
+// frameAfter reports whether a stored frame is newer than the client's anchor.
+//
+// A FRAME WITHOUT A SEQ IS KEPT. Ephemeral deltas carry none, and neither does anything an older
+// build wrote; dropping those would silently omit frames the client has not seen, which is worse
+// than sending one it has.
+func frameAfter(raw []byte, sinceSeq uint64, sinceAtMillis int64) bool {
+	var f struct {
+		Seq int64 `json:"seq"`
+		At  int64 `json:"at"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return true
+	}
+	if sinceSeq > 0 {
+		return f.Seq <= 0 || uint64(f.Seq) > sinceSeq
+	}
+	return f.At <= 0 || f.At >= sinceAtMillis
 }
 
 func derefStr(s *string) string {

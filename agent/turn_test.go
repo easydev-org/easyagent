@@ -273,3 +273,64 @@ func TestTurnRetryEmitsSameMessageID(t *testing.T) {
 		t.Errorf("retry message_id %v != message-added %v", rt.Params["message_id"], ma.Params["message_id"])
 	}
 }
+
+// stalledTools blocks until its context is done — the tool a cancel has to reach.
+type stalledTools struct{}
+
+func (s *stalledTools) Execute(ctx context.Context, _, _, _, name, _ string) (ToolOutcome, error) {
+	<-ctx.Done()
+	return ToolOutcome{}, ctx.Err()
+}
+
+/**
+ * A TIMEOUT MUST STOP THE WORK, NOT ONLY THE WAITING.
+ *
+ * `ToolTimeout` expires the context on THIS side, which unblocks the turn and returns "timeout" to
+ * the model. An out-of-process tool is a request over the bus: its handler keeps running, with
+ * nobody left to read the output, until the process ends on its own. The turn therefore tells the
+ * extension to cancel, and the extension's SDK already implements that
+ * (`serveInterrupt` → `cancelInflight`).
+ *
+ * Only a CANCELLED turn signals, not a timed-out one: a tool that ran out of budget may be
+ * mid-effect (a push, a write), and killing it at the deadline turns "slow" into "half done".
+ */
+func TestCancelledTurnSignalsTheTool(t *testing.T) {
+	srv := sseServer(t,
+		[]string{toolCall("call_1", "sandbox-job-start", `{}`), finish("tool-calls")},
+		[]string{textDelta("done"), finish("stop")},
+	)
+	defer srv.Close()
+
+	var mu sync.Mutex
+	var signalled []string
+	deps := Deps{
+		Client: newClient(t, srv.URL), Emit: &recorder{}, MaxTurns: 2,
+		Tools:       &stalledTools{},
+		ToolTimeout: time.Hour, // not the trigger: the TURN's context is
+		ToolInterrupt: func(_ context.Context, _, _, toolName string) {
+			mu.Lock()
+			signalled = append(signalled, toolName)
+			mu.Unlock()
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(150 * time.Millisecond) // let the tool call start
+		cancel()
+	}()
+	_, _ = RunTurn(ctx, deps, Input{
+		Model: "m", RunID: "run-1", Session: "s1", Tenant: "t1",
+		History: []llm.Message{{Role: llm.RoleUser, Content: "go"}},
+		Tools:   []llm.ToolDef{{Name: "sandbox-job-start"}},
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(signalled) == 0 {
+		t.Fatal("a cancelled turn never told the extension to stop the tool; its process keeps running")
+	}
+	if signalled[0] != "sandbox-job-start" {
+		t.Fatalf("signalled %q, want the tool name the model called", signalled[0])
+	}
+}

@@ -189,7 +189,16 @@ func (s *Server) lifecycleFire(ctx context.Context, tenant, kind, session string
 
 // StreamSource replays + streams a session's durable events from a sequence.
 type StreamSource interface {
-	SubscribeSessionEvents(ctx context.Context, tenant, session string, sinceSeq uint64) (<-chan []byte, func(), error)
+	/**
+	 * SubscribeSessionEvents replays retained frames newer than sinceSeq, then streams live.
+	 *
+	 * sinceAtMillis IS THE PAGE-REFRESH ANCHOR. A refresh has no `seq` in memory (it starts again at
+	 * 0), so the client sends the newest MESSAGE id it holds and the server converts that to a
+	 * timestamp. Filtering by time needs the frame's own timestamp, which `Replay` does not carry —
+	 * so this parameter is honoured here rather than pretending the anchor does not exist. It is
+	 * ignored when sinceSeq > 0, matching the proto's stated precedence.
+	 */
+	SubscribeSessionEvents(ctx context.Context, tenant, session string, sinceSeq uint64, sinceAtMillis int64) (<-chan []byte, func(), error)
 }
 
 // publish emits one session event on the hub (lifecycle handlers use it for
@@ -388,10 +397,24 @@ func (h *EventHub) Subscribe(tenant, session string) (<-chan agent.Event, func()
 
 // Publish delivers one event to every subscriber of the session (non-blocking:
 // a slow subscriber drops, matching a best-effort live stream).
+//
+// THE FRAME IS STAMPED HERE, ONCE. `eid` and `seq` identify the event, not the delivery, so they are
+// assigned before it goes anywhere and the same values reach the durable backplane and every live
+// subscriber. A client resumes from `sinceSeq` and dedupes on `eid`; stamps applied at SEND time —
+// which is what this used to do — give each subscriber its own number for one event, and give the
+// live path a `seq` the durable log never used, so the anchor a client echoes back resumes from
+// somewhere else entirely.
 func (h *EventHub) Publish(tenant, session string, ev agent.Event) {
-	if h.backplane != nil && !isEphemeralFrame(ev) {
-		frame := Frame{Event: ev.Name, Params: ev.Params, Eid: newUUID(), Seq: h.NextSeq()}
-		_ = h.backplane.PublishSessionEvent(context.Background(), tenant, session, frame.Eid, frame)
+	if !isEphemeralFrame(ev) {
+		// EPHEMERAL FRAMES GET NO SEQ AND NO EID, deliberately: they are token-level deltas whose
+		// only consumer is a client connected right now, and writing them to a shared counter would
+		// make `sinceSeq` skip over numbers nothing was ever stored under.
+		ev.Seq = h.NextSeq()
+		ev.Eid = newUUID()
+		if h.backplane != nil {
+			frame := Frame{Event: ev.Name, Params: ev.Params, Eid: ev.Eid, Seq: ev.Seq, At: time.Now().UnixMilli()}
+			_ = h.backplane.PublishSessionEvent(context.Background(), tenant, session, frame.Eid, frame)
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
