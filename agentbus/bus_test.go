@@ -69,10 +69,13 @@ func TestMailboxPublishConsume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	got := make(chan MailboxMessage, 1)
-	stop, err := b.ConsumeMailbox(ctx, func(m MailboxMessage) error {
+	// THE SIGNAL IS A WAKE ON ITS OWN SUBJECT. `PublishMailbox` no longer republishes the body on
+	// `mailbox.<session>`; that path belongs to extensions announcing, which the bridge reads. This
+	// test asserted the old shared-subject behaviour and could only ever pass where it was skipped.
+	got := make(chan string, 1)
+	stop, err := b.ConsumeWake(ctx, func(tenant, session string) error {
 		select {
-		case got <- m:
+		case got <- tenant + "/" + session:
 		default:
 		}
 		return nil
@@ -88,12 +91,12 @@ func TestMailboxPublishConsume(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case m := <-got:
-		if m.Tenant != "t1" || m.SessionName != "s1" || m.Type != "trigger" {
-			t.Errorf("message = %+v", m)
+	case who := <-got:
+		if who != "t1/s1" {
+			t.Errorf("woke %q, want t1/s1", who)
 		}
 	case <-ctx.Done():
-		t.Fatal("did not receive the mailbox message")
+		t.Fatal("did not receive the wake")
 	}
 }
 

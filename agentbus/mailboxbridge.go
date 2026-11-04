@@ -74,15 +74,32 @@ func (b *Bus) BridgeExtensionMail(ctx context.Context) (func(), error) {
 			 */
 			slog.InfoContext(ctx, "mailbox bridge: payload", "tenant", tenant, "session", session,
 				"type", typ, "body", fmt.Sprintf("%v", payload), "whole", fmt.Sprintf("%#v", whole))
-			/**
-			 * ENQUEUE IS THE WHOLE JOB. `Wake` is driven by the row existing, so a delivered
-			 * message needs nothing else — and the boot backstop drains it if no wake races
-			 * through in time.
-			 */
 			if _, eerr := b.db.Enqueue(ctx, tenant, session, "", mailbox.Type(typ), payload, source); eerr != nil {
 				slog.WarnContext(ctx, "mailbox bridge: cannot enqueue",
 					"tenant", tenant, "session", session, "err", eerr)
 				continue
+			}
+			/**
+			 * THE ENQUEUE IS NOT THE WAKE, AND THIS LINE WAS MISSING.
+			 *
+			 * Nobody watches the queue. `Wake` happens for exactly two reasons: a `wake.<session>`
+			 * message reaches the runtime, or the 60-second backstop scans the whole bucket for
+			 * pending rows. The comment here used to claim "a delivered message needs nothing else —
+			 * the row existing is what wakes it", which was never true and became visibly false in
+			 * v0.13.0: before the wake subject was split off, this publish landed on
+			 * `mailbox.<session>` and `ConsumeWake` was listening there, so the nudge was a side
+			 * effect of delivery. After the split `ConsumeWake` watches `wake.>` only, so an
+			 * extension's completion notice sat in the queue until the backstop found it — up to a
+			 * minute late, on a path whose whole purpose is "the job finished, tell the session now".
+			 *
+			 * ORDER: enqueue first, then signal. A signal that arrives before the row exists wakes a
+			 * runtime that finds nothing and returns, and the turn never happens.
+			 */
+			if werr := b.agent.PublishWake(ctx, tenant, session); werr != nil {
+				// The row IS durable, so a failed nudge is not lost work: the backstop will find it.
+				// Logged rather than fatal because the message is already safely queued.
+				slog.WarnContext(ctx, "mailbox bridge: cannot wake; the row will wait for the backstop",
+					"tenant", tenant, "session", session, "err", werr)
 			}
 			slog.InfoContext(ctx, "mailbox bridge: delivered",
 				"tenant", tenant, "session", session, "type", typ)
