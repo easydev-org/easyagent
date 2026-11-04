@@ -259,7 +259,18 @@ func renderHistoryWithPreviews(entries []historyEntry, maxChars, previewChars in
 	emitted := 0
 	for _, en := range entries {
 		body, cut := entryBody(en, previewChars)
-		block := fmt.Sprintf("[%d] %s (%s)\n%s\n", en.Depth, en.role(), en.Time, body)
+		/**
+		 * THE RENDERED LINE CARRIES THE ID.
+		 *
+		 * It used to say `[depth] role (time)` and put the id only in `metadata.entries[].id`. A model
+		 * reads the TEXT, not the metadata, so it had the depth and nothing to pass to `history-read`
+		 * — and one that tried anyway sent the depth as an id and got "no such message", which reads
+		 * as a broken tool rather than a missing field.
+		 *
+		 * Depth stays, because it is what a positional read takes; the id is appended because it is
+		 * what a content read takes. Two numbers with two jobs, both labelled.
+		 */
+		block := fmt.Sprintf("[depth %d] id=%s %s (%s)\n%s\n", en.Depth, en.ID, en.role(), en.Time, body)
 		if cut {
 			// The marker names the id and the command that returns the rest, so the model does not
 			// have to guess either.
