@@ -334,3 +334,40 @@ func TestHistoryRangeReadDepthToZeroMeansUnbounded(t *testing.T) {
 		t.Fatalf("depth_to=0 returned %d entries, want both", n)
 	}
 }
+
+/**
+ * THE RENDERED TEXT MUST SHOW THE ID.
+ *
+ * A model reads the text, not `metadata`. The id used to live ONLY in the metadata, so a search hit
+ * gave the model a `[depth]` number and nothing to hand `history-read` — and a model that tried the
+ * depth anyway got "no such message", which reads as a broken tool rather than a missing field.
+ *
+ * Found in the cluster: the model reported that it could not find an id and had guessed wrong twice.
+ */
+func TestHistorySearchShowsTheIDInTheRenderedText(t *testing.T) {
+	out := callHistory(t, "history-search", map[string]any{"query": "deploy the app"})
+	if !strings.Contains(out.Content, "id=m1") {
+		t.Fatalf("the rendered line does not name the id:\n%s", out.Content)
+	}
+	// The depth is still there, and it is LABELLED, so the two numbers cannot be confused.
+	if !strings.Contains(out.Content, "depth 1") {
+		t.Fatalf("the rendered line lost the depth:\n%s", out.Content)
+	}
+}
+
+// The id in the rendered text is the one history-read accepts — the two must not drift.
+func TestHistoryRenderedIDIsReadable(t *testing.T) {
+	out := callHistory(t, "history-search", map[string]any{"query": "deploy the app"})
+	entries := historyEntries(t, out)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	id, _ := entries[0]["id"].(string)
+	if !strings.Contains(out.Content, "id="+id) {
+		t.Fatalf("rendered text names a different id than metadata (%q):\n%s", id, out.Content)
+	}
+	// And history-read accepts it.
+	if got := callHistory(t, "history-read", map[string]any{"id": id}); strings.TrimSpace(got.Content) == "" {
+		t.Fatal("history-read returned nothing for the id the search printed")
+	}
+}
