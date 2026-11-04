@@ -70,6 +70,15 @@ message Session {
   string last_turn_reason = 26;
   // RFC3339 timestamp of that turn's end; empty when none has finished.
   string last_turn_at = 27;
+  // Session picture, as a `file:<code>` from the agent's blob store. Empty is
+  // NOT "no picture": clients render a deterministic identicon seeded by the
+  // session name, which is what every session showed before this field existed.
+  string avatar_file = 28;
+  // One line describing WHAT THIS SESSION IS ("maintainer of repo acme/app").
+  // It rides in the turn's <env> block so the model knows its own role without
+  // the user restating it. NOT a system prompt: that field REPLACES the preset
+  // prompt wholesale, so a role change would mean rewriting everything.
+  string intro = 29;
 }
 
 // Message row (bare).
@@ -581,6 +590,11 @@ message UpdateSettingsRequest {
   string locale = 4;
   // Selected reasoning variant id (empty clears it).
   string variant = 5;
+  // `optional` IS THE POINT: proto3 cannot tell an absent string from an empty one, and these two
+  // need both meanings. Absent = leave the value alone; present-but-empty = CLEAR it, which is how a
+  // session goes back to the derived identicon or to saying nothing about itself.
+  optional string avatar_file = 6;
+  optional string intro = 7;
 }
 message UpdateSettingsResponse { Session session = 1; }
 

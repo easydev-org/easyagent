@@ -75,8 +75,10 @@ type PlanInput struct {
 	SessionPreset string
 	SessionLocale string
 	SessionSystem string
-	SessionMax    int
-	DeniedTools   []string
+	// SessionIntro is the session's one-line description of itself, rendered into <env>.
+	SessionIntro string
+	SessionMax   int
+	DeniedTools  []string
 	// Grants summarises what this session may do, for the model's own benefit.
 	//
 	// Without it the model discovers its limits by trying and failing, which costs a turn
@@ -136,7 +138,7 @@ func Plan(ctx context.Context, deps RuntimeDeps, in PlanInput) (TurnPlan, error)
 	}
 	// The grants ride in the env block so the model plans within them instead of
 	// discovering its limits one refusal at a time.
-	system = system + "\n\n" + BuildEnvBlockWithGrants(locale, in.Now, in.Grants)
+	system = system + "\n\n" + BuildEnvBlockAll(locale, in.Now, in.SessionIntro, in.Grants)
 	if maxTurns == 0 {
 		maxTurns = firstNonZero(deps.MaxTurns, 8)
 	}
