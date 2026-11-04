@@ -22,13 +22,7 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 	}
 	tenant := tenantOf(ctx)
 	locale := agent.ResolveLocale("", configOrEmpty(cfgProvider(s.config), tenant, "locale"), "en")
-	var defs []agent.ToolDef
-	if s.bundledTools != nil {
-		defs = append(defs, s.bundledTools.Tools()...)
-	}
-	if s.tools != nil {
-		defs = append(defs, s.tools.Tools()...)
-	}
+	defs := s.allToolDefs()
 	// List EVERY tool, including ones whose required config is unset.
 	//
 	// This used to mirror the turn plan's filter, to stop the console advertising
@@ -300,26 +294,42 @@ func (s *Server) GetExtensionConfig(ctx context.Context, req *agentv1.GetExtensi
 	return &agentv1.GetExtensionConfigResponse{Values: values, SecretSet: secretSet}, nil
 }
 
+// allToolDefs is every tool this deployment can offer: the in-process ones first, then the ones
+// discovered from extensions.
+//
+// BOTH LISTS, IN ONE PLACE, BECAUSE THE CALLERS MUST AGREE. `ListTools` advertises this set, and
+// `GetToolConfig` has to answer for the same set: reading config from only the discovered extensions
+// meant every BUNDLED tool reported "no config", which the console renders as "unset" and the preset
+// editor as "cannot run" — for a tool that was working fine.
+func (s *Server) allToolDefs() []agent.ToolDef {
+	var defs []agent.ToolDef
+	if s.bundledTools != nil {
+		defs = append(defs, s.bundledTools.Tools()...)
+	}
+	if s.tools != nil {
+		defs = append(defs, s.tools.Tools()...)
+	}
+	return defs
+}
+
 // GetToolConfig returns the aggregate `{toolName: {knob: value}}` config surface
 // read from the tenant config KV.
 func (s *Server) GetToolConfig(ctx context.Context, _ *agentv1.GetToolConfigRequest) (*agentv1.GetToolConfigResponse, error) {
 	tenant := tenantOf(ctx)
 	values := map[string]*structpb.Value{}
-	if s.tools != nil {
-		for _, d := range s.tools.Tools() {
-			bucket := map[string]any{}
-			for _, knob := range d.RequiredConfig {
-				// A secret knob's value is withheld (it must never reach a client).
-				if s.isSecretKnob(d.ExtID, knob) {
-					continue
-				}
-				if v, ok := s.extKnobValue(tenant, d.ExtID, knob); ok {
-					bucket[knob] = v
-				}
+	for _, d := range s.allToolDefs() {
+		bucket := map[string]any{}
+		for _, knob := range d.RequiredConfig {
+			// A secret knob's value is withheld (it must never reach a client).
+			if s.isSecretKnob(d.ExtID, knob) {
+				continue
 			}
-			if len(bucket) > 0 {
-				values[agent.LLMToolName(d)] = structpb.NewStructValue(structFromMap(bucket))
+			if v, ok := s.extKnobValue(tenant, d.ExtID, knob); ok {
+				bucket[knob] = v
 			}
+		}
+		if len(bucket) > 0 {
+			values[agent.LLMToolName(d)] = structpb.NewStructValue(structFromMap(bucket))
 		}
 	}
 	return &agentv1.GetToolConfigResponse{Config: &agentv1.ToolConfig{Values: values}}, nil
