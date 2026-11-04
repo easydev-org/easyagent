@@ -32,6 +32,25 @@ jobs:
           echo "gofmt: clean"
       - run: go build ./...
       - run: go vet ./...
+      # A BROKER, BECAUSE THE TESTS THAT NEED ONE WERE BEING SKIPPED SILENTLY.
+      #
+      # `startBus` skips when `nats-server` is absent, so on this job every integration test in
+      # `agentbus` reported "ok" without running. Two of them had been broken since v0.13.0 — they
+      # asserted that `PublishMailbox` echoes the body on `mailbox.<session>`, which the wake split
+      # removed — and nothing noticed, because the environment that could have caught it only ran
+      # `go build`.
+      #
+      # A SKIPPED TEST IS INDISTINGUISHABLE FROM A PASSING ONE in the output, which is the shape of
+      # failure this repo keeps finding. Providing the broker is the fix; `-skip` is not offered.
+      - name: start nats
+        run: |
+          go install github.com/nats-io/nats-server/v2@latest
+          "$(go env GOPATH)/bin/nats-server" -js -p 4222 &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; then echo "nats up"; exit 0; fi
+            sleep 1
+          done
+          echo "nats did not start"; exit 1
       - run: go test -race ./...
 
   # Full stack: the agent server against a REAL broker and a REAL database.

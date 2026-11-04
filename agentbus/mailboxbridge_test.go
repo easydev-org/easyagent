@@ -2,6 +2,9 @@ package agentbus
 
 import (
 	"testing"
+	"time"
+
+	"github.com/easydev-org/easybus-sdk/extension"
 )
 
 /**
@@ -66,5 +69,55 @@ func TestBridgeNeedsAQueue(t *testing.T) {
 	b := &Bus{}
 	if _, err := b.BridgeExtensionMail(t.Context()); err == nil {
 		t.Fatal("a bus with no queue must not pretend to bridge")
+	}
+}
+
+/**
+ * A DELIVERED MESSAGE MUST WAKE THE SESSION, NOT WAIT FOR THE BACKSTOP.
+ *
+ * The bridge used to enqueue and stop, on the theory that "the row existing is what wakes it". Nobody
+ * watches the queue: `Wake` happens when a `wake.<session>` message arrives, or when the 60-second
+ * backstop scans the whole bucket. So an extension's completion notice — "the job finished" — sat
+ * unread for up to a minute, on a path whose entire purpose is to report that it finished.
+ *
+ * It worked before v0.13.0 by accident: the publish landed on `mailbox.<session>` and ConsumeWake was
+ * listening there, so delivery carried its own nudge. Splitting the wake onto its own subject removed
+ * that side effect and left nothing in its place.
+ */
+func TestBridgeWakesTheSessionAfterEnqueue(t *testing.T) {
+	b := startBus(t).WithMailboxQueue(newMemQueue())
+
+	// The runtime's consumer, as main wires it: a wake message reaches the handler with the address.
+	woken := make(chan string, 4)
+	stop, err := b.ConsumeWake(t.Context(), func(tenant, session string) error {
+		woken <- tenant + "/" + session
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("consume wake: %v", err)
+	}
+	defer stop()
+
+	if _, err := b.BridgeExtensionMail(t.Context()); err != nil {
+		t.Fatalf("bridge: %v", err)
+	}
+	// Let the subscriptions settle before publishing; the bridge's own is flushed on create, but the
+	// consume side is a separate pull consumer.
+	time.Sleep(300 * time.Millisecond)
+
+	// An extension announces a completion the way extensions do.
+	ext := extension.New(b.Transport(), extension.Config{ID: "sandbox"})
+	if err := ext.PublishMailboxEvent(t.Context(), "t1", "sess-1", "trigger",
+		map[string]any{"text": "<job done>"}, "sandbox"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	select {
+	case got := <-woken:
+		if got != "t1/sess-1" {
+			t.Fatalf("woke %q, want t1/sess-1", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the bridge enqueued but never woke the session; the notice would sit until the backstop")
 	}
 }

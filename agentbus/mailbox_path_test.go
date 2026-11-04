@@ -21,10 +21,14 @@ func TestPublishMailboxEnqueuesAndSignals(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	got := make(chan MailboxMessage, 1)
-	stop, err := b.ConsumeMailbox(ctx, func(m MailboxMessage) error {
+	// THE SIGNAL IS A WAKE, NOT A DELIVERY. `PublishMailbox` enqueues the row and nudges
+	// `wake.<session>`; it does not republish the body on `mailbox.<session>`. Listening for the
+	// MESSAGE here was right before v0.13.0 split the two subjects, and it silently became a test
+	// that could never pass — it only ran in an environment without a broker, where it was skipped.
+	got := make(chan string, 1)
+	stop, err := b.ConsumeWake(ctx, func(tenant, session string) error {
 		select {
-		case got <- m:
+		case got <- tenant + "/" + session:
 		default:
 		}
 		return nil
@@ -47,9 +51,9 @@ func TestPublishMailboxEnqueuesAndSignals(t *testing.T) {
 
 	// Half two: the signal. Without it the row waits for something else to nudge a runtime.
 	select {
-	case m := <-got:
-		if m.Tenant != "t1" || m.SessionName != "s1" || m.Type != "trigger" {
-			t.Errorf("message = %+v", m)
+	case who := <-got:
+		if who != "t1/s1" {
+			t.Errorf("woke %q, want t1/s1", who)
 		}
 	case <-ctx.Done():
 		t.Fatal("no signal: the message was enqueued but nothing woke the runtime")
