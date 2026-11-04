@@ -451,3 +451,50 @@ func TestHistoryOutputHasNoDepth(t *testing.T) {
 		t.Errorf("history-read seq = %v, want 2", meta["seq"])
 	}
 }
+
+/**
+ * `include` GOVERNS WHAT IS RENDERED, NOT ONLY WHAT IS MATCHED.
+ *
+ * `history-range-read` parsed it and then never consulted it, so a caller who asked for text-only
+ * still got every tool's output in the page. The bug hid well: `preview_chars` cut the result when
+ * it was long, so the page looked filtered until something short enough slipped through.
+ *
+ * `preview_chars: 0` in these cases, so nothing is hidden by length and the assertion is about the
+ * filter alone.
+ */
+func TestIncludeGovernsWhatIsRendered(t *testing.T) {
+	// Default is ["text"]: prose only, no tool output.
+	out := callHistory(t, "history-range-read", map[string]any{"preview_chars": 0})
+	if strings.Contains(out.Content, "DEPLOY-OK") {
+		t.Error("the default include=[text] still rendered a tool result")
+	}
+	if !strings.Contains(out.Content, "deploying now") {
+		t.Error("the message's own text was not rendered")
+	}
+
+	// Asking for results brings them back.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"text", "result"},
+	})
+	if !strings.Contains(out.Content, "DEPLOY-OK") {
+		t.Error("include=[text,result] did not render the tool output")
+	}
+
+	// Tool names and arguments are their own kind, separate from output.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"tool"},
+	})
+	if !strings.Contains(out.Content, "make deploy") {
+		t.Error("include=[tool] did not render the call arguments")
+	}
+	if strings.Contains(out.Content, "DEPLOY-OK") {
+		t.Error("include=[tool] also rendered the result; the kinds are not separable")
+	}
+	// And a text-only request must not leak the call either.
+	out = callHistory(t, "history-range-read", map[string]any{
+		"preview_chars": 0, "include": []any{"text"},
+	})
+	if strings.Contains(out.Content, "make deploy") {
+		t.Error("include=[text] rendered a tool call")
+	}
+}

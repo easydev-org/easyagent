@@ -47,7 +47,7 @@ tools:
       names and their arguments, and "result" to match tool OUTPUT. Searches the WHOLE conversation
       (no cap), newest-first, and returns one page [offset, offset+limit). Each entry's content is
       cut to `preview_chars` (default 2000) and marked `truncated` with `full_chars`; call
-      "history-read" with that entry's `id` to get the rest.
+      "history-read" with that entry's `seq` to get the rest.
       Pass `session` to search ANOTHER conversation in the same tenant (empty = this one).
     descriptions:
       zh: >-
