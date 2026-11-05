@@ -770,15 +770,23 @@ tools:
       THE WHOLE LIST IS VALIDATED BEFORE ANYTHING IS SENT: a half-delivered instruction is worse than a
       refused one, because some workers would start on a task the others never received.
 
-      IF YOU WERE ASKED SOMETHING IN A GROUP, ANSWER IT HERE. A reply that stays in your own conversation is
-      one the person who asked will never see — which reads to them as being ignored.
+      **IF YOU WERE ASKED IN A GROUP, YOU HAVE NOT ANSWERED UNTIL YOU CALL THIS TOOL.** Your own message text
+      is NOT visible in the group: it stays in your private conversation. A reader in the group sees the
+      question and nothing else, which is indistinguishable from being ignored.
+
+      This applies EVEN WHEN YOUR ANSWER IS "I cannot do it" — a blocker report is an answer, and it is the
+      most important one to deliver. The most common failure is a coordinator explaining a problem in its own
+      chat and never posting it.
     descriptions:
       zh: >-
-        向你在的群中的一位或多位成员发送同一条消息。
+        向你在的群发消息。有两种不同的动作，取决于你是否点名成员：
 
-        `to` 是**数组**，因为「同一件事交给多个人」是一个决定：拆成三次调用就有三次机会写出三份措辞略有
-        不同的文本，收件人会对「自己被交代了什么」产生分歧。这**不是广播**——每个名字都会被校验，因此只有
-        你点名的会话会收到。
+        **不填 `to` —— 回复群。** 这是回答「群里被问的问题」的方式。消息会出现在群的对话里，提问的人能看到。
+        不会投递给任何成员：回复是给群的读者看的，唤醒三个成员来读一句「收到」要花三个回合，还各自再生一条回复。
+
+        **填了 `to` —— 给这些成员的指令。** `to` 是**数组**，因为「同一件事交给多个人」是一个决定：拆成三次
+        调用就有三次机会写出三份措辞略有不同的文本，收件人会对「自己被交代了什么」产生分歧。这**不是广播**
+        ——每个名字都会被校验，因此只有你点名的会话会收到。
 
         **谁能发给谁**：
           协调者 → 成员    下发任务
@@ -788,8 +796,11 @@ tools:
         **整份名单先全部校验，再开始发送**：只送达一部分比直接拒绝更糟，因为有些会话已经开工，而另一些连
         任务都没收到。
 
-        **如果群里有人问了你问题，就在这里回答。** 留在自己会话里的答案，提问的人永远看不到——在他看来就是
-        没人理他。
+        **群里有人问了你，你不调用本工具就等于没回答。** 你自己写的那段话**不会出现在群里**——它留在你的私聊里。
+        群里的人只看到问题，什么回复都没有，这和「没人理」无法区分。
+
+        **即使你的回答是「我做不了」也必须调用。** 受阻报告本身就是回答，而且是最需要送达的那种。最常见的失败
+        就是：协调者在自己会话里把问题解释得清清楚楚，却从来没发到群里。
     input_schema:
       type: object
       properties:

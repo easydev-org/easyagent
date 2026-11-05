@@ -195,3 +195,42 @@ func TestGroupSenderComesFromThePayload(t *testing.T) {
 		t.Errorf("non-map payload gave %q", got)
 	}
 }
+
+/**
+ * EVERY GROUP MESSAGE SAYS HOW TO ANSWER IT.
+ *
+ * The tool description says it too, but a description is read once, when the tool list is built. A live group
+ * showed the failure this prevents: a coordinator read the question, wrote a full answer — including "there is
+ * no token, so I cannot check" — and the answer stayed in its own conversation. The group showed the question
+ * and nothing else.
+ *
+ * THE INSTRUCTION TRAVELS WITH EVERY GROUP MESSAGE, not just a user's: a member reporting back is in the same
+ * position, and so is a coordinator reading that report.
+ */
+func TestEveryGroupEventSaysHowToAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+	}{
+		{"user post", map[string]any{"group": "release", "text": "check main"}},
+		{"member report", map[string]any{"group": "release", "from": "abc123", "from_name": "CI 巡检", "text": "done"}},
+	} {
+		got := channelEventText(bus.ChannelMessage{
+			Channel: GroupChannel,
+			Topic:   GroupUserTopic("release"),
+			Payload: tc.payload,
+		})
+		if !strings.Contains(got, "group-send") {
+			t.Errorf("%s: no way to answer is given:\n%s", tc.name, got)
+		}
+		// The group must be named in the instruction, or the model has to guess which group to post to.
+		if !strings.Contains(got, `group="release"`) {
+			t.Errorf("%s: the instruction does not name the group:\n%s", tc.name, got)
+		}
+		// The empty-`to` form is the one a reply needs; saying only "name recipients" would produce a
+		// member-to-member refusal.
+		if !strings.Contains(got, "`to` empty") {
+			t.Errorf("%s: a reply has no stated form:\n%s", tc.name, got)
+		}
+	}
+}

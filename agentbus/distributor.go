@@ -276,6 +276,24 @@ func channelEventText(msg bus.ChannelMessage) string {
 		}
 		b.WriteString("\n\n")
 		b.WriteString(text)
+
+		/**
+		 * THE REPLY INSTRUCTION RIDES WITH THE MESSAGE, NOT IN THE TOOL DESCRIPTION.
+		 *
+		 * A session that reads a group message and answers it in its own conversation has done nothing anyone
+		 * in the group can see — the group shows the message and no reply, which is indistinguishable from
+		 * being ignored. The tool description says so too, but a description is read once, when the tool list
+		 * is built; this arrives at the moment the message does.
+		 *
+		 * EVERY GROUP MESSAGE CARRIES IT, not just a user's: a member reporting back gets the same trap, and so
+		 * does a coordinator reading that report. The two ways to answer are spelled out because they reach
+		 * different readers — a reply (no `to`) is read in the group, an addressed message (with `to`) is read
+		 * by the sessions named. The tool enforces who may address whom.
+		 */
+		fmt.Fprintf(&b, "\n\n[Posted in group %q. Anything you write in your own conversation is NOT visible in the "+
+			"group — to answer, call `group-send` with group=%q: leave `to` empty to reply to the group, or name "+
+			"the recipients to address them. Do that even if your answer is \"I cannot do this\": a blocker "+
+			"report is an answer, and it is the most important one to deliver.]", group, group)
 		return b.String()
 	}
 
