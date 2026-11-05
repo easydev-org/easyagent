@@ -475,6 +475,25 @@ func (d *DB) UpsertFile(f AgentFile) (AgentFile, error) {
 	return f, nil
 }
 
+/**
+ * CreateFileRow inserts a file row keyed by its CODE, without deduplicating by digest.
+ *
+ * IT EXISTS FOR DERIVED BLOBS — a thumbnail, whose code is its identity (`<parent>-thumb`) and whose bytes may
+ * legitimately equal another file's. `UpsertFile` deduplicates by (tenant, sha256), which is right for an
+ * upload ("these bytes are already stored, reuse the row") and wrong here: a thumbnail that happens to match
+ * another blob's digest would resolve to THAT row, leaving nothing stored under the thumbnail's code while its
+ * referrer believed otherwise.
+ *
+ * A CONFLICT ON CODE IS AN ERROR, not a silent overwrite: two different byte sequences claiming one code means
+ * a caller is reusing an identity it does not own.
+ */
+func (d *DB) CreateFileRow(f AgentFile) error {
+	if f.CreatedAt == "" {
+		f.CreatedAt = nowStr()
+	}
+	return d.g.Create(&f).Error
+}
+
 // FileByCode returns (file, true) or (nil, false).
 func (d *DB) FileByCode(tenant, code string) (*AgentFile, bool, error) {
 	var f AgentFile

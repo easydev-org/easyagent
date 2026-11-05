@@ -39,12 +39,31 @@ func (s *Server) IngestFile(ctx context.Context, req *agentv1.IngestFileRequest)
 	_ = s.db.UpdateFileMedia(rec.Code, facts.Width, facts.Height, facts.DurationMS, nil, nil)
 	if len(facts.Thumb) > 0 {
 		thumbCode := rec.Code + "-thumb"
+		/**
+		 * THE THUMBNAIL IS STORED BY CODE, NOT THROUGH UpsertFile.
+		 *
+		 * Two things went wrong here, and both produced the same symptom: `thumb_code` was set while no row with
+		 * that code existed, so the console asked for a thumbnail and got 404 for every image whose picture had
+		 * loaded fine.
+		 *
+		 *   1. The digest was `sha + ":thumb"` — 70 characters into a 64-character column.
+		 *   2. Even with a correct digest, UpsertFile DEDUPLICATES BY (tenant, sha256). A thumbnail whose bytes
+		 *      equal the parent's (a small solid-colour image downscales to identical bytes) resolved to the
+		 *      PARENT's row and returned success, so nothing was written under the thumbnail's code — while
+		 *      the caller happily recorded that code.
+		 *
+		 * So the row is created here, keyed by a digest of its own bytes with the code as its identity, and
+		 * `thumb_code` is only set once that row exists.
+		 */
+		thumbSum := sha256.Sum256(facts.Thumb)
+		thumbSHA := hex.EncodeToString(thumbSum[:])
 		s.putBlob(ctx, thumbCode, facts.Thumb)
-		_, _ = s.db.UpsertFile(store.AgentFile{
-			Code: thumbCode, Tenant: tenant, SHA256: sha + ":thumb",
+		if err := s.db.CreateFileRow(store.AgentFile{
+			Code: thumbCode, Tenant: tenant, SHA256: thumbSHA,
 			Name: rec.Name + ".thumb.png", Mime: "image/png", Size: int64(len(facts.Thumb)),
-		})
-		_ = s.db.UpdateFileMedia(rec.Code, facts.Width, facts.Height, facts.DurationMS, &thumbCode, nil)
+		}); err == nil {
+			_ = s.db.UpdateFileMedia(rec.Code, facts.Width, facts.Height, facts.DurationMS, &thumbCode, nil)
+		}
 	}
 	return &agentv1.IngestFileResponse{Ok: true, Code: rec.Code, Mime: rec.Mime}, nil
 }

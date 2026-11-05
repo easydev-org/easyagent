@@ -1,7 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"testing"
 
 	"connectrpc.com/connect/v2"
@@ -501,5 +505,54 @@ func TestFileRefIsFilledFromTheBlob(t *testing.T) {
 	unknown := fillFileRef(db, "acme", &agentv1.FileRef{Code: "nope", Name: "x"})
 	if unknown.GetMime() != "" || unknown.GetName() != "x" {
 		t.Errorf("an unknown blob was guessed at: %+v", unknown)
+	}
+}
+
+/**
+ * A THUMBNAIL THAT IS REFERENCED MUST EXIST.
+ *
+ * `thumb_code` pointed at `<code>-thumb` while the row recording that thumbnail was written with a digest of
+ * `sha + ":thumb"` — 70 characters into a 64-character column. The row was therefore never stored under the
+ * digest the insert expected, and the console asked for a thumbnail that did not exist: every image loaded and
+ * its preview 404'd.
+ *
+ * THE THUMBNAIL IS ITS OWN BLOB WITH ITS OWN BYTES, so it is hashed from those bytes. That is both correct and
+ * the only value that fits.
+ */
+func TestThumbnailRowExistsWhenThumbCodeIsSet(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	// A PNG LARGER THAN 512px, because the probe only produces a thumbnail for an image it has to downscale —
+	// an image already inside the bound is its own thumbnail, so there is nothing to store and nothing to
+	// check.
+	var buf bytes.Buffer
+	canvas := image.NewRGBA(image.Rect(0, 0, 900, 900))
+	for y := 0; y < 900; y++ {
+		for x := 0; x < 900; x++ {
+			canvas.Set(x, y, color.RGBA{R: uint8(x % 256), G: uint8(y % 256), B: 128, A: 255})
+		}
+	}
+	if err := png.Encode(&buf, canvas); err != nil {
+		t.Fatal(err)
+	}
+	img := buf.Bytes()
+	res, err := c.IngestFile(ctx, &agentv1.IngestFileRequest{Data: img, Name: "shot.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := c.GetFileMeta(ctx, &agentv1.GetFileMetaRequest{Code: res.Code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ThumbCode == nil || *meta.ThumbCode == "" {
+		t.Fatal("no thumbnail was produced, so nothing was checked")
+	}
+
+	// THE POINT: the code it points at resolves.
+	if _, err := c.GetFileMeta(ctx, &agentv1.GetFileMetaRequest{Code: *meta.ThumbCode}); err != nil {
+		t.Fatalf("thumb_code %q points at nothing: %v", *meta.ThumbCode, err)
 	}
 }
