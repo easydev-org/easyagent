@@ -750,13 +750,17 @@ tools:
     # adds a message to another session; nothing is replaced
     effect: low
     description: >-
-      Send one message to one or more members of a group you are in.
+      Post to a group you are in. Two different acts, decided by whether you name anyone:
 
-      `to` IS AN ARRAY because "the same thing, to several people" is one decision: three separate
-      calls would be three chances to write three slightly different texts, and the recipients would
-      disagree about what they were told. It is NOT a broadcast — every name is resolved and validated,
-      so exactly the sessions you name hear it. To address the whole group, list every member
-      (group-members gives you the list).
+      NO `to` — A REPLY TO THE GROUP. This is how a coordinator answers what was asked in the group. The
+      message appears in the group's conversation, where the person who asked will read it. Nothing is
+      delivered to members: a reply is for the group's reader, and waking three workers to read "收到" would
+      cost three turns and produce three more replies.
+
+      WITH `to` — AN INSTRUCTION TO THOSE MEMBERS. `to` IS AN ARRAY because "the same thing, to several
+      people" is one decision: three separate calls would be three chances to write three slightly
+      different texts, and the recipients would disagree about what they were told. It is NOT a broadcast —
+      every name is resolved and validated, so exactly the sessions you name hear it.
 
       WHO MAY ADDRESS WHOM:
         coordinator → members   hand out work
@@ -765,13 +769,16 @@ tools:
 
       THE WHOLE LIST IS VALIDATED BEFORE ANYTHING IS SENT: a half-delivered instruction is worse than a
       refused one, because some workers would start on a task the others never received.
+
+      IF YOU WERE ASKED SOMETHING IN A GROUP, ANSWER IT HERE. A reply that stays in your own conversation is
+      one the person who asked will never see — which reads to them as being ignored.
     descriptions:
       zh: >-
         向你在的群中的一位或多位成员发送同一条消息。
 
         `to` 是**数组**，因为「同一件事交给多个人」是一个决定：拆成三次调用就有三次机会写出三份措辞略有
         不同的文本，收件人会对「自己被交代了什么」产生分歧。这**不是广播**——每个名字都会被校验，因此只有
-        你点名的会话会收到。要向全群发，就列出所有成员（group-members 可拿到名单）。
+        你点名的会话会收到。
 
         **谁能发给谁**：
           协调者 → 成员    下发任务
@@ -780,6 +787,9 @@ tools:
 
         **整份名单先全部校验，再开始发送**：只送达一部分比直接拒绝更糟，因为有些会话已经开工，而另一些连
         任务都没收到。
+
+        **如果群里有人问了你问题，就在这里回答。** 留在自己会话里的答案，提问的人永远看不到——在他看来就是
+        没人理他。
     input_schema:
       type: object
       properties:
@@ -793,19 +803,19 @@ tools:
           items:
             type: string
           description: >-
-            One or more member session IDs (not display names — names are not unique). Duplicates are
-            collapsed and empty entries dropped. To address everyone, list every member explicitly;
-            group-members returns their ids.
+            OMIT THIS TO REPLY TO THE GROUP. When present, the member session IDs to instruct (not display
+            names — names are not unique). Duplicates collapse; empty entries are dropped.
           descriptions:
             zh: >-
-              一个或多个成员会话的 **id**（不是显示名称——名称不唯一）。重复项会被合并，空项会被忽略。
-              要向所有人发，请显式列出全部成员；group-members 会返回它们的 id。
+              **不填就是回复群。** 填了则是要下发指令的成员会话 **id**（不是显示名称——名称不唯一）。
+              重复项会被合并，空项会被忽略。
         text:
           type: string
           description: Message body, the same for every recipient.
           descriptions:
             zh: 消息内容，所有收件人相同。
-      required: [group, to, text]
+      # `to` IS NOT REQUIRED: omitting it means "reply to the group", which is the common case.
+      required: [group, text]
 
 config:
   - name: search_provider

@@ -181,8 +181,8 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 	if err != nil {
 		return agent.ToolOutcome{Content: s.errBadTo}, nil
 	}
-	if group == "" || len(to) == 0 {
-		return agent.ToolOutcome{Content: s.errMissingAddress}, nil
+	if group == "" {
+		return agent.ToolOutcome{Content: s.errMissingGroup}, nil
 	}
 	if strings.TrimSpace(text) == "" {
 		return agent.ToolOutcome{Content: s.errMissingText}, nil
@@ -223,6 +223,27 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 		}
 	}
 
+	if len(to) == 0 {
+		/**
+		 * NO `to` MEANS A REPLY TO THE GROUP, NOT AN ERROR.
+		 *
+		 * A coordinator's answer to what a user asked IN the group belongs in that group; leaving it in the
+		 * coordinator's own chat means the person who asked never sees it. An empty `to` is therefore the
+		 * most common call, not a mistake — and treating it as one is why a live group showed the question
+		 * and no answer at all.
+		 *
+		 * NOTHING IS DELIVERED TO MEMBERS: a reply is for the group's reader, not an instruction. Waking
+		 * three workers to read "收到，我来汇总" would cost three turns and produce three more replies.
+		 */
+		if err := e.deps.PostGroupMessage(tenant, group, session, nil, text); err != nil {
+			return agent.ToolOutcome{}, err
+		}
+		return agent.ToolOutcome{
+			Content:  s.replied(group),
+			Metadata: map[string]any{"group": group},
+		}, nil
+	}
+
 	for _, rcpt := range to {
 		if err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text); err != nil {
 			return agent.ToolOutcome{}, err
@@ -245,10 +266,12 @@ type groupStrings struct {
 	spawned               func(name, workerId, group, desc string) string
 	brief                 func(parent, group, task string) string
 	delivered             func(to []string, group string) string
+	replied               func(group string) string
 	errMissingTask        string
 	errParentMissing      func(sid string) string
 	errExists             func(sid string) string
 	errGroupTaken         func(group string) string
+	errMissingGroup       string
 	errMissingAddress     string
 	errBadTo              string
 	errMissingText        string
@@ -289,6 +312,9 @@ func groupStringsFor(locale string) groupStrings {
 					"完成后，用 group-send 把结果发回协调者 %s（group 参数用 %s）。你不能创建群。",
 					parent, group, task, parent, group)
 			},
+			replied: func(g string) string {
+				return fmt.Sprintf("已回复群 '%s'。这条消息会出现在群的对话里，向群提问的人能看到。", g)
+			},
 			delivered: func(to []string, group string) string {
 				return fmt.Sprintf("已在群 '%s' 中向 %s 发送消息。", group, strings.Join(to, "、"))
 			},
@@ -296,7 +322,8 @@ func groupStringsFor(locale string) groupStrings {
 			errParentMissing:  func(sid string) string { return fmt.Sprintf("找不到会话 '%s'。", sid) },
 			errExists:         func(sid string) string { return fmt.Sprintf("会话 '%s' 已存在。", sid) },
 			errGroupTaken:     func(g string) string { return fmt.Sprintf("群名 '%s' 已被占用，请换一个 name。", g) },
-			errMissingAddress: `group-send: 缺少 "group" 或 "to"。`,
+			errMissingGroup:   `group-send: 缺少 "group"。`,
+			errMissingAddress: `group-send: "to" 必须是会话名数组。`,
 			errBadTo:          `group-send: "to" 必须是会话名数组，例如 ["worker-1","worker-2"]。`,
 			errMissingText:    `group-send: 缺少 "text"。`,
 			errNoCoordinatedGroup: "spawn: 你不是任何群的协调者，无法派生工作会话。请先用 group-create " +
@@ -336,6 +363,10 @@ func groupStringsFor(locale string) groupStrings {
 				"When you have finished, send the result back to the coordinator %s with group-send (group=%s). "+
 				"You cannot create groups.", parent, group, task, parent, group)
 		},
+		replied: func(g string) string {
+			return fmt.Sprintf("Replied to group %q. The message appears in the group's conversation, "+
+				"where whoever asked there can read it.", g)
+		},
 		delivered: func(to []string, group string) string {
 			return fmt.Sprintf("Sent to %s in group %q.", strings.Join(to, ", "), group)
 		},
@@ -343,7 +374,8 @@ func groupStringsFor(locale string) groupStrings {
 		errParentMissing:  func(sid string) string { return fmt.Sprintf("session %q not found.", sid) },
 		errExists:         func(sid string) string { return fmt.Sprintf("session %q already exists.", sid) },
 		errGroupTaken:     func(g string) string { return fmt.Sprintf("group name %q is taken; choose another `name`.", g) },
-		errMissingAddress: `group-send: "group" and "to" are required.`,
+		errMissingGroup:   `group-send: "group" is required.`,
+		errMissingAddress: `group-send: "to" must be an array of session names.`,
 		errBadTo:          `group-send: "to" must be an array of session names, e.g. ["worker-1","worker-2"].`,
 		errMissingText:    `group-send: "text" is required.`,
 		errNoCoordinatedGroup: "spawn: you do not coordinate any group, so there is nowhere to put a worker. " +

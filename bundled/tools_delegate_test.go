@@ -28,6 +28,7 @@ type chainStub struct {
 	added       [][2]string // {group, session} pairs added
 	revoked     [][2]string // {session, capability} pairs revoked
 	published   [][3]string // {group, to, text}
+	posted      [][2]string // {group, text} — everything that reached the transcript
 	forkExclude []string
 	forkErr     error
 }
@@ -105,6 +106,7 @@ func (c *chainStub) IsGroupMember(_, group, session string) bool {
 }
 
 func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string) error {
+	c.posted = append(c.posted, [2]string{group, text})
 	for _, rcpt := range to {
 		c.published = append(c.published, [3]string{group, rcpt, text})
 	}
@@ -626,5 +628,84 @@ func TestGroupSendMemberCanOnlyAddressTheCoordinator(t *testing.T) {
 	}
 	if !strings.Contains(out.Content, "coordinator") {
 		t.Errorf("want a sideways refusal, got %q", out.Content)
+	}
+}
+
+/**
+ * NO `to` MEANS A REPLY TO THE GROUP — THE MOST COMMON CALL, NOT A MISTAKE.
+ *
+ * A coordinator's answer to what a user asked IN the group belongs in that group. Leaving it in the
+ * coordinator's own conversation means the person who asked never sees it, which reads to them as being
+ * ignored — and that is exactly what a live group showed: the question, and no answer at all.
+ *
+ * NOTHING IS DELIVERED TO MEMBERS. A reply is for the group's reader, not an instruction; waking three
+ * workers to read "收到，我来汇总" would cost three turns and produce three more replies.
+ */
+func TestGroupSendWithoutToIsAReply(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	c.membership["alice"] = []string{"alice", "w1", "w2"}
+
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"group": "alice", "text": "收到，我来汇总",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// It reached the transcript...
+	if len(c.posted) != 1 {
+		t.Fatalf("posted %d time(s), want 1: %v", len(c.posted), c.posted)
+	}
+	// ...and nobody.
+	if len(c.published) != 0 {
+		t.Errorf("a reply was delivered to %v; a reply is for the group's reader", c.published)
+	}
+	if !strings.Contains(out.Content, "群") && !strings.Contains(out.Content, "group") {
+		t.Errorf("the answer should say where it went: %q", out.Content)
+	}
+	// The metadata has no `to` — there was none to report.
+	if _, hasTo := out.Metadata.(map[string]any)["to"]; hasTo {
+		t.Error("a reply reported a recipient list")
+	}
+}
+
+// With `to`, the message is an instruction: delivered to exactly those members.
+func TestGroupSendWithToIsAnInstruction(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	c.membership["alice"] = []string{"alice", "w1", "w2"}
+
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"group": "alice", "to": []any{"w1"}, "text": "you do it",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.published) != 1 || c.published[0][1] != "w1" {
+		t.Errorf("delivered to %v, want exactly w1", c.published)
+	}
+}
+
+// A group name is still required: the tool cannot decide where to post without one.
+func TestGroupSendRequiresAGroup(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	out, err := e.groupSend(context.Background(), "t", "alice", map[string]any{"text": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "group") {
+		t.Errorf("want a missing-group message, got %q", out.Content)
 	}
 }
