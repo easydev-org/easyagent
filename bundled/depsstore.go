@@ -296,10 +296,18 @@ func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) err
  * A DELIVERY FAILURE IS RETURNED, because at this layer the caller is a tool whose whole job that message
  * was. The message is already stored either way; the error says the recipients were not reached.
  */
-func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, text string) error {
+func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, text string, attachments []string) error {
+	/**
+	 * THE ATTACHMENT REFERENCES ARE RESOLVED AGAINST THE BLOB STORE, not taken on trust.
+	 *
+	 * The tool hands over bare codes; the blob record is what says a code exists, what it is and how big. Storing
+	 * a code nobody ingested would put a tile in the transcript that every member sees and nothing can load.
+	 */
+	attachmentsJSON := d.encodeAttachments(tenant, attachments)
 	msg, err := d.DB.AppendGroupMessage(store.GroupMessage{
 		ID: newGroupMessageID(), Tenant: tenant, Group: group,
 		Sender: from, SenderName: d.sessionName(tenant, from), Body: text,
+		Attachments: attachmentsJSON,
 	}, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return err
@@ -316,11 +324,84 @@ func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, te
 			"group": group, "from": from, "from_name": msg.SenderName, "text": text,
 			"message_id": msg.ID, "seq": msg.Seq,
 		}
+		// THE FILES RIDE WITH THE DELIVERY: a woken member reads the prompt built from this payload, so a
+		// picture that only reached the transcript would be one nobody was told about.
+		if files := d.attachmentPayload(tenant, attachments); len(files) > 0 {
+			payload["attachments"] = files
+		}
 		if err := d.ChannelFn(tenant, groupChannel, groupTopicTo(group, rcpt), payload, "session:"+from); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	return firstErr
+}
+
+/**
+ * encodeAttachments turns bare codes into the stored JSON form, filling type and size from the blob record.
+ *
+ * A CODE NOBODY INGESTED IS DROPPED, for the same reason the group RPC drops an empty one: a reference that
+ * names no blob would render as a tile that never loads, with nothing to tell the reader whether the sender or
+ * the reader is at fault.
+ */
+func (d *StoreDeps) encodeAttachments(tenant string, codes []string) string {
+	if len(codes) == 0 {
+		return ""
+	}
+	type stored struct {
+		Code string `json:"code"`
+		Name string `json:"name"`
+		Size int32  `json:"size"`
+		Mime string `json:"mime"`
+	}
+	out := make([]stored, 0, len(codes))
+	seen := make(map[string]bool, len(codes))
+	for _, code := range codes {
+		code = strings.TrimSpace(code)
+		if code == "" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		a := stored{Code: code}
+		if rec, ok, err := d.DB.FileByCode(tenant, code); err == nil && ok {
+			a.Name, a.Mime, a.Size = rec.Name, rec.Mime, int32(rec.Size)
+		} else {
+			// AN UNRESOLVABLE CODE IS NOT STORED AT ALL — it names nothing.
+			continue
+		}
+		out = append(out, a)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+/**
+ * attachmentPayload is the delivery form of the same references: the shape the distributor turns into prompt
+ * text and the console turns into attachments.
+ */
+func (d *StoreDeps) attachmentPayload(tenant string, codes []string) []map[string]any {
+	out := make([]map[string]any, 0, len(codes))
+	seen := make(map[string]bool, len(codes))
+	for _, code := range codes {
+		code = strings.TrimSpace(code)
+		if code == "" || seen[code] {
+			continue
+		}
+		rec, ok, err := d.DB.FileByCode(tenant, code)
+		if err != nil || !ok {
+			continue
+		}
+		seen[code] = true
+		out = append(out, map[string]any{
+			"code": rec.Code, "name": rec.Name, "size": int32(rec.Size), "mime": rec.Mime,
+		})
+	}
+	return out
 }
 
 // sessionName returns a session's display label, or "" when it cannot be read. The label is cosmetic in a

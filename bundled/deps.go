@@ -100,7 +100,15 @@ type Deps interface {
 	 * DELIVERY STILL GOES THROUGH THE GROUP'S CHANNEL, so the subscriber's pattern decides who hears it and
 	 * a session outside the group cannot receive it whoever calls this.
 	 */
-	PostGroupMessage(tenant, group, from string, to []string, text string) error
+	/**
+	 * PostGroupMessage stores a message and delivers it to the named members.
+	 *
+	 * `attachments` ARE `file:<code>` REFERENCES, the same shape a session message's file part uses: the bytes
+	 * live once in the tenant's blob store, so a recording sent to a group is not copied per reader. A tool that
+	 * hands a picture to a group passes the code it was given, and the recipients resolve it exactly as a chat
+	 * reader would.
+	 */
+	PostGroupMessage(tenant, group, from string, to []string, text string, attachments []string) error
 
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error

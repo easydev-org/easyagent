@@ -837,11 +837,30 @@ tools:
               重复项会被合并，空项会被忽略。
         text:
           type: string
-          description: Message body, the same for every recipient.
+          description: >-
+            Message body, the same for every recipient. MAY BE EMPTY WHEN `attachments` IS NOT: a picture with
+            no caption is a message, and requiring words would make you invent a caption to send a file.
           descriptions:
-            zh: 消息内容，所有收件人相同。
+            zh: >-
+              消息内容，所有收件人相同。**有附件时可留空**：一张没有配文的图也是一条消息，不应该为了发文件去编一句话。
+        attachments:
+          type: array
+          items:
+            type: string
+          description: >-
+            FILE CODES to send with the message — the `file:<code>` id from a tool that produced a file
+            (`image-generate`, `file-write`, a recording). The bytes are already stored for this tenant, so a
+            code either names a real file or it names nothing. Recipients read them exactly as they read an
+            attachment in a chat: a picture is a picture, a recording plays.
+          descriptions:
+            zh: >-
+              随消息一起发送的**文件 code**——就是产生文件的工具（`image-generate`、`file-write`、录音等）返回的
+              `file:<code>`。字节已经存在本租户的存储里，所以一个 code 要么指向真实文件，要么什么都不是。收件人
+              的读取方式和聊天里的附件完全一致：图片就是图片，录音能直接播。
       # `to` IS NOT REQUIRED: omitting it means "reply to the group", which is the common case.
-      required: [group, text]
+      # `text` IS NOT REQUIRED either: a message may be a file with no caption. The tool refuses only when BOTH
+      # are empty, which is not a message.
+      required: [group]
 
 config:
   - name: search_provider

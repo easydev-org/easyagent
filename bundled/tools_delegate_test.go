@@ -21,16 +21,18 @@ type chainStub struct {
 	// coordinated maps session -> the group it coordinates.
 	coordinated map[string]string
 	// membership maps group -> members.
-	membership  map[string][]string
-	creates     []string    // group names passed to CreateGroupForSession
-	failed      bool        // make CreateGroupForSession fail
-	forked      []string    // worker names forked
-	added       [][2]string // {group, session} pairs added
-	revoked     [][2]string // {session, capability} pairs revoked
-	published   [][3]string // {group, to, text}
-	posted      [][2]string // {group, text} — everything that reached the transcript
-	forkExclude []string
-	forkErr     error
+	membership map[string][]string
+	creates    []string    // group names passed to CreateGroupForSession
+	failed     bool        // make CreateGroupForSession fail
+	forked     []string    // worker names forked
+	added      [][2]string // {group, session} pairs added
+	revoked    [][2]string // {session, capability} pairs revoked
+	published  [][3]string // {group, to, text}
+	posted     [][2]string // {group, text} — everything that reached the transcript
+	// postedAttachments records the file codes each post carried, in call order.
+	postedAttachments [][]string
+	forkExclude       []string
+	forkErr           error
 }
 
 func newChainStub() *chainStub {
@@ -105,7 +107,8 @@ func (c *chainStub) IsGroupMember(_, group, session string) bool {
 	return false
 }
 
-func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string) error {
+func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string, attachments []string) error {
+	c.postedAttachments = append(c.postedAttachments, attachments)
 	c.posted = append(c.posted, [2]string{group, text})
 	for _, rcpt := range to {
 		c.published = append(c.published, [3]string{group, rcpt, text})
@@ -707,5 +710,101 @@ func TestGroupSendRequiresAGroup(t *testing.T) {
 	}
 	if !strings.Contains(out.Content, "group") {
 		t.Errorf("want a missing-group message, got %q", out.Content)
+	}
+}
+
+/**
+ * A COORDINATOR CAN HAND A GROUP A FILE.
+ *
+ * A tool that produced a picture, a report or a recording returns a `file:<code>`; handing that code to the group
+ * is the whole operation, because the bytes already live in the tenant's blob store. Without this the only way
+ * to share a result was to describe it in words — which is the one thing a picture cannot survive.
+ */
+func TestGroupSendCarriesAttachments(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	c.membership["alice"] = []string{"alice", "w1"}
+
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"group": "alice", "to": []any{"w1"},
+		"text": "here is the chart", "attachments": []any{"file-1", "file-2"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.postedAttachments) != 1 {
+		t.Fatalf("posted %d message(s), want 1", len(c.postedAttachments))
+	}
+	got := c.postedAttachments[0]
+	if len(got) != 2 || got[0] != "file-1" || got[1] != "file-2" {
+		t.Errorf("attachments = %v, want [file-1 file-2]", got)
+	}
+}
+
+/**
+ * A PICTURE WITH NO CAPTION IS A MESSAGE.
+ *
+ * `text` used to be mandatory, so sending a file alone required inventing a caption — and the caption people
+ * invent ("here you go") says less than the picture does.
+ *
+ * A MESSAGE WITH NEITHER IS STILL REFUSED: that one is not a message, it is a mistake.
+ */
+func TestGroupSendAllowsAnAttachmentWithoutText(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	c.membership["alice"] = []string{"alice", "w1"}
+
+	// Attachment only: accepted.
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"group": "alice", "attachments": []any{"file-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.postedAttachments) != 1 || len(c.postedAttachments[0]) != 1 {
+		t.Fatalf("the attachment-only message did not reach the group: %v", c.postedAttachments)
+	}
+
+	// Neither: refused, and nothing was posted.
+	before := len(c.posted)
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"group": "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.posted) != before {
+		t.Error("an empty message was posted")
+	}
+	if !strings.Contains(out.Content, "text") && !strings.Contains(out.Content, "内容") {
+		t.Errorf("the refusal does not say what is missing: %q", out.Content)
+	}
+}
+
+// A malformed `attachments` value is refused rather than silently dropped.
+func TestGroupSendRejectsNonArrayAttachments(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(context.Background(), "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	c.membership["alice"] = []string{"alice"}
+	out, err := e.groupSend(context.Background(), "t", "alice", map[string]any{
+		"group": "alice", "text": "x", "attachments": "file-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "attachments") {
+		t.Errorf("want a complaint about attachments, got %q", out.Content)
 	}
 }

@@ -135,7 +135,9 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
 	}
 
 	desc := strings.TrimSpace(strArg(args, "description"))
-	if err := e.deps.PostGroupMessage(tenant, group, session, []string{worker}, s.brief(session, group, task)); err != nil {
+	// A BRIEF HAS NO FILES: it is the task description that wakes the worker, and the worker's first move is to
+	// look at the group. Attachments belong to a message someone composed, not to a spawn.
+	if err := e.deps.PostGroupMessage(tenant, group, session, []string{worker}, s.brief(session, group, task), nil); err != nil {
 		return agent.ToolOutcome{}, err
 	}
 
@@ -181,10 +183,28 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 	if err != nil {
 		return agent.ToolOutcome{Content: s.errBadTo}, nil
 	}
+	/**
+	 * ATTACHMENTS ARE BARE BLOB CODES — the same `file:<code>` identity a chat message carries.
+	 *
+	 * A coordinator that produced a picture, a report or a recording has a code from the tool that made it, and
+	 * handing that code to the group is the whole operation: the bytes already live in the tenant's blob store,
+	 * so nothing is copied and every member reads the same file. There is deliberately no framing step here —
+	 * a code either names an ingested blob or it names nothing.
+	 */
+	attachments, err := strListArg(args, "attachments")
+	if err != nil {
+		return agent.ToolOutcome{Content: s.errBadAttachments}, nil
+	}
 	if group == "" {
 		return agent.ToolOutcome{Content: s.errMissingGroup}, nil
 	}
-	if strings.TrimSpace(text) == "" {
+	/**
+	 * A MESSAGE NEEDS SOMETHING IN IT: words, a file, or both.
+	 *
+	 * "Here is the chart" and the chart itself are one message, and so is the chart alone. Requiring text would
+	 * make a coordinator invent a caption to send a picture it was asked for.
+	 */
+	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
 		return agent.ToolOutcome{Content: s.errMissingText}, nil
 	}
 
@@ -235,7 +255,7 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 		 * NOTHING IS DELIVERED TO MEMBERS: a reply is for the group's reader, not an instruction. Waking
 		 * three workers to read "收到，我来汇总" would cost three turns and produce three more replies.
 		 */
-		if err := e.deps.PostGroupMessage(tenant, group, session, nil, text); err != nil {
+		if err := e.deps.PostGroupMessage(tenant, group, session, nil, text, attachments); err != nil {
 			return agent.ToolOutcome{}, err
 		}
 		return agent.ToolOutcome{
@@ -245,7 +265,7 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 	}
 
 	for _, rcpt := range to {
-		if err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text); err != nil {
+		if err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text, attachments); err != nil {
 			return agent.ToolOutcome{}, err
 		}
 	}
@@ -267,6 +287,7 @@ type groupStrings struct {
 	brief                 func(parent, group, task string) string
 	delivered             func(to []string, group string) string
 	replied               func(group string) string
+	errBadAttachments     string
 	errMissingTask        string
 	errParentMissing      func(sid string) string
 	errExists             func(sid string) string
@@ -323,6 +344,7 @@ func groupStringsFor(locale string) groupStrings {
 			errExists:         func(sid string) string { return fmt.Sprintf("会话 '%s' 已存在。", sid) },
 			errGroupTaken:     func(g string) string { return fmt.Sprintf("群名 '%s' 已被占用，请换一个 name。", g) },
 			errMissingGroup:   `group-send: 缺少 "group"。`,
+			errBadAttachments: `group-send: "attachments" 必须是文件 code 数组。`,
 			errMissingAddress: `group-send: "to" 必须是会话名数组。`,
 			errBadTo:          `group-send: "to" 必须是会话名数组，例如 ["worker-1","worker-2"]。`,
 			errMissingText:    `group-send: 缺少 "text"。`,
@@ -375,6 +397,7 @@ func groupStringsFor(locale string) groupStrings {
 		errExists:         func(sid string) string { return fmt.Sprintf("session %q already exists.", sid) },
 		errGroupTaken:     func(g string) string { return fmt.Sprintf("group name %q is taken; choose another `name`.", g) },
 		errMissingGroup:   `group-send: "group" is required.`,
+		errBadAttachments: `group-send: "attachments" must be an array of file codes.`,
 		errMissingAddress: `group-send: "to" must be an array of session names.`,
 		errBadTo:          `group-send: "to" must be an array of session names, e.g. ["worker-1","worker-2"].`,
 		errMissingText:    `group-send: "text" is required.`,

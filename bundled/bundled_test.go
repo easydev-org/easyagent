@@ -67,15 +67,17 @@ func (d *stubDeps) IsGroupMember(string, string, string) bool          { return 
 func (d *stubDeps) GroupMemberProfiles(string, string) ([]GroupMemberRow, error) {
 	return nil, nil
 }
-func (d *stubDeps) GroupCoordinator(string, string) (string, error)                 { return "", nil }
-func (d *stubDeps) CoordinatedGroup(string, string) (string, error)                 { return "", nil }
-func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string              { return "" }
-func (d *stubDeps) AddGroupMemberOnly(string, string, string) error                 { return nil }
-func (d *stubDeps) RevokeCapability(string, string, string, string) error           { return nil }
-func (d *stubDeps) CreateGroupForSession(string, string, string) error              { return nil }
-func (d *stubDeps) PostGroupMessage(string, string, string, []string, string) error { return nil }
-func (d *stubDeps) ForkSession(string, string, string, []string) (string, error)    { return "", nil }
-func (d *stubDeps) DeleteSessionRow(string, string) error                           { return nil }
+func (d *stubDeps) GroupCoordinator(string, string) (string, error)       { return "", nil }
+func (d *stubDeps) CoordinatedGroup(string, string) (string, error)       { return "", nil }
+func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string    { return "" }
+func (d *stubDeps) AddGroupMemberOnly(string, string, string) error       { return nil }
+func (d *stubDeps) RevokeCapability(string, string, string, string) error { return nil }
+func (d *stubDeps) CreateGroupForSession(string, string, string) error    { return nil }
+func (d *stubDeps) PostGroupMessage(string, string, string, []string, string, []string) error {
+	return nil
+}
+func (d *stubDeps) ForkSession(string, string, string, []string) (string, error) { return "", nil }
+func (d *stubDeps) DeleteSessionRow(string, string) error                        { return nil }
 func (d *stubDeps) MessageChain(_ string, tip string, _ int) []ChainEntry {
 	if d.chainByTip != nil {
 		return d.chainByTip[tip]
