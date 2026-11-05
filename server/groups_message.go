@@ -153,7 +153,7 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 		return
 	}
 	payload := map[string]any{
-		"group": group, "from": sender, "text": msg.Body,
+		"group": group, "from": sender, "from_name": msg.SenderName, "text": msg.Body,
 		"message_id": msg.ID, "seq": msg.Seq,
 	}
 	for _, rcpt := range to {

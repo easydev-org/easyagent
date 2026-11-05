@@ -307,7 +307,7 @@ func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, te
 	var firstErr error
 	for _, rcpt := range to {
 		payload := map[string]any{
-			"group": group, "from": from, "text": text,
+			"group": group, "from": from, "from_name": msg.SenderName, "text": text,
 			"message_id": msg.ID, "seq": msg.Seq,
 		}
 		if err := d.ChannelFn(tenant, groupChannel, groupTopicTo(group, rcpt), payload, "session:"+from); err != nil && firstErr == nil {

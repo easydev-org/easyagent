@@ -1,8 +1,10 @@
 package agentbus
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/easydev-org/easybus-sdk/bus"
 	"github.com/easydev-org/easybus-sdk/protocol"
 )
 
@@ -116,5 +118,73 @@ func TestCoordinatorFollowsTheWholeGroup(t *testing.T) {
 	// ...and therefore its own dispatches too, which is why the distributor drops them.
 	if !protocol.MatchSubject(coord, GroupMemberTopic("incident", "w2")) {
 		t.Error("the pattern is expected to match dispatches; the distributor is what suppresses the echo")
+	}
+}
+
+/**
+ * A GROUP EVENT NAMES THE SENDER, BY THE NAME A READER KNOWS.
+ *
+ * "Another member of the group" told the model nothing it could act on: it could not tell a coordinator from a
+ * peer, could not attribute a claim, and could not decide whether a reply was expected from it. The display
+ * name is what the member list shows; the ID rides alongside because the name is a label two sessions may
+ * share and the ID is the only thing that identifies one.
+ */
+func TestGroupEventTextNamesTheSender(t *testing.T) {
+	msg := bus.ChannelMessage{
+		Channel: GroupChannel,
+		Topic:   GroupUserTopic("release"),
+		Payload: map[string]any{
+			"group":     "release",
+			"from":      "abc123",
+			"from_name": "发布协调",
+			"text":      "请确认 main 是否干净",
+		},
+	}
+	got := channelEventText(msg)
+
+	if !strings.Contains(got, "发布协调") {
+		t.Errorf("the sender's name is missing:\n%s", got)
+	}
+	if !strings.Contains(got, "abc123") {
+		t.Errorf("the sender's id is missing:\n%s", got)
+	}
+	if !strings.Contains(got, "请确认 main 是否干净") {
+		t.Errorf("the body is missing:\n%s", got)
+	}
+	if strings.Contains(got, "Another member") {
+		t.Errorf("the generic phrasing is still there:\n%s", got)
+	}
+}
+
+// A message the USER posted has no sender, and must not be attributed to anyone.
+func TestGroupEventTextForAUserPost(t *testing.T) {
+	got := channelEventText(bus.ChannelMessage{
+		Channel: GroupChannel,
+		Topic:   GroupUserTopic("release"),
+		Payload: map[string]any{"group": "release", "text": "go"},
+	})
+	if !strings.Contains(got, "The user") {
+		t.Errorf("a user post should be attributed to the user:\n%s", got)
+	}
+	if strings.Contains(got, "posted to group \"release\":\n\n\ngo") {
+		t.Errorf("empty sender name leaked into the text:\n%s", got)
+	}
+}
+
+/**
+ * THE SOURCE CARRIES THE GROUP AND THE SENDER.
+ *
+ * `session:<id>` alone made a group message look like a private hand-off between two sessions: the console
+ * could name the sender but not the conversation, so a reader could not open the group the message came from.
+ */
+func TestGroupSourceNamesBothHalves(t *testing.T) {
+	if senderOf("group:release/abc123") != "" {
+		t.Error("a group source is not a session source")
+	}
+	// The form the distributor builds: `group:<name>/<sender>`.
+	src := "group:release/abc123"
+	group := strings.SplitN(strings.TrimPrefix(src, "group:"), "/", 2)
+	if group[0] != "release" || group[1] != "abc123" {
+		t.Errorf("parsed %v, want [release abc123]", group)
 	}
 }

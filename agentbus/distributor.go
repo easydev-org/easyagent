@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/easydev-org/easybus-sdk/bus"
@@ -91,6 +92,15 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 
 	n := 0
 	for session, subs := range matches {
+		if d.log != nil {
+			names := make([]string, 0, len(subs))
+			for _, s := range subs {
+				names = append(names, s.Pattern)
+			}
+			// WHICH SESSIONS AND ON WHAT GROUNDS — the counts alone cannot distinguish "one subscriber with three
+			// patterns" from "three subscribers", and those are very different problems.
+			d.log.Info("channel match", "session", session, "patterns", names)
+		}
 		/**
 		 * A SENDER DOES NOT HEAR ITS OWN MESSAGE.
 		 *
@@ -145,7 +155,38 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 		if wake {
 			body.Text = channelEventText(msg)
 		}
-		if err := d.publish(ctx, msg.Tenant, session, typ, body, "channel:"+msg.Channel); err != nil {
+		/**
+		 * THE SOURCE NAMES THE SENDER WHEN THERE IS ONE.
+		 *
+		 * `channel:<name>` told the console only that a channel produced the message, so a group message
+		 * rendered as the reader's OWN prompt: right-aligned, no author, no way to jump back to who said it.
+		 * A group message has an author — `from` in the payload — and naming it as `session:<id>` is the form
+		 * the console already understands for "another conversation said this".
+		 *
+		 * A message with no author (the user posted to the group) keeps the generic channel label, because
+		 * there is nobody to attribute it to.
+		 */
+		source := "channel:" + msg.Channel
+		if msg.Channel == GroupChannel {
+			/**
+			 * `group:<name>/<sender>` — THE CONSOLE NEEDS BOTH HALVES.
+			 *
+			 * The name says which conversation this came from, so a reader can open the group; the sender
+			 * says who spoke, so the message is attributable. `session:<id>` alone rendered a group message as
+			 * a private hand-off between two sessions, which is exactly what it is not.
+			 */
+			group := payloadString(msg.Payload, "group")
+			sender := payloadString(msg.Payload, "from")
+			if group != "" {
+				source = "group:" + group
+				if sender != "" {
+					source += "/" + sender
+				}
+			}
+		} else if sender := payloadString(msg.Payload, "from"); sender != "" {
+			source = "session:" + sender
+		}
+		if err := d.publish(ctx, msg.Tenant, session, typ, body, source); err != nil {
 			// One failed delivery must not stop the others: a session whose mailbox is
 			// temporarily unavailable should not silence every other subscriber.
 			//
@@ -169,6 +210,15 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
  * labels and name no session. An origin that does not parse belongs to nobody, so it never suppresses a
  * delivery — a message whose sender cannot be identified is not a message to drop.
  */
+func payloadString(payload any, key string) string {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
+}
+
 func senderOf(origin string) string {
 	if rest, ok := strings.CutPrefix(origin, "session:"); ok {
 		return rest
@@ -202,18 +252,30 @@ func channelEventText(msg bus.ChannelMessage) string {
 			group = strings.SplitN(msg.Topic, ".", 2)[0]
 		}
 		from, _ := msg.Payload.(map[string]any)["from"].(string)
+		fromName, _ := msg.Payload.(map[string]any)["from_name"].(string)
 		text, _ := msg.Payload.(map[string]any)["text"].(string)
-		who := "The user"
-		if from != "" {
-			who = "Another member of the group"
+
+		/**
+		 * NAME THE SENDER, BY THE NAME A READER RECOGNISES.
+		 *
+		 * "Another member of the group" told the model nothing it could act on: it could not tell a
+		 * coordinator from a peer, could not attribute a claim, and could not decide whether a reply was
+		 * expected from it. The session's display name is what the member list shows, so it is what the
+		 * model should see.
+		 *
+		 * The ID RIDES ALONGSIDE the name, because the name is a label two sessions may share and the ID is
+		 * the only thing that identifies one. A model that needs to address the sender back needs the ID.
+		 */
+		switch {
+		case from == "":
+			b.WriteString("The user posted to group " + strconv.Quote(group) + ":")
+		case fromName != "":
+			fmt.Fprintf(&b, "%s (%s) posted to group %q:", fromName, from, group)
+		default:
+			fmt.Fprintf(&b, "Session %s posted to group %q:", from, group)
 		}
-		fmt.Fprintf(&b, "%s posted to group %q", who, group)
-		if text != "" {
-			b.WriteString(":\n\n")
-			b.WriteString(text)
-		} else {
-			b.WriteString(".")
-		}
+		b.WriteString("\n\n")
+		b.WriteString(text)
 		return b.String()
 	}
 
