@@ -112,7 +112,14 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 		 * `Origin` is the publisher's own label (`session:<id>` for a session, `group:<name>` for the group
 		 * RPC). Comparing it to the recipient is what makes the echo impossible rather than unlikely.
 		 */
-		if msg.Channel == GroupChannel && senderOf(msg.Source) == session {
+		/**
+		 * THE SELF-ECHO CHECK READS THE PAYLOAD, NOT THE SOURCE.
+		 *
+		 * `Source` is what the CONSOLE renders (`group:<name>/<sender>`, or `session:<id>` for a private
+		 * hand-off) and its shape is a presentation decision that has already changed once. Routing must not
+		 * depend on it: the payload carries `from` on every group message, and that is the sender.
+		 */
+		if msg.Channel == GroupChannel && payloadString(msg.Payload, "from") == session {
 			continue
 		}
 		// One delivery per session, not per matching subscription: a session that follows the
@@ -204,11 +211,11 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 }
 
 /**
- * senderOf extracts the session id from a channel message's origin.
+ * payloadString reads one string field from a channel payload, or "" when it is absent.
  *
- * `session:<id>` is what a session-built message carries; `group:<name>` and `user:group` are the group RPC's
- * labels and name no session. An origin that does not parse belongs to nobody, so it never suppresses a
- * delivery — a message whose sender cannot be identified is not a message to drop.
+ * A channel payload is `any` on the wire; a group message carries `from`, `from_name` and `group` as strings,
+ * and every reader here wants one of them. A missing or wrongly-typed field yields "", which callers treat as
+ * "not stated" rather than as a value.
  */
 func payloadString(payload any, key string) string {
 	m, ok := payload.(map[string]any)
@@ -217,13 +224,6 @@ func payloadString(payload any, key string) string {
 	}
 	s, _ := m[key].(string)
 	return s
-}
-
-func senderOf(origin string) string {
-	if rest, ok := strings.CutPrefix(origin, "session:"); ok {
-		return rest
-	}
-	return ""
 }
 
 // channelEventText renders a channel event as the prompt a woken session receives.

@@ -80,22 +80,6 @@ func TestGroupPatternsSeparateRoles(t *testing.T) {
  * The fix belongs in the distributor, where the sender's identity is known — a narrower pattern would lose the
  * replies, which is the half the coordinator cannot do without.
  */
-func TestSenderOfExtractsTheSession(t *testing.T) {
-	cases := []struct {
-		origin string
-		want   string
-	}{
-		{"session:abc123", "abc123"},
-		{"group:release-coordination", ""},
-		{"user:group", ""},
-		{"", ""},
-	}
-	for _, c := range cases {
-		if got := senderOf(c.origin); got != c.want {
-			t.Errorf("senderOf(%q) = %q, want %q", c.origin, got, c.want)
-		}
-	}
-}
 
 /**
  * THE PATTERNS ARE UNCHANGED — the coordinator still follows `<group>.>`, because that is what lets it hear the
@@ -178,13 +162,36 @@ func TestGroupEventTextForAUserPost(t *testing.T) {
  * could name the sender but not the conversation, so a reader could not open the group the message came from.
  */
 func TestGroupSourceNamesBothHalves(t *testing.T) {
-	if senderOf("group:release/abc123") != "" {
-		t.Error("a group source is not a session source")
-	}
-	// The form the distributor builds: `group:<name>/<sender>`.
+	// The form the distributor builds: `group:<name>/<sender>`. The CONSOLE splits it; routing does not, which
+	// is why the self-echo check reads the payload's `from` instead.
 	src := "group:release/abc123"
 	group := strings.SplitN(strings.TrimPrefix(src, "group:"), "/", 2)
 	if group[0] != "release" || group[1] != "abc123" {
 		t.Errorf("parsed %v, want [release abc123]", group)
+	}
+}
+
+/**
+ * THE SELF-ECHO CHECK READS THE SENDER FROM THE PAYLOAD.
+ *
+ * `Source` is what the CONSOLE renders, and its shape changed once already (`session:<id>` became
+ * `group:<name>/<sender>` when group messages got their own rendering). Routing must not depend on a
+ * presentation string: the payload carries `from` on every group message, and that is the sender.
+ *
+ * This pins the lookup the distributor relies on — a regression here is silent, because the check simply stops
+ * firing and the coordinator starts answering its own dispatches again.
+ */
+func TestGroupSenderComesFromThePayload(t *testing.T) {
+	payload := map[string]any{"group": "incident-42", "from": "abc123", "text": "hi"}
+	if got := payloadString(payload, "from"); got != "abc123" {
+		t.Errorf("from = %q, want abc123", got)
+	}
+	// A user's post carries no sender, so the check must not suppress it for anyone.
+	if got := payloadString(map[string]any{"group": "g", "text": "hi"}, "from"); got != "" {
+		t.Errorf("a user post reported sender %q, want empty", got)
+	}
+	// And a payload that is not an object at all yields empty rather than panicking.
+	if got := payloadString("not a map", "from"); got != "" {
+		t.Errorf("non-map payload gave %q", got)
 	}
 }
