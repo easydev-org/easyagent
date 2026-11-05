@@ -475,6 +475,18 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 			// Permission keys the tool needs. Kept as declared: the agent only tests
 			// presence, and matching against a call's target happens in the extension.
 			def.Requires = t.Requires
+			/**
+			 * AN EXTENSION THAT DID NOT DECLARE AN EFFECT IS TREATED AS THE WORST.
+			 *
+			 * The declaration is new, so extensions built before it send an empty string — and a tool that
+			 * did not say what it does must not be presented as harmless. Falling back to `high` means the
+			 * console asks for confirmation once, which is recoverable; falling back to `none` would
+			 * silently tell a user that a destructive tool is safe.
+			 */
+			def.Effect = agentpkg.Effect(t.Effect)
+			if !def.Effect.Valid() {
+				def.Effect = agentpkg.EffectHigh
+			}
 			e.defs[t.Name] = def
 		}
 	}
