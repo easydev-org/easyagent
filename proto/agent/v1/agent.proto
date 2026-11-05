@@ -202,6 +202,14 @@ message ToolInfo {
   google.protobuf.Struct parameters = 4;
   repeated ToolConfigField config_fields = 5;
   repeated string required_config = 6;
+  /**
+   * Permission keys this tool needs before it may run, as declared by its manifest.
+   *
+   * WITHOUT THIS THE CONSOLE CANNOT OFFER THE GRANT. The gate refuses the call regardless — it reads the
+   * same declaration server-side — but a user looking at a tool that keeps failing had no way to see
+   * WHAT to grant, because the requirement never left the server.
+   */
+  repeated string requires = 7;
 }
 
 // Declared config knob for a tool/extension.

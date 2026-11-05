@@ -48,6 +48,7 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 			info.Parameters = structFromMap(agent.LocalizeSchema(d.InputSchema, locale))
 		}
 		info.RequiredConfig = d.RequiredConfig
+		info.Requires = d.Requires
 		// The knob surface of THIS tool.
 		//
 		// Both branches matter and only one used to exist: `bundled` is in-process
