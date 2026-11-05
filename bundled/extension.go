@@ -272,8 +272,13 @@ func (e *Extension) register() {
 	e.handlers["tts-generate"] = e.ttsGenerate
 	e.handlers["tts-clone"] = e.ttsClone
 	e.handlers["audio-transcribe"] = e.audioTranscribe
-	e.handlers["subsession-create"] = e.subsessionCreate
-	e.handlers["mail-send"] = e.mailSend
+	// `delegate` replaced `subsession-create`/`mail-send`: every session-to-session message now goes
+	// through a group, so there is no implicit delivery path left to register.
+	e.handlers["delegate"] = e.delegate
+	e.handlers["group-send"] = e.groupSend
+	// READ-ONLY group tools: a session can see who it is grouped with, never change it.
+	e.handlers["group-list"] = e.groupList
+	e.handlers["group-members"] = e.groupMembers
 	// THE TWO GENERIC JOB TOOLS. Everything else about a job belongs to the extension that runs it;
 	// what is generic is "what is running" and "wait for this one", and both are answered from the
 	// shared job list rather than from the work itself.
@@ -302,4 +307,20 @@ func numArg(args map[string]any, key string) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
+}
+
+/**
+ * Permissions returns the extension's declared permissions.
+ *
+ * THE EXECUTOR CANNOT DISCOVER THESE. A remote extension declares them in a manifest the executor
+ * fetches; bundled is in this process, so the host has to read them directly and install them. Without
+ * this method a `requires` on a bundled tool would name a permission no client could offer.
+ */
+func (e *Extension) Permissions() []PermissionDecl {
+	if e == nil {
+		return nil
+	}
+	out := make([]PermissionDecl, 0, len(e.manifest.Permissions))
+	out = append(out, e.manifest.Permissions...)
+	return out
 }

@@ -571,32 +571,35 @@ tools:
     required_config: [model.speech_clone]
 
   # ---- cross-session: subsession (O(1) fork child) + direct messaging ----
-  - name: subsession-create
+  - name: delegate
     description: >-
-      Start a subsession to work on a self-contained task in the background.
-      A subsession is an ordinary session forked from THIS one (zero-copy: it
-      shares this conversation's history and inherits its model/preset), so
-      give it a complete, self-contained prompt — it does not see this turn's
-      instructions. The subsession runs in the background and will send its
-      result back to this session as a new message. IMPORTANT: after calling
-      this tool you MUST end your turn immediately and wait for the result —
-      do NOT poll, sleep, or duplicate the subsession's work; you will be
-      resumed automatically when its message arrives.
+      Create a GROUP for a self-contained task and put a fresh worker session in it. YOU become the
+      group's coordinator: the result comes back to you as a group message, and you can send further
+      instructions to the worker the same way. The worker is forked from THIS session (zero-copy: it
+      shares this conversation's history and inherits its model/preset), so give it a complete,
+      self-contained task — it does not see this turn's instructions.
+
+      IMPORTANT: after calling this tool you MUST end your turn immediately and wait for the result —
+      do NOT poll, sleep, or duplicate the work; you will be resumed when its message arrives. Use
+      group-members to see who is in the group. There is no direct messaging: every message between
+      sessions goes through a group, so a group is also how you talk to a session you did not create.
     descriptions:
       zh: >-
-        启动一个 subsession 在后台处理一个自包含任务。subsession 是从本会话 fork 出的普通会话
-        （零拷贝：共享本会话历史，继承其模型/预设），因此请给它一个完整、自包含的提示词——它看不到
-        本轮对话中的指令。subsession 在后台运行，完成后会把结果作为一条新消息发回本会话。重要：调用
-        本工具后你必须立即结束本轮，等待结果——不要轮询、不要 sleep、不要重复它的工作；结果到达时会
-        自动恢复你。
+        为一个自包含任务创建一个群，并在其中放入一个新的工作会话。你成为该群的协调者：结果会以群消息
+        的形式回到你这里，你也可以用同样方式继续向它下发指令。工作会话是从本会话 fork 出来的（零拷贝：
+        共享本会话历史，继承其模型/预设），因此请给它一个完整、自包含的任务——它看不到本轮对话中的指令。
+
+        重要：调用本工具后你必须立即结束本轮，等待结果——不要轮询、不要 sleep、不要重复它的工作；结果
+        到达时会自动恢复你。用 group-members 查看群里有谁。不存在直接私信：会话之间的所有消息都必须经过
+        群，因此群也是你与不是自己创建的会话对话的方式。
     input_schema:
       type: object
       properties:
-        prompt:
+        task:
           type: string
-          description: The complete, self-contained task for the subsession.
+          description: The complete, self-contained task for the worker session.
           descriptions:
-            zh: 给 subsession 的完整、自包含任务描述。
+            zh: 给工作会话的完整、自包含任务描述。
         description:
           type: string
           description: Optional short (3-5 words) label for the task.
@@ -604,34 +607,93 @@ tools:
             zh: 可选的任务短标签（3-5 个词）。
         name:
           type: string
-          description: Optional explicit subsession name (default is auto-generated).
+          description: Optional explicit worker session name (default is auto-generated).
           descriptions:
-            zh: 可选的显式 subsession 名称（默认自动生成）。
-      required: [prompt]
+            zh: 可选的工作会话名称（默认自动生成）。
+      required: [task]
+    # CREATING A GROUP IS THE PRIVILEGED PART, and this is the only tool in bundled that declares a
+    # requirement. Without the grant the tool is still listed (the console greys it out) but the call
+    # is refused with a message naming what to grant — see the gate in agentbus.
+    requires: [group.create]
 
-  - name: mail-send
+  # ---- groups ----
+  #
+  # READ-ONLY, DELIBERATELY. A session can ask which groups it is in and who else is in one; it
+  # cannot create, join, leave or edit a group. A group is an organisational decision a person makes,
+  # and a session that could assemble one would be able to choose its own collaborators — which is a
+  # view of the tenant nobody granted it.
+  #
+  # `delegate` ABOVE IS THE ONE EXCEPTION, and it is narrower than it looks: it creates a group whose
+  # only members are the caller (as coordinator) and one worker it just forked. It cannot add anyone
+  # else, and it cannot touch a group it did not create.
+  # ---- groups ----
+  #
+  # READ-ONLY, DELIBERATELY. A session can ask which groups it is in and who else is in one; it
+  # cannot create, join, leave or edit a group. A group is an organisational decision a person makes,
+  # and a session that could assemble one would be able to choose its own collaborators — which is a
+  # view of the tenant nobody granted it.
+  - name: group-list
     description: >-
-      Send a message to another session in the same tenant, delivered to its
-      mailbox. The target resumes its turn on receipt (a user_prompt-style
-      delivery), which is how a subsession hands its result back to its parent.
+      List the groups this session belongs to, with their member counts. A group is a named set of
+      sessions that can see each other; use group-members to see who is in one.
     descriptions:
       zh: >-
-        向同租户内的另一个会话发送一条消息（投递到其 mailbox）。目标会话收到后将继续其回合
-        （以 user_prompt 方式投递），subsession 正是借此把结果发回父会话。
+        列出本会话所在的群（含成员数）。群是一组可以互相看见的会话；用 group-members 查看某个群里还有谁。
+    input_schema:
+      type: object
+      properties: {}
+
+  - name: group-members
+    description: >-
+      List the sessions in a group this session belongs to, including itself. This is how a session
+      learns who else is working on the same thing. Returns nothing for a group it is not in.
+    descriptions:
+      zh: >-
+        列出本会话所在某个群的成员会话（含自己）。会话借此知道还有谁在一起做同一件事。不属于该群时返回空。
     input_schema:
       type: object
       properties:
+        group:
+          type: string
+          description: Group name.
+          descriptions:
+            zh: 群名称。
+      required: [group]
+
+  - name: group-send
+    description: >-
+      Send a message to one member of a group you coordinate. This is how a coordinator hands work to
+      a member or replies to its report. ONLY THE COORDINATOR MAY USE IT: a member cannot address
+      another member, and there is no direct messaging outside a group.
+
+      The message is delivered as the group addressing that session, so the recipient knows which
+      group it belongs to. To talk to a session you did not create, add it to a group you coordinate.
+    descriptions:
+      zh: >-
+        向你作为协调者的群里的某个成员发送一条消息。协调者借此向成员下发任务或回复它的汇报。**只有协调者
+        可以使用**：成员不能给另一个成员发消息，群外也不存在直接私信。
+
+        消息会以「该群点名该会话」的形式投递，因此接收方知道它属于哪个群。要与不是你创建的会话对话，请把它
+        加入你协调的群。
+    input_schema:
+      type: object
+      properties:
+        group:
+          type: string
+          description: Group name.
+          descriptions:
+            zh: 群名称。
         to:
           type: string
-          description: Target session name.
+          description: Member session name to address.
           descriptions:
-            zh: 目标会话名称。
+            zh: 要投递的成员会话名称。
         text:
           type: string
-          description: Message body to deliver.
+          description: Message body.
           descriptions:
-            zh: 要投递的消息内容。
-      required: [to, text]
+            zh: 消息内容。
+      required: [group, to, text]
 
 config:
   - name: search_provider
@@ -745,3 +807,19 @@ config:
     scope: global
     default: ''
 
+# ---- permissions ----
+#
+# A group is a VISIBILITY STRUCTURE: it decides which sessions can see each other, and the
+# coordinator of a group can address its members. Creating one is therefore not a routine
+# bookkeeping act — it widens who can reach this session, and it is the one way a session gains
+# the ability to talk to another at all. So it is granted by a person, once, per session.
+permissions:
+  - key: group.create
+    # The label names the consequence: the session will be able to assemble sessions and address them.
+    label: Create groups (and address the sessions in them)
+    descriptions:
+      zh: 创建群（并可向群内成员下发消息）
+    # `write`, not `destructive`: nothing is deleted or overwritten. It is elevated because it
+    # changes the session's reach — a session without it cannot start a conversation with another
+    # session at all, which is the property this permission exists to guard.
+    risk: write

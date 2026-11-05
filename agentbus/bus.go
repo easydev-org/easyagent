@@ -356,6 +356,28 @@ func (e *ToolExecutor) WithGrants(g GrantSource) *ToolExecutor {
 }
 
 /**
+ * WithBundledPermissions installs the IN-PROCESS extension's declared permissions.
+ *
+ * THE DISCOVERED EXTENSIONS FILL `extPerms` FROM THEIR MANIFESTS, and bundled has no manifest to fetch:
+ * it lives in this process. Without this the executor's permission table had no entry for it, so
+ * `group.create` was required by a tool but offered to nobody — the console would show no grantable
+ * permission and the user could not authorise delegation at all.
+ *
+ * A MAP RATHER THAN AN EXTENSION ID because the in-process surface may one day be several; today it is
+ * one, and passing its id would hard-code that fact here.
+ */
+func (e *ToolExecutor) WithBundledPermissions(perms map[string][]bundled.PermissionDecl) *ToolExecutor {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for id, list := range perms {
+		if len(list) > 0 {
+			e.extPerms[id] = list
+		}
+	}
+	return e
+}
+
+/**
  * WithDenialRecorder installs a note-taker for refusals.
  *
  * A FUNCTION, LIKE GrantSource, so this package keeps knowing nothing about NATS: the executor's job is

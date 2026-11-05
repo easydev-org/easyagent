@@ -32,8 +32,16 @@ type Session struct {
 	UpdatedAt  string  `gorm:"column:updated_at"`
 	LastUsedAt *string `gorm:"column:last_used_at"`
 	Locale     string  `gorm:"column:locale"`
-	// Generic grouping key (a subsession records its parent's name here).
-	Group string `gorm:"column:group"`
+	// THERE IS NO COLUMN FOR "WHICH SESSION THIS ONE FORKED FROM". There used to be (`group`, holding the
+	// parent's name), and it was doing two jobs badly: it recorded fork lineage, and it was read as a
+	// grouping key by the console's session list. Neither survived.
+	//
+	//   · GROUP MEMBERSHIP is now the `groups` table, with roles and a coordinator. A single string
+	//     could not express "two sessions in the same group" without also meaning "first is the parent
+	//     of the second", which conflated two unrelated ideas.
+	//   · FORK LINEAGE is already recorded by `messages.prev_id`: a fork shares its ancestor chain, so
+	//     "what did this come from" is answerable from the transcript itself — and it stays true after
+	//     a rename, which a copied name did not.
 	// List-row projection (derived from the chain, written on append).
 	LastMessagePreview string  `gorm:"column:last_message_preview"`
 	LastMessageAt      *string `gorm:"column:last_message_at"`

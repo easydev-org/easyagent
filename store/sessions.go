@@ -18,7 +18,6 @@ type SessionInput struct {
 	SystemPrompt string
 	MaxTurns     int
 	Locale       string
-	Group        string
 }
 
 // CreateSession inserts a session row.
@@ -35,7 +34,7 @@ func (d *DB) CreateSession(tenant string, in SessionInput) error {
 	s := Session{
 		Tenant: tenant, Name: in.Name, Model: in.Model, Variant: in.Variant,
 		Preset: in.Preset, TipID: in.TipID, MaxTurns: in.MaxTurns,
-		SystemPrompt: in.SystemPrompt, Locale: in.Locale, Group: in.Group,
+		SystemPrompt: in.SystemPrompt, Locale: in.Locale,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	return d.g.Create(&s).Error
@@ -228,13 +227,6 @@ func (d *DB) UpdateSessionSettings(tenant, name string, patch map[string]any) er
 	patch["updated_at"] = nowStr()
 	return d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
 		Updates(patch).Error
-}
-
-// Children returns sessions sharing a `group` value (a parent's subsessions).
-func (d *DB) Children(tenant, group string) ([]Session, error) {
-	var out []Session
-	err := d.g.Where("tenant = ? AND \"group\" = ?", tenant, group).Order("created_at").Find(&out).Error
-	return out, err
 }
 
 // SetSessionPreview updates the list-row preview projection.

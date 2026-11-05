@@ -65,6 +65,8 @@ type Server struct {
 	channels ChannelProvisioner
 	// subs lists and edits channel subscriptions (nil = channels not configured).
 	subs SubscriptionStore
+	// chanPub publishes one message onto a channel (nil = a group has no route).
+	chanPub ChannelPublisher
 	// seedTenant applies deployment-pinned defaults to a fresh tenant.
 	seedTenant func(tenant string)
 
@@ -136,6 +138,9 @@ type Deps struct {
 	// Subs lists and edits channel subscriptions. nil means channels are not configured, and the RPCs
 	// answer with that rather than an empty list.
 	Subs SubscriptionStore
+	// ChannelPublisher publishes group messages onto a channel. nil means a group has no route, which
+	// the group RPCs report rather than silently accepting a message nobody will receive.
+	ChannelPublisher ChannelPublisher
 	// SeedTenant applies deployment-pinned defaults to a tenant created at runtime. nil means a new
 	// tenant gets no presets, which is what boot-time seeding covers for the known ones.
 	SeedTenant func(tenant string)
@@ -182,7 +187,7 @@ func New(d Deps) *Server {
 		presets: d.Presets, config: d.ConfigKV, runtimeBus: d.Bus, mail: d.Mailbox,
 		tools: d.Tools, bundledTools: d.BundledTools, bundledFields: d.BundledFields,
 		stream: d.Stream, lifecycle: d.Lifecycle,
-		channels: d.Channels, subs: d.Subs, seedTenant: d.SeedTenant,
+		channels: d.Channels, subs: d.Subs, chanPub: d.ChannelPublisher, seedTenant: d.SeedTenant,
 		blobStore: d.Blob,
 		blobs:     map[string][]byte{},
 	}
@@ -208,8 +213,40 @@ type ConfigFieldSource interface {
 // An interface rather than a direct call into the bus package so the in-memory server (used
 // by tests and single-process runs) can leave it nil: a session then has no default channel,
 // which is the truthful state when there is no broker to deliver on.
+/**
+ * ChannelProvisioner keeps a session's DERIVED subscriptions in step with the state that implies them.
+ *
+ * TWO SOURCES OF TRUTH FEED IT, and both are things a user changes rather than things a session asks
+ * for: every session follows its own built-in channel, and every group member follows the group. The
+ * subscriptions themselves are always rebuilt from those facts, never edited incrementally — a
+ * provisioner that only applied "what changed" has to be told the change correctly, and a full rewrite
+ * is idempotent whatever the process's history.
+ */
 type ChannelProvisioner interface {
 	EnsureDefault(ctx context.Context, tenant, session string) error
+	/**
+	 * SyncGroup brings every member's subscription in line with the group's member list.
+	 *
+	 * `members` carries every session and whether it is the coordinator; `previous` lists the sessions
+	 * that were members before this call, so a departure unsubscribes rather than leaving a pattern
+	 * that still matches. Roles are part of it because the pattern depends on them: a member promoted
+	 * to coordinator must start receiving the group's user messages.
+	 */
+	SyncGroup(ctx context.Context, tenant, group string, members map[string]bool, previous []string) error
+	// DropGroup removes every member's subscription to a group that no longer exists.
+	DropGroup(ctx context.Context, tenant, group string, members []string) error
+}
+
+/**
+ * ChannelPublisher publishes one message onto a channel.
+ *
+ * THE SERVER NEEDS THIS because a group is addressed as a channel: a user's message to a group is
+ * published there, and the coordinator's subscription decides that it hears it. Computing a recipient
+ * list here instead would be a second routing rule, and the first time it disagreed with the
+ * subscription index would be the first time a message reached nobody.
+ */
+type ChannelPublisher interface {
+	PublishChannel(ctx context.Context, tenant, channel, topic string, payload any, source string) error
 }
 
 // LifecyclePublisher broadcasts a session lifecycle event (best-effort).

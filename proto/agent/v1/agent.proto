@@ -47,11 +47,12 @@ message Session {
   // (user/assistant/event/compaction). `unread_count` is derived from this and
   // the shared `read_seq` watermark.
   int32 message_seq = 23;
-  // Generic grouping key for a session (free-form, tenant-scoped). Empty =
-  // ungrouped. A subsession records its parent's session name here, but the
-  // field is deliberately generic: any client may group sessions arbitrarily
-  // (project, workspace, task…). Not validated against an enum.
-  string group = 24;
+  // FIELD 24 IS RETIRED AND MUST NOT BE REUSED. It was a free-form grouping key that also recorded a
+  // subsession's parent. Group membership is now the `groups` table (with roles and a coordinator), and
+  // fork lineage is already in `messages.prev_id`. Reserved so a future field cannot silently inherit
+  // the old meaning.
+  reserved 24;
+  reserved "group";
   // Runtime status, derived from the session's cross-replica run LEASE (not a
   // persisted column): "busy" while a turn holds the lease, "idle" otherwise.
   // This is the same signal the `State` RPC returns, surfaced on the list rows
@@ -330,9 +331,9 @@ message CreateSessionRequest {
   string branch = 6;
   // Optional reasoning variant id (see ModelInfo.variants).
   string variant = 7;
-  // Optional generic grouping key (empty = ungrouped). A subsession sets this
-  // to its parent session name.
-  string group = 8;
+  // FIELD 8 IS RETIRED. It carried the same grouping key as `Session.group`; see the note there.
+  reserved 8;
+  reserved "group";
   // Session language pinned at creation ("zh" / "en"; empty = fall back to the
   // tenant default at turn time). Pinning it makes the language STABLE for the
   // session's lifetime instead of following a mutable tenant config.
@@ -561,6 +562,144 @@ message ChannelTopicDecl {
 
 message ListChannelsRequest {}
 message ListChannelsResponse { repeated ChannelDecl channels = 1; }
+
+// ---- groups ----
+
+// Group is one named set of sessions.
+//
+// CREATED BY A USER, NEVER BY A SESSION OR AN EXTENSION. A group is an organisational fact about
+// work — "these sessions are on the same incident" — and only the person directing that work can
+// decide it. An extension that could create groups could also assemble a set of sessions and see who
+// is in it, which is a view of the tenant nobody granted it.
+//
+// WHAT A GROUP ANSWERS: "who else is here". That is the entire contract. Messages still travel over
+// channels, so a group is a DIRECTORY plus a fan-out address, not a second message store — a group
+// that owned a transcript would need its own read watermarks, unread counts and "what did I miss"
+// answer, all of which the session already has.
+//
+// NO ANNOUNCEMENT FIELD, no description, no topic: every field a group carries is one more thing a
+// member reads before finding the member list. Name, picture, members.
+message Group {
+  string name = 1;
+  // `file:<code>` from the blob store. EMPTY MEANS "DERIVE ONE": the console seeds the same
+  // honeycomb identicon from the name, so a group with no picture still has a stable face.
+  string avatar_file = 2;
+  // Provenance: whether a person or an operator's script made it. Never a session.
+  string created_by = 3;
+  string created_at = 4;
+  int32 member_count = 5;
+}
+
+// GroupMember is one session's membership.
+//
+// THE ROLE IS ABOUT MESSAGE ROUTING, NOT MANAGEMENT:
+//
+//   "coordinator"  RECEIVES what the user says to the group. It reads the instruction, decides how to
+//                  split the work, and hands pieces to individual members with `mail-send`. Exactly
+//                  one per group — two would both answer the same message and talk past each other.
+//   "member"       receives nothing by default. It is addressed when the coordinator names it; that
+//                  is what "@" means in this design: the coordinator writes to that session's mailbox.
+message GroupMember {
+  string session = 1;
+  // "coordinator" | "member".
+  string role = 2;
+  string joined_at = 3;
+  // Provenance: "user" or "user:<name>". A member nobody remembers adding needs an answer.
+  string joined_by = 4;
+}
+
+message CreateGroupRequest {
+  // Group name. Also its address segment, so it is constrained like a session name.
+  string name = 1;
+  string avatar_file = 2;
+  /**
+   * The session that RECEIVES what the user says to the group, and hands work to the others.
+   *
+   * REQUIRED AND EXACTLY ONE. None means the group's messages reach nobody; two means both answer the
+   * same message and their answers talk past each other. Refusing at creation is better than either
+   * failure appearing the first time someone uses the group.
+   */
+  string coordinator = 3;
+  // Additional members. They receive nothing until the coordinator addresses them.
+  repeated string members = 4;
+  // Recorded as the creator. Not a session name — sessions cannot create groups.
+  string created_by = 5;
+}
+message CreateGroupResponse { Group group = 1; }
+
+message ListGroupsRequest {
+  // Optional filter: only the groups this session belongs to.
+  //
+  // A SESSION SEES ONLY ITS OWN GROUPS. There is no "list everything" for a session: enumerating
+  // groups it is not in would reveal the tenant's structure, and the question a member asks is
+  // always "what am I part of".
+  string session = 1;
+}
+message ListGroupsResponse { repeated Group groups = 1; }
+
+message GetGroupRequest {
+  string name = 1;
+  // The asking session. Empty means "a user is asking" (console, admin) and skips the membership
+  // check. A session that names itself must be a member, and a non-member gets NOT_FOUND — the same
+  // answer as a group that does not exist, because distinguishing them would let any session
+  // enumerate the tenant's groups by watching which names return a different error.
+  string session = 2;
+}
+message GetGroupResponse {
+  Group group = 1;
+  repeated GroupMember members = 2;
+}
+
+message UpdateGroupRequest {
+  string name = 1;
+  // `optional`, like a session's own avatar: absent = leave alone, present-but-empty = clear.
+  optional string avatar_file = 2;
+}
+message UpdateGroupResponse { Group group = 1; }
+
+message DeleteGroupRequest { string name = 1; }
+message DeleteGroupResponse {}
+
+message AddGroupMemberRequest {
+  string group = 1;
+  repeated string members = 2;
+  string added_by = 3;
+}
+
+// SetGroupCoordinator moves the role to another existing member.
+message SetGroupCoordinatorRequest {
+  string group = 1;
+  // Must already be a member: promoting a stranger would add it to the group as a side effect of
+  // naming it, which is the opposite of what an explicit member list is for.
+  string session = 2;
+}
+message SetGroupCoordinatorResponse {
+  Group group = 1;
+  repeated GroupMember members = 2;
+}
+message AddGroupMemberResponse {
+  Group group = 1;
+  repeated GroupMember members = 2;
+}
+
+message RemoveGroupMemberRequest {
+  string group = 1;
+  string member = 2;
+}
+message RemoveGroupMemberResponse {
+  Group group = 1;
+  repeated GroupMember members = 2;
+}
+
+message SendGroupMessageRequest {
+  string group = 1;
+  string text = 2;
+}
+message SendGroupMessageResponse {
+  // The sessions the message was delivered to. Exactly one — the coordinator — but returned as a
+  // list so the answer stays truthful if the routing rule ever changes.
+  repeated string delivered_to = 1;
+}
 
 message StateRequest { string id = 1; }
 message StateResponse { google.protobuf.Struct state = 1; }
@@ -930,6 +1069,29 @@ service AgentService {
   // ListChannels publishes which channels the discovered extensions publish to, so a client
   // can offer "follow this repository's tags" instead of asking for a pattern.
   rpc ListChannels(ListChannelsRequest) returns (ListChannelsResponse);
+
+  // ---- groups ----
+  //
+  // A group is a NAMED SET OF SESSIONS THAT CAN SEE EACH OTHER. It answers one question — "who else
+  // is here" — and nothing else: the messages themselves still travel over channels, so a group is a
+  // directory plus a fan-out address rather than a second message store.
+  //
+  // MEMBERSHIP IS THE ONLY PERMISSION. Every call below requires the caller's session to be IN the
+  // group; a non-member gets NOT_FOUND rather than PERMISSION_DENIED, because distinguishing the two
+  // would let any session enumerate every group in the tenant.
+  rpc CreateGroup(CreateGroupRequest) returns (CreateGroupResponse);
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse);
+  rpc GetGroup(GetGroupRequest) returns (GetGroupResponse);
+  rpc UpdateGroup(UpdateGroupRequest) returns (UpdateGroupResponse);
+  rpc DeleteGroup(DeleteGroupRequest) returns (DeleteGroupResponse);
+  rpc AddGroupMember(AddGroupMemberRequest) returns (AddGroupMemberResponse);
+  rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (RemoveGroupMemberResponse);
+  rpc SetGroupCoordinator(SetGroupCoordinatorRequest) returns (SetGroupCoordinatorResponse);
+
+  // Send a message FROM A USER to a group. It is delivered to the COORDINATOR only; the coordinator
+  // decides how to split the work and addresses members itself with `mail-send`. "@" in this design
+  // means "the coordinator writes to that session's mailbox", not a string this layer parses.
+  rpc SendGroupMessage(SendGroupMessageRequest) returns (SendGroupMessageResponse);
   rpc State(StateRequest) returns (StateResponse);
   rpc Mailbox(MailboxRequest) returns (MailboxResponse);
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);

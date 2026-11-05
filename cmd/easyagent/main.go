@@ -159,7 +159,10 @@ func run(cfgPath string) error {
 	// here would reintroduce the split this variable exists to remove, so the closure refuses
 	// loudly instead.
 	var mailboxPublish func(tenant, session string, typ mailbox.Type, payload any, source string) error
-	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub, &mailboxPublish))
+	// THE CHANNEL PUBLISHER, late-bound for the same reason as mailboxPublish: the bus is built after
+	// the tool surface, and a direct reference would fail at the first group message rather than at boot.
+	var channelPublish func(tenant, channel, topic string, payload any, source string) error
+	bundledExt, err := bundled.New(bundledDeps(db, tenantConfig, hub, &mailboxPublish, &channelPublish))
 	if err != nil {
 		return fmt.Errorf("bundled extension: %w", err)
 	}
@@ -169,6 +172,12 @@ func run(cfgPath string) error {
 		// because the bus is created after the bundled extension, which needs the publisher.
 		mailboxPublish = func(tenant, session string, typ mailbox.Type, payload any, source string) error {
 			return b.PublishMailbox(context.Background(), tenant, session, typ, payload, source)
+		}
+		// THE CHANNEL PATH, for group messages. Same bus, different mechanism: a channel message is
+		// published and the subscribers' patterns decide who hears it, rather than naming a session.
+		channelPublish = func(tenant, channel, topic string, payload any, source string) error {
+			return sdkbus.NewChannels(b.Transport()).
+				PublishChannel(context.Background(), tenant, channel, topic, payload, source)
 		}
 		// Mirror every published event onto the durable session-events stream
 		// so other replicas' watchers receive it (cross-replica WatchSession).
@@ -196,6 +205,16 @@ func run(cfgPath string) error {
 			return fmt.Errorf("mailbox bridge: %w", berr)
 		}
 		exec := agentbus.NewToolExecutor(b.Agent())
+		/**
+		 * THE IN-PROCESS EXTENSION'S PERMISSIONS, which have no manifest to discover.
+		 *
+		 * Discovered extensions fill this table from their manifests; `bundled` lives in this process,
+		 * so without this its `requires` named a permission nobody could be offered. The symptom is
+		 * quiet: the delegate tool refuses every call and the grant panel shows nothing to grant.
+		 */
+		if perms := bundledExt.Permissions(); len(perms) > 0 {
+			exec.WithBundledPermissions(map[string][]bundled.PermissionDecl{bundledExt.Manifest().ID: perms})
+		}
 		// Permissions: the executor asks this for a session's grants on every gated call.
 		// Injected as a function so the executor stays free of the storage layer.
 		exec.WithGrants(func(ctx context.Context, tenant, session string) (map[string][]store.GrantSnapshot, error) {
@@ -304,12 +323,14 @@ func run(cfgPath string) error {
 	// Channel wiring exists only with a broker; each field is nil without one, which the server reads
 	// as "channels are not configured" rather than "nothing is subscribed".
 	var (
-		prov     server.ChannelProvisioner
-		subStore server.SubscriptionStore
-		stream   server.StreamSource
+		prov             server.ChannelProvisioner
+		subStore         server.SubscriptionStore
+		stream           server.StreamSource
+		channelPublisher server.ChannelPublisher
 	)
 	if runtimeBus != nil {
 		stream = runtimeBus
+		channelPublisher = agentbusChannelPublisher{runtimeBus.Transport()}
 		if subIdx != nil {
 			prov = agentbus.NewDefaultChannelProvisioner(runtimeBus.Transport())
 			subStore = agentbus.NewSubscriptionStore(runtimeBus.Transport(), subIdx)
@@ -334,6 +355,9 @@ func run(cfgPath string) error {
 			seedTenantDefaults(presets, tenantConfig, db, cfg, tenant)
 		},
 		Stream: stream, Channels: prov, Subs: subStore, Blob: store3,
+		// THE GROUP ROUTE, in the same nilable shape as the rest: without a broker a group has no
+		// channel, and the group RPCs say so instead of accepting a message nobody receives.
+		ChannelPublisher: channelPublisher,
 	})
 	server.SetDefaultTenant(cfg.Tenant.Default)
 	// Mailbox consumer: each replica joins the durable consumer and processes
@@ -528,6 +552,7 @@ func seedTenantDefaults(p *agent.Presets, cfg *agent.Config, db *store.DB, c con
 func bundledDeps(
 	db *store.DB, cfg *agent.Config, hub *server.EventHub,
 	mailboxPublish *func(string, string, mailbox.Type, any, string) error,
+	channelPublish *func(string, string, string, any, string) error,
 ) *bundled.StoreDeps {
 	d := &bundled.StoreDeps{DB: db}
 	d.ConfigFn = func(tenant, key string) (string, bool) { return cfg.Get(tenant, key) }
@@ -571,6 +596,23 @@ func bundledDeps(
 			return fmt.Errorf("publish mailbox: bus not wired yet (this is a startup ordering bug)")
 		}
 		return (*mailboxPublish)(tenant, session, typ, payload, source)
+	}
+	/**
+	 * THE CHANNEL PUBLISHER for group messages.
+	 *
+	 * A LATE-BOUND CLOSURE, like MailFn above: the bus is constructed after the tool surface, and a
+	 * direct reference would be a startup-ordering dependency that fails at the first group message
+	 * rather than at boot.
+	 *
+	 * WITHOUT A BUS THIS RETURNS AN ERROR. Refusing is deliberate — a group message that silently goes
+	 * nowhere is exactly the failure the group design exists to prevent, and a tool that reports success
+	 * for a message nobody received is worse than one that says it cannot send.
+	 */
+	d.ChannelFn = func(tenant, channel, topic string, payload any, source string) error {
+		if channelPublish == nil || *channelPublish == nil {
+			return fmt.Errorf("publish channel: bus not wired yet (this is a startup ordering bug)")
+		}
+		return (*channelPublish)(tenant, channel, topic, payload, source)
 	}
 	d.OnIngestFn = func(ctx context.Context, tenant, code, name, mime string, data []byte) {
 		facts := media.Probe(data)
@@ -779,4 +821,15 @@ func extensionAllowlistResolver(db *store.DB, c config.Config) func(tenant strin
 		}
 		return nil // no entry = unrestricted
 	}
+}
+
+// agentbusChannelPublisher adapts the transport to server.ChannelPublisher.
+//
+// A NAMED TYPE RATHER THAN A CLOSURE because `server.ChannelPublisher` is an interface and the
+// transport is a concrete NATS handle: the adapter is where "how a channel message is published" is
+// decided once, instead of at every call site.
+type agentbusChannelPublisher struct{ t sdkbus.Bus }
+
+func (p agentbusChannelPublisher) PublishChannel(ctx context.Context, tenant, channel, topic string, payload any, source string) error {
+	return sdkbus.NewChannels(p.t).PublishChannel(ctx, tenant, channel, topic, payload, source)
 }

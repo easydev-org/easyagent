@@ -85,6 +85,28 @@ const (
 	AgentServiceUnsubscribeChannelProcedure = "/agent.v1.AgentService/UnsubscribeChannel"
 	// AgentServiceListChannelsProcedure is the procedure name of the AgentService's ListChannels RPC.
 	AgentServiceListChannelsProcedure = "/agent.v1.AgentService/ListChannels"
+	// AgentServiceCreateGroupProcedure is the procedure name of the AgentService's CreateGroup RPC.
+	AgentServiceCreateGroupProcedure = "/agent.v1.AgentService/CreateGroup"
+	// AgentServiceListGroupsProcedure is the procedure name of the AgentService's ListGroups RPC.
+	AgentServiceListGroupsProcedure = "/agent.v1.AgentService/ListGroups"
+	// AgentServiceGetGroupProcedure is the procedure name of the AgentService's GetGroup RPC.
+	AgentServiceGetGroupProcedure = "/agent.v1.AgentService/GetGroup"
+	// AgentServiceUpdateGroupProcedure is the procedure name of the AgentService's UpdateGroup RPC.
+	AgentServiceUpdateGroupProcedure = "/agent.v1.AgentService/UpdateGroup"
+	// AgentServiceDeleteGroupProcedure is the procedure name of the AgentService's DeleteGroup RPC.
+	AgentServiceDeleteGroupProcedure = "/agent.v1.AgentService/DeleteGroup"
+	// AgentServiceAddGroupMemberProcedure is the procedure name of the AgentService's AddGroupMember
+	// RPC.
+	AgentServiceAddGroupMemberProcedure = "/agent.v1.AgentService/AddGroupMember"
+	// AgentServiceRemoveGroupMemberProcedure is the procedure name of the AgentService's
+	// RemoveGroupMember RPC.
+	AgentServiceRemoveGroupMemberProcedure = "/agent.v1.AgentService/RemoveGroupMember"
+	// AgentServiceSetGroupCoordinatorProcedure is the procedure name of the AgentService's
+	// SetGroupCoordinator RPC.
+	AgentServiceSetGroupCoordinatorProcedure = "/agent.v1.AgentService/SetGroupCoordinator"
+	// AgentServiceSendGroupMessageProcedure is the procedure name of the AgentService's
+	// SendGroupMessage RPC.
+	AgentServiceSendGroupMessageProcedure = "/agent.v1.AgentService/SendGroupMessage"
 	// AgentServiceStateProcedure is the procedure name of the AgentService's State RPC.
 	AgentServiceStateProcedure = "/agent.v1.AgentService/State"
 	// AgentServiceMailboxProcedure is the procedure name of the AgentService's Mailbox RPC.
@@ -363,6 +385,69 @@ var (
 			Procedure:  AgentServiceListChannelsProcedure,
 		}
 	})
+	agentServiceCreateGroupSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("CreateGroup"),
+			Procedure:  AgentServiceCreateGroupProcedure,
+		}
+	})
+	agentServiceListGroupsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListGroups"),
+			Procedure:  AgentServiceListGroupsProcedure,
+		}
+	})
+	agentServiceGetGroupSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("GetGroup"),
+			Procedure:  AgentServiceGetGroupProcedure,
+		}
+	})
+	agentServiceUpdateGroupSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("UpdateGroup"),
+			Procedure:  AgentServiceUpdateGroupProcedure,
+		}
+	})
+	agentServiceDeleteGroupSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("DeleteGroup"),
+			Procedure:  AgentServiceDeleteGroupProcedure,
+		}
+	})
+	agentServiceAddGroupMemberSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("AddGroupMember"),
+			Procedure:  AgentServiceAddGroupMemberProcedure,
+		}
+	})
+	agentServiceRemoveGroupMemberSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("RemoveGroupMember"),
+			Procedure:  AgentServiceRemoveGroupMemberProcedure,
+		}
+	})
+	agentServiceSetGroupCoordinatorSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("SetGroupCoordinator"),
+			Procedure:  AgentServiceSetGroupCoordinatorProcedure,
+		}
+	})
+	agentServiceSendGroupMessageSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("SendGroupMessage"),
+			Procedure:  AgentServiceSendGroupMessageProcedure,
+		}
+	})
 	agentServiceStateSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -636,6 +721,27 @@ type AgentServiceClient interface {
 	// ListChannels publishes which channels the discovered extensions publish to, so a client
 	// can offer "follow this repository's tags" instead of asking for a pattern.
 	ListChannels(context.Context, *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error)
+	// ---- groups ----
+	//
+	// A group is a NAMED SET OF SESSIONS THAT CAN SEE EACH OTHER. It answers one question — "who else
+	// is here" — and nothing else: the messages themselves still travel over channels, so a group is a
+	// directory plus a fan-out address rather than a second message store.
+	//
+	// MEMBERSHIP IS THE ONLY PERMISSION. Every call below requires the caller's session to be IN the
+	// group; a non-member gets NOT_FOUND rather than PERMISSION_DENIED, because distinguishing the two
+	// would let any session enumerate every group in the tenant.
+	CreateGroup(context.Context, *v1.CreateGroupRequest) (*v1.CreateGroupResponse, error)
+	ListGroups(context.Context, *v1.ListGroupsRequest) (*v1.ListGroupsResponse, error)
+	GetGroup(context.Context, *v1.GetGroupRequest) (*v1.GetGroupResponse, error)
+	UpdateGroup(context.Context, *v1.UpdateGroupRequest) (*v1.UpdateGroupResponse, error)
+	DeleteGroup(context.Context, *v1.DeleteGroupRequest) (*v1.DeleteGroupResponse, error)
+	AddGroupMember(context.Context, *v1.AddGroupMemberRequest) (*v1.AddGroupMemberResponse, error)
+	RemoveGroupMember(context.Context, *v1.RemoveGroupMemberRequest) (*v1.RemoveGroupMemberResponse, error)
+	SetGroupCoordinator(context.Context, *v1.SetGroupCoordinatorRequest) (*v1.SetGroupCoordinatorResponse, error)
+	// Send a message FROM A USER to a group. It is delivered to the COORDINATOR only; the coordinator
+	// decides how to split the work and addresses members itself with `mail-send`. "@" in this design
+	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
+	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -824,6 +930,27 @@ type AgentServiceHandler interface {
 	// ListChannels publishes which channels the discovered extensions publish to, so a client
 	// can offer "follow this repository's tags" instead of asking for a pattern.
 	ListChannels(context.Context, *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error)
+	// ---- groups ----
+	//
+	// A group is a NAMED SET OF SESSIONS THAT CAN SEE EACH OTHER. It answers one question — "who else
+	// is here" — and nothing else: the messages themselves still travel over channels, so a group is a
+	// directory plus a fan-out address rather than a second message store.
+	//
+	// MEMBERSHIP IS THE ONLY PERMISSION. Every call below requires the caller's session to be IN the
+	// group; a non-member gets NOT_FOUND rather than PERMISSION_DENIED, because distinguishing the two
+	// would let any session enumerate every group in the tenant.
+	CreateGroup(context.Context, *v1.CreateGroupRequest) (*v1.CreateGroupResponse, error)
+	ListGroups(context.Context, *v1.ListGroupsRequest) (*v1.ListGroupsResponse, error)
+	GetGroup(context.Context, *v1.GetGroupRequest) (*v1.GetGroupResponse, error)
+	UpdateGroup(context.Context, *v1.UpdateGroupRequest) (*v1.UpdateGroupResponse, error)
+	DeleteGroup(context.Context, *v1.DeleteGroupRequest) (*v1.DeleteGroupResponse, error)
+	AddGroupMember(context.Context, *v1.AddGroupMemberRequest) (*v1.AddGroupMemberResponse, error)
+	RemoveGroupMember(context.Context, *v1.RemoveGroupMemberRequest) (*v1.RemoveGroupMemberResponse, error)
+	SetGroupCoordinator(context.Context, *v1.SetGroupCoordinatorRequest) (*v1.SetGroupCoordinatorResponse, error)
+	// Send a message FROM A USER to a group. It is delivered to the COORDINATOR only; the coordinator
+	// decides how to split the work and addresses members itself with `mail-send`. "@" in this design
+	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
+	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -884,6 +1011,15 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceSubscribeChannelSpec(), Handler: adapter.subscribeChannel},
 		connect.Method{Spec: agentServiceUnsubscribeChannelSpec(), Handler: adapter.unsubscribeChannel},
 		connect.Method{Spec: agentServiceListChannelsSpec(), Handler: adapter.listChannels},
+		connect.Method{Spec: agentServiceCreateGroupSpec(), Handler: adapter.createGroup},
+		connect.Method{Spec: agentServiceListGroupsSpec(), Handler: adapter.listGroups},
+		connect.Method{Spec: agentServiceGetGroupSpec(), Handler: adapter.getGroup},
+		connect.Method{Spec: agentServiceUpdateGroupSpec(), Handler: adapter.updateGroup},
+		connect.Method{Spec: agentServiceDeleteGroupSpec(), Handler: adapter.deleteGroup},
+		connect.Method{Spec: agentServiceAddGroupMemberSpec(), Handler: adapter.addGroupMember},
+		connect.Method{Spec: agentServiceRemoveGroupMemberSpec(), Handler: adapter.removeGroupMember},
+		connect.Method{Spec: agentServiceSetGroupCoordinatorSpec(), Handler: adapter.setGroupCoordinator},
+		connect.Method{Spec: agentServiceSendGroupMessageSpec(), Handler: adapter.sendGroupMessage},
 		connect.Method{Spec: agentServiceStateSpec(), Handler: adapter.state},
 		connect.Method{Spec: agentServiceMailboxSpec(), Handler: adapter.mailbox},
 		connect.Method{Spec: agentServiceUpdateSettingsSpec(), Handler: adapter.updateSettings},
@@ -1080,6 +1216,42 @@ func (UnimplementedAgentServiceHandler) UnsubscribeChannel(context.Context, *v1.
 
 func (UnimplementedAgentServiceHandler) ListChannels(context.Context, *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListChannels is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) CreateGroup(context.Context, *v1.CreateGroupRequest) (*v1.CreateGroupResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.CreateGroup is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListGroups(context.Context, *v1.ListGroupsRequest) (*v1.ListGroupsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListGroups is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) GetGroup(context.Context, *v1.GetGroupRequest) (*v1.GetGroupResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.GetGroup is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) UpdateGroup(context.Context, *v1.UpdateGroupRequest) (*v1.UpdateGroupResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.UpdateGroup is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) DeleteGroup(context.Context, *v1.DeleteGroupRequest) (*v1.DeleteGroupResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.DeleteGroup is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) AddGroupMember(context.Context, *v1.AddGroupMemberRequest) (*v1.AddGroupMemberResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.AddGroupMember is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) RemoveGroupMember(context.Context, *v1.RemoveGroupMemberRequest) (*v1.RemoveGroupMemberResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.RemoveGroupMember is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) SetGroupCoordinator(context.Context, *v1.SetGroupCoordinatorRequest) (*v1.SetGroupCoordinatorResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.SetGroupCoordinator is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.SendGroupMessage is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) State(context.Context, *v1.StateRequest) (*v1.StateResponse, error) {
@@ -1397,6 +1569,78 @@ func (c *agentServiceClient) UnsubscribeChannel(ctx context.Context, req *v1.Uns
 func (c *agentServiceClient) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) (*v1.ListChannelsResponse, error) {
 	var res v1.ListChannelsResponse
 	if err := c.client.CallUnary(ctx, agentServiceListChannelsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) CreateGroup(ctx context.Context, req *v1.CreateGroupRequest) (*v1.CreateGroupResponse, error) {
+	var res v1.CreateGroupResponse
+	if err := c.client.CallUnary(ctx, agentServiceCreateGroupSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListGroups(ctx context.Context, req *v1.ListGroupsRequest) (*v1.ListGroupsResponse, error) {
+	var res v1.ListGroupsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListGroupsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) GetGroup(ctx context.Context, req *v1.GetGroupRequest) (*v1.GetGroupResponse, error) {
+	var res v1.GetGroupResponse
+	if err := c.client.CallUnary(ctx, agentServiceGetGroupSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) UpdateGroup(ctx context.Context, req *v1.UpdateGroupRequest) (*v1.UpdateGroupResponse, error) {
+	var res v1.UpdateGroupResponse
+	if err := c.client.CallUnary(ctx, agentServiceUpdateGroupSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) DeleteGroup(ctx context.Context, req *v1.DeleteGroupRequest) (*v1.DeleteGroupResponse, error) {
+	var res v1.DeleteGroupResponse
+	if err := c.client.CallUnary(ctx, agentServiceDeleteGroupSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) AddGroupMember(ctx context.Context, req *v1.AddGroupMemberRequest) (*v1.AddGroupMemberResponse, error) {
+	var res v1.AddGroupMemberResponse
+	if err := c.client.CallUnary(ctx, agentServiceAddGroupMemberSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) RemoveGroupMember(ctx context.Context, req *v1.RemoveGroupMemberRequest) (*v1.RemoveGroupMemberResponse, error) {
+	var res v1.RemoveGroupMemberResponse
+	if err := c.client.CallUnary(ctx, agentServiceRemoveGroupMemberSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) SetGroupCoordinator(ctx context.Context, req *v1.SetGroupCoordinatorRequest) (*v1.SetGroupCoordinatorResponse, error) {
+	var res v1.SetGroupCoordinatorResponse
+	if err := c.client.CallUnary(ctx, agentServiceSetGroupCoordinatorSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) SendGroupMessage(ctx context.Context, req *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error) {
+	var res v1.SendGroupMessageResponse
+	if err := c.client.CallUnary(ctx, agentServiceSendGroupMessageSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1918,6 +2162,114 @@ func (h agentServiceHandler) listChannels(ctx context.Context, _ connect.Spec, s
 		return err
 	}
 	res, err := h.svc.ListChannels(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) createGroup(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateGroupRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateGroup(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listGroups(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListGroupsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListGroups(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) getGroup(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetGroupRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetGroup(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) updateGroup(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UpdateGroupRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.UpdateGroup(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) deleteGroup(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeleteGroupRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeleteGroup(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) addGroupMember(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.AddGroupMemberRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.AddGroupMember(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) removeGroupMember(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RemoveGroupMemberRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.RemoveGroupMember(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) setGroupCoordinator(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SetGroupCoordinatorRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SetGroupCoordinator(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) sendGroupMessage(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SendGroupMessageRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SendGroupMessage(ctx, &req)
 	if err != nil {
 		return err
 	}

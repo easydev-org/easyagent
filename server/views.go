@@ -26,7 +26,6 @@ func sessionToMsg(s store.Session, status string) *agentv1.Session {
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
 		Locale:           s.Locale,
-		Group:            s.Group,
 		MessageSeq:       int32(s.MessageSeq),
 		UnreadCount:      int32(unread(s)),
 		Status:           status,

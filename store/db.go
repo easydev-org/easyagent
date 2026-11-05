@@ -72,7 +72,7 @@ func (d *DB) Migrate() error {
 		&Session{}, &Message{}, &Part{},
 		&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
 		&BundledTodo{}, &AdminToken{}, &SessionToken{},
-		&SessionGrant{},
+		&SessionGrant{}, &Group{}, &GroupMember{},
 	); err != nil {
 		return err
 	}

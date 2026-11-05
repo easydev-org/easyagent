@@ -35,10 +35,8 @@ type Deps interface {
 	IngestBlob(tenant, session, name string, data []byte) (code, mime, displayName string, err error)
 
 	// --- sessions ---
-	SessionGroup(tenant, sid string) string
 	SessionExists(tenant, sid string) bool
 	SessionTip(tenant, sid string) string
-	SessionsInGroup(tenant, group string) []string
 	ForkSession(tenant, parent, child string) error
 	DeleteSessionRow(tenant, sid string) error
 	DeleteSessionMailbox(tenant, sid string) error
@@ -51,8 +49,44 @@ type Deps interface {
 	// MessageParts returns the ordered parts for the given message ids.
 	MessageParts(tenant string, ids []string) []MessagePartRow
 
+	// --- groups ---
+	//
+	// READ ONLY. A group is created and edited by a person through the console; the bundled tools can
+	// only ask what a session is part of and who else is in it. There is deliberately no
+	// CreateGroup/AddGroupMember here — an extension that could assemble a set of sessions would be
+	// choosing its own collaborators.
+	GroupsOfSession(tenant, session string) []GroupRow
+	IsGroupMember(tenant, group, session string) bool
+	GroupMembers(tenant, group string) []string
+	GroupCoordinator(tenant, group string) (string, error)
+	// IsGroupMemberOfAny reports whether a session is in ANY group, which is how `delegate` enforces
+	// one level: a worker placed in a group cannot create a second group of its own.
+	IsGroupMemberOfAny(tenant, session string) bool
+	/**
+	 * CreateGroupForSession makes `group` with `coordinator` as its coordinator and `member` as its only
+	 * member.
+	 *
+	 * THE ONLY group-creating capability an extension has, and it is narrow on purpose: it cannot add
+	 * anyone beyond the two sessions named, and it cannot touch a group it did not create. Permission
+	 * `group.create` gates it further — without the grant the call never reaches this method.
+	 */
+	CreateGroupForSession(tenant, group, coordinator string) error
+	/**
+	 * PublishGroupMessage addresses one member of a group.
+	 *
+	 * IT GOES THROUGH THE GROUP'S CHANNEL, not a mailbox: the subscriber's pattern decides who hears
+	 * it, so a session that is not in the group cannot receive it no matter who calls this.
+	 */
+	PublishGroupMessage(tenant, group, from, to, text string) error
+
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error
+}
+
+// GroupRow is one group as the tools see it: a name and how many sessions are in it.
+type GroupRow struct {
+	Name    string
+	Members int
 }
 
 // ChainEntry is one message in a chain walk.

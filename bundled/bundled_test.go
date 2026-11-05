@@ -60,10 +60,17 @@ func (d *stubDeps) SessionTip(_ string, sid string) string {
 	}
 	return ""
 }
-func (d *stubDeps) SessionsInGroup(string, string) []string   { return nil }
-func (d *stubDeps) ForkSession(string, string, string) error  { return nil }
-func (d *stubDeps) DeleteSessionRow(string, string) error     { return nil }
-func (d *stubDeps) DeleteSessionMailbox(string, string) error { return nil }
+func (d *stubDeps) SubsessionsOf(string, string) []string                            { return nil }
+func (d *stubDeps) GroupsOfSession(string, string) []GroupRow                        { return nil }
+func (d *stubDeps) IsGroupMember(string, string, string) bool                        { return false }
+func (d *stubDeps) GroupMembers(string, string) []string                             { return nil }
+func (d *stubDeps) GroupCoordinator(string, string) (string, error)                  { return "", nil }
+func (d *stubDeps) IsGroupMemberOfAny(string, string) bool                           { return false }
+func (d *stubDeps) CreateGroupForSession(string, string, string) error               { return nil }
+func (d *stubDeps) PublishGroupMessage(string, string, string, string, string) error { return nil }
+func (d *stubDeps) ForkSession(string, string, string) error                         { return nil }
+func (d *stubDeps) DeleteSessionRow(string, string) error                            { return nil }
+func (d *stubDeps) DeleteSessionMailbox(string, string) error                        { return nil }
 func (d *stubDeps) PublishMailbox(_, session string, _ mailbox.Type, _ any, _ string) error {
 	d.mails = append(d.mails, session)
 	return nil
@@ -99,7 +106,7 @@ func TestManifestToolsAndNoTimeWait(t *testing.T) {
 	if names["time-wait"] {
 		t.Error("time-wait must NOT be in the Go bundled extension")
 	}
-	for _, want := range []string{"todo-write", "image-generate", "audio-transcribe", "tts-generate", "subsession-create", "mail-send"} {
+	for _, want := range []string{"todo-write", "image-generate", "audio-transcribe", "tts-generate", "delegate", "group-list", "group-members", "group-send"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -167,17 +174,29 @@ func TestExecuteTodoWriteAndUnknown(t *testing.T) {
 	}
 }
 
-func TestMailSendDelivers(t *testing.T) {
+/**
+ * THERE IS NO DIRECT MESSAGING ANY MORE.
+ *
+ * `mail-send` delivered to a session's mailbox with nothing recording that the two sessions were
+ * related: unaddressable from outside, invisible to anyone else, and a second routing rule next to the
+ * channel one. It was replaced by `group-send`, which only reaches a member of a group the caller
+ * coordinates — so the group IS the relation, and the subscription decides delivery.
+ *
+ * This asserts the removal. A leftover handler would be a hole in the rule "every session-to-session
+ * message goes through a group", and the model would find it.
+ */
+func TestNoDirectMessagingTool(t *testing.T) {
 	d := &stubDeps{}
 	e, err := New(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := e.Execute(context.Background(), "t1", "parent", "c4", "mail-send", `{"to":"child","text":"hi"}`)
-	if err != nil {
-		t.Fatal(err)
+	for name := range e.handlers {
+		if name == "mail-send" || name == "subsession-create" {
+			t.Errorf("handler %q still exists; session-to-session messaging must go through a group", name)
+		}
 	}
-	if out.Content == "" || len(d.mails) != 1 || d.mails[0] != "child" {
-		t.Errorf("mail-send: out=%q mails=%v", out.Content, d.mails)
+	if _, err := e.Execute(context.Background(), "t1", "parent", "c4", "mail-send", `{"to":"child","text":"hi"}`); err == nil {
+		t.Error("mail-send still executes")
 	}
 }

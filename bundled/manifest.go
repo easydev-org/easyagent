@@ -22,6 +22,23 @@ type manifestTool struct {
 	Descriptions   map[string]string `yaml:"descriptions"`
 	InputSchema    map[string]any    `yaml:"input_schema"`
 	RequiredConfig []string          `yaml:"required_config"`
+	/**
+	 * Permission keys the tool needs before it may run.
+	 *
+	 * IT WAS NOT PARSED BEFORE, and that mattered once a tool started requiring one: a YAML key the
+	 * struct does not know is silently dropped, so `requires: [group.create]` would have declared
+	 * nothing and the tool would have been callable by anyone. The requirement has to survive this
+	 * layer or it does not exist.
+	 */
+	Requires []string `yaml:"requires"`
+}
+
+// manifestPermission is one declared permission.
+type manifestPermission struct {
+	Key          string            `yaml:"key"`
+	Label        string            `yaml:"label"`
+	Descriptions map[string]string `yaml:"descriptions"`
+	Risk         string            `yaml:"risk"`
 }
 
 type manifestConfig struct {
@@ -37,10 +54,11 @@ type manifestConfig struct {
 }
 
 type manifestDoc struct {
-	ID      string           `yaml:"id"`
-	Version string           `yaml:"version"`
-	Tools   []manifestTool   `yaml:"tools"`
-	Config  []manifestConfig `yaml:"config"`
+	ID          string               `yaml:"id"`
+	Version     string               `yaml:"version"`
+	Tools       []manifestTool       `yaml:"tools"`
+	Config      []manifestConfig     `yaml:"config"`
+	Permissions []manifestPermission `yaml:"permissions"`
 }
 
 // Manifest is the parsed bundled-extension manifest.
@@ -48,6 +66,9 @@ type Manifest struct {
 	ID     string
 	Tools  []agent.ToolDef
 	Config []ConfigKnob
+	// Permissions are the grants this extension can require. A tool's `requires` naming a key that is
+	// not declared here is unusable: the console has nothing to offer the user, so nobody can grant it.
+	Permissions []PermissionDecl
 }
 
 // ConfigKnob is one declared config knob.
@@ -80,6 +101,12 @@ func ParseManifest() (Manifest, error) {
 			Descriptions:   t.Descriptions,
 			InputSchema:    t.InputSchema,
 			RequiredConfig: t.RequiredConfig,
+			Requires:       t.Requires,
+		})
+	}
+	for _, p := range doc.Permissions {
+		m.Permissions = append(m.Permissions, PermissionDecl{
+			Key: p.Key, Label: p.Label, Descriptions: p.Descriptions, Risk: p.Risk,
 		})
 	}
 	for _, c := range doc.Config {

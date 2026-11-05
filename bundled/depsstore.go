@@ -2,14 +2,15 @@ package bundled
 
 import (
 	"context"
-
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	"strings"
+	"time"
+
+	"github.com/easydev-org/easybus-sdk/mailbox"
 
 	"github.com/easydev-org/easyagent/agent"
 	"github.com/easydev-org/easyagent/llm"
@@ -26,6 +27,14 @@ type StoreDeps struct {
 	BlobPutFn func(ctx context.Context, tenant, code string, data []byte) error
 	// Config resolves a tenant config knob (the agent's `cfg` KV view).
 	ConfigFn func(tenant, key string) (string, bool)
+	/**
+	 * ChannelFn publishes one message onto a channel.
+	 *
+	 * A FUNCTION RATHER THAN A BUS INTERFACE because that is all the tools need: publish and let the
+	 * subscription decide who hears it. Handing them the bus would also hand them the ability to decide
+	 * recipients, which is exactly the second routing rule this design removes.
+	 */
+	ChannelFn func(tenant, channel, topic string, payload any, source string) error
 	/**
 	 * ExtConfigFn reads an EXTENSION-SCOPED knob.
 	 *
@@ -153,15 +162,6 @@ func (d *StoreDeps) IngestBlob(tenant, session, name string, data []byte) (strin
 	return code, mime, name, nil
 }
 
-// SessionGroup implements Deps.
-func (d *StoreDeps) SessionGroup(tenant, sid string) string {
-	s, ok, _ := d.DB.GetSession(tenant, sid)
-	if !ok {
-		return ""
-	}
-	return s.Group
-}
-
 // SessionExists implements Deps.
 func (d *StoreDeps) SessionExists(tenant, sid string) bool {
 	ok, _ := d.DB.SessionExists(tenant, sid)
@@ -172,16 +172,6 @@ func (d *StoreDeps) SessionExists(tenant, sid string) bool {
 func (d *StoreDeps) SessionTip(tenant, sid string) string {
 	t, _ := d.DB.SessionTip(tenant, sid)
 	return t
-}
-
-// SessionsInGroup implements Deps.
-func (d *StoreDeps) SessionsInGroup(tenant, group string) []string {
-	rows, _ := d.DB.Children(tenant, group)
-	out := make([]string, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, r.Name)
-	}
-	return out
 }
 
 // ForkSession implements Deps (O(1) fork: copy inheritable cols, share the tip).
@@ -196,7 +186,7 @@ func (d *StoreDeps) ForkSession(tenant, parent, child string) error {
 	return d.DB.CreateSession(tenant, store.SessionInput{
 		Name: child, Model: p.Model, Variant: p.Variant, Preset: p.Preset,
 		TipID: p.TipID, SystemPrompt: p.SystemPrompt, MaxTurns: p.MaxTurns,
-		Locale: p.Locale, Group: parent, // group = parent's name
+		Locale: p.Locale,
 	})
 }
 
@@ -208,6 +198,83 @@ func (d *StoreDeps) DeleteSessionRow(tenant, sid string) error {
 // DeleteSessionMailbox implements Deps.
 func (d *StoreDeps) DeleteSessionMailbox(tenant, sid string) error {
 	return d.DB.DeleteSession(tenant, sid) // DeleteSession already purges the queue
+}
+
+// GroupCoordinator implements Deps.
+func (d *StoreDeps) GroupCoordinator(tenant, group string) (string, error) {
+	return d.DB.GroupCoordinator(tenant, group)
+}
+
+// GroupsOfSession implements Deps.
+func (d *StoreDeps) GroupsOfSession(tenant, session string) []GroupRow {
+	groups, err := d.DB.GroupsOfSession(tenant, session)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(groups))
+	for _, g := range groups {
+		names = append(names, g.Name)
+	}
+	counts, _ := d.DB.GroupMemberCounts(tenant, names)
+	out := make([]GroupRow, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, GroupRow{Name: g.Name, Members: counts[g.Name]})
+	}
+	return out
+}
+
+// IsGroupMember implements Deps.
+func (d *StoreDeps) IsGroupMember(tenant, group, session string) bool {
+	ok, err := d.DB.IsGroupMember(tenant, group, session)
+	return err == nil && ok
+}
+
+// GroupMembers implements Deps: the sessions in a group.
+func (d *StoreDeps) GroupMembers(tenant, group string) []string {
+	out, err := d.DB.SessionsInGroupNames(tenant, group, "")
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// IsGroupMemberOfAny implements Deps.
+func (d *StoreDeps) IsGroupMemberOfAny(tenant, session string) bool {
+	groups, err := d.DB.GroupsOfSession(tenant, session)
+	return err == nil && len(groups) > 0
+}
+
+/**
+ * CreateGroupForSession implements Deps: a group with exactly two people in it.
+ *
+ * IT CANNOT CREATE ANY OTHER SHAPE. The signature takes one coordinator and derives the group from
+ * one worker, so an extension cannot build a group with three members or invite a session it did not
+ * fork — the narrow shape IS the restriction. `group.create` gates the call before it gets here.
+ */
+func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return d.DB.CreateGroup(tenant, store.Group{
+		Name: group, CreatedBy: "session:" + coordinator, CreatedAt: now, UpdatedAt: now,
+	}, coordinator, nil, now)
+}
+
+/**
+ * PublishGroupMessage implements Deps.
+ *
+ * IT PUBLISHES TO THE GROUP'S CHANNEL. The recipient hears it because its subscription pattern
+ * matches — not because this code decided to deliver it. That is the property that makes "no direct
+ * messaging" true rather than a rule everyone has to remember: there is no argument a caller can pass
+ * that reaches a session which is not subscribed.
+ */
+func (d *StoreDeps) PublishGroupMessage(tenant, group, from, to, text string) error {
+	if d.ChannelFn == nil {
+		return fmt.Errorf("publish group message: channels are not configured")
+	}
+	// THE SUBJECT IS BUILT HERE FROM LITERALS, not from agentbus constants: bundled is imported BY
+	// agentbus, so naming them would be an import cycle. The two strings are pinned by a test in
+	// agentbus that asserts its own constants match, so a rename on one side cannot drift silently.
+	return d.ChannelFn(tenant, groupChannel, groupTopicTo(group, to),
+		map[string]any{"group": group, "from": from, "text": text}, "session:"+from)
 }
 
 // PublishMailbox implements Deps.
@@ -336,4 +403,17 @@ func sniffMime(b []byte) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+/**
+ * The group channel's wire shape, duplicated from agentbus because bundled is imported BY agentbus.
+ *
+ * THEY ARE PINNED BY A TEST in agentbus that fails if either side renames: a silent divergence here
+ * would publish to a subject nobody subscribes to, and the symptom — a message that is sent and never
+ * arrives — is the exact failure this whole design exists to make impossible.
+ */
+const groupChannel = "group"
+
+func groupTopicTo(group, session string) string {
+	return group + ".to." + session
 }

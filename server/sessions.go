@@ -74,7 +74,7 @@ func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRe
 	}
 	in := store.SessionInput{
 		Name: req.Name, Model: model, Variant: req.Variant, Preset: preset,
-		Group: req.Group, Locale: req.Locale,
+		Locale: req.Locale,
 	}
 	if err := s.db.CreateSession(tenant, in); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -113,6 +113,12 @@ func (s *Server) DeleteSession(ctx context.Context, req *agentv1.DeleteSessionRe
 	if err := s.db.DeleteSession(tenant, req.Id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// A DELETED SESSION MUST NOT STAY IN A GROUP'S MEMBER LIST. The group would keep advertising a
+	// session that cannot answer, and nothing would ever remove it — the row's owner is gone.
+	//
+	// Best-effort: the session is already gone, and failing here would report an error for a deletion
+	// that succeeded. A leftover row is repaired by the next group read, which cannot resolve it.
+	_ = s.db.DeleteGroupMemberships(tenant, req.Id)
 	s.lifecycleFire(ctx, tenant, "deleted", req.Id, map[string]any{"kind": "deleted", "tenant": tenant, "session_name": req.Id})
 	return &agentv1.DeleteSessionResponse{Ok: true}, nil
 }
@@ -133,7 +139,7 @@ func (s *Server) Rename(ctx context.Context, req *agentv1.RenameRequest) (*agent
 	in := store.SessionInput{
 		Name: req.Name, Model: old.Model, Variant: old.Variant, Preset: old.Preset,
 		TipID: old.TipID, SystemPrompt: old.SystemPrompt, MaxTurns: old.MaxTurns,
-		Locale: old.Locale, Group: old.Group,
+		Locale: old.Locale,
 	}
 	if err := s.db.CreateSession(tenant, in); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -141,6 +147,12 @@ func (s *Server) Rename(ctx context.Context, req *agentv1.RenameRequest) (*agent
 	if err := s.db.DeleteSession(tenant, req.Id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// A DELETED SESSION MUST NOT STAY IN A GROUP'S MEMBER LIST. The group would keep advertising a
+	// session that cannot answer, and nothing would ever remove it — the row's owner is gone.
+	//
+	// Best-effort: the session is already gone, and failing here would report an error for a deletion
+	// that succeeded. A leftover row is repaired by the next group read, which cannot resolve it.
+	_ = s.db.DeleteGroupMemberships(tenant, req.Id)
 	s.lifecycleFire(ctx, tenant, "renamed", req.Name, map[string]any{"kind": "renamed", "tenant": tenant, "from": req.Id, "to": req.Name})
 	row, _, _ := s.db.GetSession(tenant, req.Name)
 	return &agentv1.RenameResponse{Session: sessionToMsg(*row, "idle")}, nil
@@ -279,7 +291,7 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	in := store.SessionInput{
 		Name: req.Name, Model: parent.Model, Variant: parent.Variant, Preset: preset,
 		TipID: forkTip, SystemPrompt: parent.SystemPrompt, MaxTurns: parent.MaxTurns,
-		Locale: parent.Locale, Group: parent.Group,
+		Locale: parent.Locale,
 	}
 	if err := s.db.CreateSession(tenant, in); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
