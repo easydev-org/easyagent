@@ -1721,15 +1721,24 @@ func (x *WatchSessionsResponse) GetSnapshot() bool {
 	return false
 }
 
-// A file reference (attachment). `mime` is NOT carried: the agent DERIVES the
-// content type from the bytes at ingest time (magic-byte sniff + media probe)
-// and resolves it from the stored record, so a caller can neither mislabel a
-// file nor need a content-type library of its own.
+// A file reference (attachment).
+//
+// `code` IS THE IDENTITY, and it is the only field a CALLER supplies. Name and size are advisory (a caller may
+// label a upload it is about to make); mime and size are AUTHORITATIVE only when the SERVER fills them in.
 type FileRef struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Size          int32                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Code  string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
+	Name  string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Size  int32                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	//*
+	// The content type, AS DERIVED BY THE AGENT from the bytes at ingest (magic-byte sniff + media probe).
+	//
+	// SERVER-FILLED, IGNORED ON INPUT. It used to be absent from this message on the reasoning that the agent
+	// can always derive it — which is true, but a RENDERER has to decide between an image, a player and a file
+	// chip before it can draw anything, and asking the server again for something it already knows made every
+	// attachment render as a generic file. The value is not the caller's to choose; it is the agent's answer,
+	// handed back so the console does not have to guess or ask twice.
+	Mime          string `protobuf:"bytes,4,opt,name=mime,proto3" json:"mime,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1783,6 +1792,13 @@ func (x *FileRef) GetSize() int32 {
 		return x.Size
 	}
 	return 0
+}
+
+func (x *FileRef) GetMime() string {
+	if x != nil {
+		return x.Mime
+	}
+	return ""
 }
 
 type ListSessionsRequest struct {
@@ -11302,11 +11318,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x15WatchSessionsResponse\x12+\n" +
 	"\aupserts\x18\x01 \x03(\v2\x11.agent.v1.SessionR\aupserts\x12\x18\n" +
 	"\aremoved\x18\x02 \x03(\tR\aremoved\x12\x1a\n" +
-	"\bsnapshot\x18\x03 \x01(\bR\bsnapshot\"E\n" +
+	"\bsnapshot\x18\x03 \x01(\bR\bsnapshot\"Y\n" +
 	"\aFileRef\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x05R\x04size\"\x15\n" +
+	"\x04size\x18\x03 \x01(\x05R\x04size\x12\x12\n" +
+	"\x04mime\x18\x04 \x01(\tR\x04mime\"\x15\n" +
 	"\x13ListSessionsRequest\"E\n" +
 	"\x14ListSessionsResponse\x12-\n" +
 	"\bsessions\x18\x01 \x03(\v2\x11.agent.v1.SessionR\bsessions\"\xd5\x01\n" +

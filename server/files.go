@@ -76,6 +76,37 @@ func (s *Server) GetFile(ctx context.Context, req *agentv1.GetFileRequest) (*age
 	return &agentv1.GetFileResponse{Data: data, Name: rec.Name, Mime: rec.Mime}, nil
 }
 
+/**
+ * fillFileRef completes a reference from the stored blob.
+ *
+ * THE CALLER SUPPLIES A CODE; everything else is what the agent DERIVED from the bytes at ingest. A name the
+ * caller gave is kept (it is a label, and the sender may have a better one); a size or type the caller gave is
+ * not trusted, because only the blob record was derived from the bytes themselves.
+ *
+ * A MISSING BLOB LEAVES THE REFERENCE AS IT IS: the message is still worth sending, and the reference is still
+ * an honest record of what was attached. The caller decides what to do about the absence, not this function.
+ *
+ * IT EXISTS BECAUSE THE SAME FILL WAS WRITTEN TWICE AND MISSED ONCE. `mailbox.FileRef` always had a `Mime`
+ * field and no producer ever set it, so every attachment — session or group — folded with an empty type and
+ * the console drew a generic file chip for pictures and recordings alike.
+ */
+func fillFileRef(db *store.DB, tenant string, r *agentv1.FileRef) *agentv1.FileRef {
+	if r == nil || r.GetCode() == "" {
+		return r
+	}
+	rec, ok, err := db.FileByCode(tenant, r.GetCode())
+	if err != nil || !ok {
+		return r
+	}
+	// THE TYPE AND SIZE ARE THE BLOB'S, always: a caller cannot know them, and a guess would render wrong.
+	r.Mime = rec.Mime
+	r.Size = int32(rec.Size)
+	if r.GetName() == "" {
+		r.Name = rec.Name
+	}
+	return r
+}
+
 // GetFileMeta returns a file's metadata (identity + media facts).
 func (s *Server) GetFileMeta(ctx context.Context, req *agentv1.GetFileMetaRequest) (*agentv1.GetFileMetaResponse, error) {
 	rec, ok, err := s.db.FileByCode(tenantOf(ctx), req.Code)

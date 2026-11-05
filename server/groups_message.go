@@ -53,6 +53,9 @@ type groupAttachment struct {
 	Code string `json:"code"`
 	Name string `json:"name"`
 	Size int32  `json:"size"`
+	// Mime is the type the agent derived at ingest, kept here so the console does not have to ask again for
+	// every message it draws.
+	Mime string `json:"mime"`
 }
 
 // groupAttachmentsToRefs decodes the stored JSON into wire refs.
@@ -71,7 +74,9 @@ func groupAttachmentsToRefs(raw string) []*agentv1.FileRef {
 	}
 	out := make([]*agentv1.FileRef, 0, len(stored))
 	for _, a := range stored {
-		out = append(out, &agentv1.FileRef{Code: a.Code, Name: a.Name, Size: a.Size})
+		out = append(out, &agentv1.FileRef{
+			Code: a.Code, Name: a.Name, Size: a.Size, Mime: a.Mime,
+		})
 	}
 	return out
 }
@@ -81,13 +86,23 @@ func groupAttachmentsToRefs(raw string) []*agentv1.FileRef {
 // A REF WITH NO CODE NAMES NOTHING, so storing it would put a broken tile in a transcript that every member
 // reads. Dropping it is the only honest option: the alternative is a picture that never loads and no way to
 // tell whether the sender or the reader is at fault.
-func groupAttachmentsFromRefs(refs []*agentv1.FileRef) string {
+func (s *Server) groupAttachmentsFromRefs(tenant string, refs []*agentv1.FileRef) string {
 	stored := make([]groupAttachment, 0, len(refs))
 	for _, r := range refs {
 		if r.GetCode() == "" {
 			continue
 		}
-		stored = append(stored, groupAttachment{Code: r.GetCode(), Name: r.GetName(), Size: r.GetSize()})
+		a := groupAttachment{Code: r.GetCode(), Name: r.GetName(), Size: r.GetSize()}
+		// THE TYPE AND SIZE COME FROM THE STORED BLOB, NOT FROM THE CALLER — see fillFileRef.
+		filled := fillFileRef(s.db, tenant, r)
+		a.Mime = filled.GetMime()
+		if a.Size == 0 {
+			a.Size = filled.GetSize()
+		}
+		if a.Name == "" {
+			a.Name = filled.GetName()
+		}
+		stored = append(stored, a)
 	}
 	if len(stored) == 0 {
 		return ""
@@ -123,7 +138,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
 	}
 	text = strings.TrimSpace(text)
-	attachmentsJSON := groupAttachmentsFromRefs(attachments)
+	attachmentsJSON := s.groupAttachmentsFromRefs(tenant, attachments)
 	/**
 	 * A MESSAGE NEEDS SOMETHING IN IT, not necessarily words.
 	 *

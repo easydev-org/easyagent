@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect/v2"
 
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
+	"github.com/easydev-org/easyagent/store"
 )
 
 /**
@@ -391,5 +392,114 @@ func TestGroupMessageDropsAnEmptyAttachmentRef(t *testing.T) {
 	}
 	if len(sent.Message.Attachments) != 1 || sent.Message.Attachments[0].Code != "file-2" {
 		t.Fatalf("attachments = %+v, want only file-2", sent.Message.Attachments)
+	}
+}
+
+/**
+ * AN ATTACHMENT CARRIES THE TYPE THE AGENT DERIVED, NOT WHAT THE SENDER CLAIMED.
+ *
+ * A renderer has to decide between an image, a player and a file chip before it can draw anything. With no
+ * type on the reference it answered "file" for everything, so a picture posted to a group showed as a generic
+ * document — while the blob store had known it was `image/png` all along.
+ *
+ * THE CALLER CANNOT CHOOSE THE TYPE, and that is the point: the bytes were sniffed at ingest, and the record
+ * that describes them is the only authority. A `FileRef` on input carries a code; name, size and type are
+ * filled from the stored blob.
+ */
+func TestGroupMessageAttachmentTypeComesFromTheBlob(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A blob the agent ingested, so its type was derived from the bytes.
+	const code = "blob-1"
+	if _, err := db.UpsertFile(store.AgentFile{
+		Code: code, Tenant: "acme", SHA256: "sha-blob-1",
+		Name: "shot.png", Mime: "image/png", Size: 2048,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The caller sends ONLY a code, and a misleading name for good measure.
+	sent, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group:       "g",
+		Attachments: []*agentv1.FileRef{{Code: code, Name: "not-a-picture.bin"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent.Message.Attachments) != 1 {
+		t.Fatalf("attachments = %+v", sent.Message.Attachments)
+	}
+	a := sent.Message.Attachments[0]
+	if a.Mime != "image/png" {
+		t.Errorf("mime = %q, want the type derived at ingest", a.Mime)
+	}
+	if a.Size != 2048 {
+		t.Errorf("size = %d, want it filled from the blob", a.Size)
+	}
+	// A NAME THE SENDER GAVE IS KEPT: it is a label, and the sender may have a better one than the file's.
+	if a.Name != "not-a-picture.bin" {
+		t.Errorf("name = %q, the sender's label was overwritten", a.Name)
+	}
+
+	// AND IT SURVIVES A RELOAD, because the type is stored with the message rather than re-derived per reader.
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Messages) != 1 || list.Messages[0].Attachments[0].Mime != "image/png" {
+		t.Fatalf("reloaded attachment lost its type: %+v", list.Messages)
+	}
+}
+
+/**
+ * A SESSION MESSAGE'S ATTACHMENT KEEPS ITS TYPE TOO — the same defect, on the older path.
+ *
+ * `mailbox.FileRef` has always had a `Mime` field and nothing ever set it, so an attachment folded into a
+ * session's history as an untyped file and the console drew a generic chip instead of a picture. Nothing
+ * noticed because the deployed tenant had never posted one.
+ *
+ * BOTH PATHS NOW USE fillFileRef, so this pins the rule once for both.
+ */
+func TestFileRefIsFilledFromTheBlob(t *testing.T) {
+	_, db, _ := newTestServerWith(t, nil)
+	if _, err := db.UpsertFile(store.AgentFile{
+		Code: "blob-2", Tenant: "acme", SHA256: "sha-blob-2",
+		Name: "voice.wav", Mime: "audio/wav", Size: 4096,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only a code: everything else is filled from the blob.
+	got := fillFileRef(db, "acme", &agentv1.FileRef{Code: "blob-2"})
+	if got.GetMime() != "audio/wav" {
+		t.Errorf("mime = %q, want audio/wav from the blob", got.GetMime())
+	}
+	if got.GetSize() != 4096 {
+		t.Errorf("size = %d, want it filled from the blob", got.GetSize())
+	}
+	if got.GetName() != "voice.wav" {
+		t.Errorf("name = %q, want it filled from the blob when the caller gave none", got.GetName())
+	}
+
+	// A NAME THE CALLER GAVE IS KEPT: it is a label, and the sender may have a better one.
+	named := fillFileRef(db, "acme", &agentv1.FileRef{Code: "blob-2", Name: "my note.wav"})
+	if named.GetName() != "my note.wav" {
+		t.Errorf("name = %q, the caller's label was overwritten", named.GetName())
+	}
+
+	// AN UNKNOWN BLOB CHANGES NOTHING: the reference is still an honest record of what was attached.
+	unknown := fillFileRef(db, "acme", &agentv1.FileRef{Code: "nope", Name: "x"})
+	if unknown.GetMime() != "" || unknown.GetName() != "x" {
+		t.Errorf("an unknown blob was guessed at: %+v", unknown)
 	}
 }

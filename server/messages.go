@@ -109,8 +109,10 @@ func (s *Server) Prompt(ctx context.Context, req *agentv1.PromptRequest, stream 
 	// because an extension may send fields this agent does not know; what the AGENT writes is this.
 	payload := mailbox.Body{MessageID: messageID, Text: req.Prompt}
 	for _, a := range req.Attachments {
+		// THE TYPE AND SIZE COME FROM THE STORED BLOB, NOT FROM THE CALLER — see fillFileRef.
+		ref := fillFileRef(s.db, tenant, a)
 		payload.FileRefs = append(payload.FileRefs, mailbox.FileRef{
-			Code: a.Code, Name: a.Name, Size: int(a.Size),
+			Code: ref.GetCode(), Name: ref.GetName(), Mime: ref.GetMime(), Size: int(ref.GetSize()),
 		})
 	}
 	// The same publish path every other producer uses: enqueue (durable) then signal
