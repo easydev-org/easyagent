@@ -272,24 +272,12 @@ func TestGroupSendTargetsFollowTheRole(t *testing.T) {
 		t.Errorf("a user's message went to %v, want the coordinator", res.DeliveredTo)
 	}
 
-	// ...AND MAY NAME MEMBERS, who are heard ALONGSIDE the coordinator rather than instead of it. A user
-	// pointing at the person who owns a service should reach that person without the coordinator having to
-	// relay and paraphrase.
-	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+	// ...AND CANNOT NAME MEMBERS. A user writes to the GROUP; its coordinator decides who works on what. Letting
+	// a user reach past it would make the coordinator optional at the moment its judgement is the point.
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
 		Group: "g", Text: "w1, look at this", To: []string{w1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.DeliveredTo) != 2 {
-		t.Fatalf("delivered to %v, want the named member and the coordinator", res.DeliveredTo)
-	}
-	got := map[string]bool{}
-	for _, d := range res.DeliveredTo {
-		got[d] = true
-	}
-	if !got[w1] || !got[coord] {
-		t.Errorf("delivered to %v, want both w1 and the coordinator", res.DeliveredTo)
+	}); err == nil {
+		t.Error("a user addressed a member directly")
 	}
 
 	// A MEMBER reports upward. Naming anyone — even the coordinator — is refused, because the default is

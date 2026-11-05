@@ -124,35 +124,47 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 }
 
 /**
- * resolveGroupRecipients answers who hears a message, and refuses the whole request if any name is wrong.
+ * resolveGroupRecipients answers who hears a message.
  *
- * THE DEFAULT RECIPIENT DEPENDS ON THE SENDER, and `to` EXTENDS it rather than replacing it:
+ * A USER CANNOT ADDRESS MEMBERS. A user writes to the GROUP, and the group's user-facing side is its
+ * coordinator: the coordinator reads the message, decides how to split the work, and addresses members itself.
+ * That is what the role means, and letting a user reach past it would make the coordinator optional at exactly
+ * the moment its judgement is the point.
  *
- *	from a user          → the coordinator, PLUS any members the user names
- *	from a member        → the coordinator (a report; naming a peer would be peer-to-peer, which the group
- *	                       design refuses)
- *	from the coordinator → exactly the names given; empty means the message is recorded but nobody is woken
+ * `to` therefore belongs to sessions alone:
  *
- * A USER MAY ADDRESS MEMBERS. The coordinator is what a group's user-facing side means, but a user pointing at
- * "the person who owns that service" should reach that person: requiring the coordinator to relay would add a
- * turn and a paraphrase between two people who already know what they mean. The coordinator still hears it,
- * because it is the one that knows what work is outstanding.
+ *	from a user          → the coordinator
+ *	from a member        → the coordinator (a report; naming a peer would be peer-to-peer, which is refused)
+ *	from the coordinator → exactly the names given; empty means the message is recorded and nobody is woken
  *
- * DUPLICATES COLLAPSE and the order is preserved: a session named twice is a mistake, not an instruction to
- * deliver twice.
+ * EVERY NAME IS VALIDATED BEFORE ANYTHING IS STORED OR SENT. A half-addressed message is worse than a refused
+ * one: some members work on something the others never saw, and the transcript does not say which.
+ *
+ * DUPLICATES COLLAPSE and the order is preserved.
  */
 func (s *Server) resolveGroupRecipients(tenant, group, sender, coordinator string, to []string) ([]string, error) {
-	// A MEMBER REPORTS UPWARD. It may not name anyone — not the coordinator (the default already reaches it)
-	// and certainly not a peer. Reported rather than ignored: silently dropping the field would let a caller
-	// believe it had addressed someone.
-	if sender != "" && sender != coordinator && len(to) > 0 {
+	// A USER ADDRESSES THE GROUP, NOT ITS MEMBERS.
+	if sender == "" {
+		if len(to) > 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				"a user's message goes to the group; only its coordinator may address members")
+		}
+		return []string{coordinator}, nil
+	}
+
+	// A MEMBER REPORTS UPWARD and may name nobody. Reported rather than ignored: silently dropping the field
+	// would let a caller believe it had addressed someone.
+	if sender != coordinator && len(to) > 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			"a member may only address the coordinator, which it does by posting without `to`")
 	}
+	if sender != coordinator {
+		return []string{coordinator}, nil
+	}
 
-	seen := make(map[string]bool, len(to)+1)
-	out := make([]string, 0, len(to)+1)
-
+	// THE COORDINATOR ADDRESSES THE MEMBERS IT NAMES.
+	seen := make(map[string]bool, len(to))
+	out := make([]string, 0, len(to))
 	for _, raw := range to {
 		m := strings.TrimSpace(raw)
 		if m == "" || seen[m] {
@@ -160,7 +172,7 @@ func (s *Server) resolveGroupRecipients(tenant, group, sender, coordinator strin
 		}
 		if m == coordinator {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
-				"the coordinator cannot be addressed; it always hears the group")
+				"the coordinator cannot address itself; a message it posts is recorded for the group")
 		}
 		member, err := s.db.IsGroupMember(tenant, group, m)
 		if err != nil {
@@ -172,12 +184,6 @@ func (s *Server) resolveGroupRecipients(tenant, group, sender, coordinator strin
 		}
 		seen[m] = true
 		out = append(out, m)
-	}
-
-	// THE COORDINATOR HEARS A GROUP MESSAGE FROM ANYONE BUT ITSELF. A coordinator's own post is recorded for
-	// the transcript and reaches only whom it names, because it is the one doing the addressing.
-	if sender != coordinator {
-		out = append(out, coordinator)
 	}
 	return out, nil
 }
