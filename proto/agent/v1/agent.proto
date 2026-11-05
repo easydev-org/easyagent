@@ -780,14 +780,82 @@ message RemoveGroupMemberResponse {
   repeated GroupMember members = 2;
 }
 
+/**
+ * One message in a group's transcript.
+ *
+ * A GROUP HAS ITS OWN TRANSCRIPT. It is not an index over member sessions: a member that joins later can
+ * read what was said before it arrived, a reader can follow the conversation without opening every
+ * session, and a message outlives the departure of everyone who saw it.
+ */
+message GroupMessage {
+  string id = 1;
+  string group = 2;
+  // The sending session's ID, or EMPTY when a user posted it through the console.
+  string sender = 3;
+  // The sender's display name at the time of sending; survives a later rename so the transcript reads as
+  // it did.
+  string sender_name = 4;
+  string body = 5;
+  // Position within this group, starting at 1, strictly increasing. The resume cursor for WatchGroup.
+  int64 seq = 6;
+  string created_at = 7;
+}
+
 message SendGroupMessageRequest {
   string group = 1;
   string text = 2;
+  /**
+   * The sending session's ID, or empty for a user.
+   *
+   * IT IS CHECKED AGAINST MEMBERSHIP. A session that is not in the group cannot post to it, which keeps the
+   * transcript from accepting messages from anyone who guesses the name.
+   */
+  string sender = 3;
 }
 message SendGroupMessageResponse {
-  // The sessions the message was delivered to. Exactly one — the coordinator — but returned as a
-  // list so the answer stays truthful if the routing rule ever changes.
-  repeated string delivered_to = 1;
+  // The message as stored, including the sequence it was assigned.
+  GroupMessage message = 1;
+  // The sessions it was delivered to. A user's message goes to the COORDINATOR only; a coordinator's goes
+  // to the addressed member. Returned as a list so the answer stays truthful if the routing rule changes.
+  repeated string delivered_to = 2;
+}
+
+message ListGroupMessagesRequest {
+  string group = 1;
+  // EXCLUSIVE cursor: return messages with seq GREATER than this. 0 starts from the beginning.
+  int64 after_seq = 2;
+  // Page size; 0 means the server default.
+  int32 limit = 3;
+  // The asking session. When set, it must be a member — a non-member gets NOT_FOUND, not an empty page.
+  string session = 4;
+}
+message ListGroupMessagesResponse {
+  repeated GroupMessage messages = 1;
+  // The group's current highest seq, so a client can start a watch from here without a second call.
+  int64 latest_seq = 2;
+}
+
+/**
+ * WatchGroup streams a group's transcript as it grows.
+ *
+ * `since_seq` is the RESUME CURSOR, not a filter: the server first sends the retained messages after it and
+ * then follows live. Unlike WatchSession it does not reimplement replay — the messages are in a table, so
+ * "everything after N" is a query and the live part is a notification.
+ */
+message WatchGroupRequest {
+  string group = 1;
+  // Send messages with seq GREATER than this first, then follow live. 0 = from the beginning.
+  int64 since_seq = 2;
+  // The asking session. When set, it must be a member.
+  string session = 3;
+}
+message WatchGroupResponse {
+  // "ready" once the stream is open, then "message" per GroupMessage.
+  string event = 1;
+  GroupMessage message = 2;
+  // The group's highest seq when the stream opened; a client that started at 0 and only wants live traffic
+  // can jump here.
+  int64 latest_seq = 3;
 }
 
 message StateRequest { string id = 1; }
@@ -1190,6 +1258,10 @@ service AgentService {
   // decides how to split the work and addresses members itself with `group-send`. "@" in this design
   // means "the coordinator writes to that session's mailbox", not a string this layer parses.
   rpc SendGroupMessage(SendGroupMessageRequest) returns (SendGroupMessageResponse);
+  // A group's transcript, oldest first, paged by `after_seq`.
+  rpc ListGroupMessages(ListGroupMessagesRequest) returns (ListGroupMessagesResponse);
+  // Live transcript: retained messages after `since_seq`, then everything new.
+  rpc WatchGroup(WatchGroupRequest) returns (stream WatchGroupResponse);
   rpc State(StateRequest) returns (StateResponse);
   rpc Mailbox(MailboxRequest) returns (MailboxResponse);
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);

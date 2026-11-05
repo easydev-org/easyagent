@@ -62,18 +62,18 @@ func (d *stubDeps) SessionTip(_ string, sid string) string {
 	}
 	return ""
 }
-func (d *stubDeps) GroupsOfSession(string, string) ([]GroupRow, error)               { return nil, nil }
-func (d *stubDeps) IsGroupMember(string, string, string) bool                        { return false }
-func (d *stubDeps) GroupMembers(string, string) []string                             { return nil }
-func (d *stubDeps) GroupCoordinator(string, string) (string, error)                  { return "", nil }
-func (d *stubDeps) CoordinatedGroup(string, string) (string, error)                  { return "", nil }
-func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string               { return "" }
-func (d *stubDeps) AddGroupMemberOnly(string, string, string) error                  { return nil }
-func (d *stubDeps) RevokeCapability(string, string, string, string) error            { return nil }
-func (d *stubDeps) CreateGroupForSession(string, string, string) error               { return nil }
-func (d *stubDeps) PublishGroupMessage(string, string, string, string, string) error { return nil }
-func (d *stubDeps) ForkSession(string, string, string, []string) (string, error)     { return "", nil }
-func (d *stubDeps) DeleteSessionRow(string, string) error                            { return nil }
+func (d *stubDeps) GroupsOfSession(string, string) ([]GroupRow, error)              { return nil, nil }
+func (d *stubDeps) IsGroupMember(string, string, string) bool                       { return false }
+func (d *stubDeps) GroupMembers(string, string) []string                            { return nil }
+func (d *stubDeps) GroupCoordinator(string, string) (string, error)                 { return "", nil }
+func (d *stubDeps) CoordinatedGroup(string, string) (string, error)                 { return "", nil }
+func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string              { return "" }
+func (d *stubDeps) AddGroupMemberOnly(string, string, string) error                 { return nil }
+func (d *stubDeps) RevokeCapability(string, string, string, string) error           { return nil }
+func (d *stubDeps) CreateGroupForSession(string, string, string) error              { return nil }
+func (d *stubDeps) PostGroupMessage(string, string, string, []string, string) error { return nil }
+func (d *stubDeps) ForkSession(string, string, string, []string) (string, error)    { return "", nil }
+func (d *stubDeps) DeleteSessionRow(string, string) error                           { return nil }
 func (d *stubDeps) MessageChain(_ string, tip string, _ int) []ChainEntry {
 	if d.chainByTip != nil {
 		return d.chainByTip[tip]

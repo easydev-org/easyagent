@@ -3,89 +3,274 @@ package server
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect/v2"
 
-	"github.com/easydev-org/easybus-sdk/bus"
-
 	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
+	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easyagent/store"
 )
 
 /**
- * Sending a user message to a group.
+ * A group's transcript: store, then deliver.
  *
- * IT PUBLISHES TO THE GROUP'S CHANNEL rather than writing to the coordinator's mailbox directly.
+ * THE ORDER IS THE POINT. A message is written to the group BEFORE it is published to a channel, so a
+ * reader who receives it can always find it, and a delivery failure leaves a message that exists and was
+ * never heard rather than one that was heard and never existed. The second kind cannot be repaired; the
+ * first can be re-published.
  *
- * That is the whole reason a group is a channel and not an address book with a delivery method: the
- * message goes through `Distributor`, so waking, queueing while busy, and survival across a restart
- * are answered by the SAME code that handles every other channel message. A direct mailbox write would
- * have been a second delivery path with its own answers to those questions, and the first time the two
- * disagreed would be the first time a coordinator was silently not woken.
- *
- * THE CHANNEL CARRIES THE MESSAGE; THE SUBSCRIPTION DECIDES WHO HEARS IT. The coordinator's pattern is
- * `<group>.>`, so `in` reaches it and the members' patterns (`<group>.to.>`) do not match `in` at all.
- * No recipient list is computed here — that is the point of a pub/sub address.
+ * IT IS THE OPPOSITE OF WHAT A CHANNEL ALONE GIVES. Publishing first meant a message could reach a member
+ * while no transcript held it — and a member reading its own history later would find nothing to point at.
  */
+
+func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
+	return &agentv1.GroupMessage{
+		Id:         m.ID,
+		Group:      m.Group,
+		Sender:     m.Sender,
+		SenderName: m.SenderName,
+		Body:       m.Body,
+		Seq:        m.Seq,
+		CreatedAt:  m.CreatedAt,
+	}
+}
+
+/**
+ * sendGroupMessage is the one path a message takes into a group.
+ *
+ * POSTING IS MEMBERSHIP-GATED FOR SESSIONS. An empty `sender` means a user (the console), which is allowed
+ * for any group the caller can see; a session must be a member, so a guessed group name cannot inject a
+ * message into a transcript its own reader will trust.
+ *
+ * THE RECIPIENT IS DECIDED BY THE ROLE, not by the caller:
+ *
+ *	from a user        → the COORDINATOR, who splits the work
+ *	from the coordinator → the addressed member
+ *	from a member      → the coordinator (a report)
+ *
+ * That rule lives here rather than in the channel layer because it needs the membership table, and the
+ * channel layer deliberately knows nothing about groups.
+ */
+func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, text string) (*agentv1.GroupMessage, []string, error) {
+	name := strings.TrimSpace(group)
+	if name == "" {
+		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "message text is required")
+	}
+	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
+	} else if !ok {
+		return nil, nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+	}
+
+	coordinator, err := s.db.GroupCoordinator(tenant, name)
+	if err != nil {
+		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	if coordinator == "" {
+		return nil, nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Sprintf("group %q has no coordinator, so there is nowhere for this message to go", name))
+	}
+
+	senderName := ""
+	var delivered []string
+	if sender == "" {
+		// A USER POST: reaches the coordinator.
+		delivered = []string{coordinator}
+	} else {
+		isMember, err := s.db.IsGroupMember(tenant, name, sender)
+		if err != nil {
+			return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
+		}
+		if !isMember {
+			// NOT_FOUND, not PERMISSION_DENIED: the same answer as a group that does not exist, so this
+			// cannot be used to discover which groups a tenant has.
+			return nil, nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+		}
+		if row, ok, _ := s.db.GetSession(tenant, sender); ok {
+			senderName = row.Name
+		}
+		if sender == coordinator {
+			// A COORDINATOR POSTING TO ITS GROUP goes to the members it names; with none named, to nobody.
+			// It is stored either way — the transcript records what was said, even if nobody was addressed.
+			delivered = nil
+		} else {
+			// A MEMBER POSTING REPORTS TO THE COORDINATOR.
+			delivered = []string{coordinator}
+		}
+	}
+
+	msg, err := s.db.AppendGroupMessage(store.GroupMessage{
+		ID:         newUUID(),
+		Tenant:     tenant,
+		Group:      name,
+		Sender:     sender,
+		SenderName: senderName,
+		Body:       text,
+	}, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+
+	s.publishGroupMessage(ctx, tenant, name, sender, delivered, msg)
+	return groupMessageToMsg(msg), delivered, nil
+}
+
+/**
+ * publishGroupMessage delivers a stored message to its recipients.
+ *
+ * A FAILURE HERE IS LOGGED, NOT RETURNED. The message is already in the transcript, which is the
+ * authoritative record — failing the call would tell the sender nothing was said when it was. A delivery
+ * that did not happen is a recipient that was not woken, which the next page or watch will show them.
+ */
+func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender string, to []string, msg store.GroupMessage) {
+	if s.chanPub == nil || len(to) == 0 {
+		return
+	}
+	payload := map[string]any{
+		"group": group, "from": sender, "text": msg.Body,
+		"message_id": msg.ID, "seq": msg.Seq,
+	}
+	for _, rcpt := range to {
+		if err := s.chanPub.PublishChannel(ctx, tenant, agentbus.GroupChannel,
+			agentbus.GroupMemberTopic(group, rcpt), payload, "group:"+group); err != nil {
+			slog.Warn("group delivery failed",
+				"tenant", tenant, "group", group, "recipient", rcpt, "err", err)
+		}
+	}
+}
+
+// SendGroupMessage posts a message into a group.
 func (s *Server) SendGroupMessage(ctx context.Context, req *agentv1.SendGroupMessageRequest) (*agentv1.SendGroupMessageResponse, error) {
+	msg, delivered, err := s.sendGroupMessage(ctx, tenantOf(ctx),
+		req.GetGroup(), req.GetSender(), req.GetText())
+	if err != nil {
+		return nil, err
+	}
+	return &agentv1.SendGroupMessageResponse{Message: msg, DeliveredTo: delivered}, nil
+}
+
+/**
+ * ListGroupMessages returns one page of a group's transcript.
+ *
+ * A SESSION MUST BE A MEMBER; a user may read any group. `latest_seq` rides along so a client can start a
+ * watch from "now" without a second call.
+ */
+func (s *Server) ListGroupMessages(ctx context.Context, req *agentv1.ListGroupMessagesRequest) (*agentv1.ListGroupMessagesResponse, error) {
 	tenant := tenantOf(ctx)
 	name := strings.TrimSpace(req.GetGroup())
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
 	}
-	text := strings.TrimSpace(req.GetText())
-	if text == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "message text is required")
-	}
-
 	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
+	if sid := req.GetSession(); sid != "" {
+		member, err := s.db.IsGroupMember(tenant, name, sid)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error())
+		}
+		if !member {
+			return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+		}
+	}
 
-	coordinator, err := s.db.GroupCoordinator(tenant, name)
+	rows, err := s.db.ListGroupMessages(tenant, name, req.GetAfterSeq(), int(req.GetLimit()))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	if coordinator == "" {
-		// A group with no coordinator routes nowhere. Saying so is better than accepting the message
-		// and publishing it to a channel nobody follows: the user would see a sent message and no
-		// reply, with nothing to point at.
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Sprintf("group %q has no coordinator, so there is nowhere for this message to go", name))
-	}
-	if s.chanPub == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			"channels are not configured on this deployment, so a group has no route")
-	}
-
-	// THE PUBLISHER IS THE TENANT, NOT THE CALLER'S SESSION: a group message comes from the user, and
-	// attributing it to a session would make the coordinator believe another session wrote to it.
-	if err := s.chanPub.PublishChannel(ctx, tenant, agentbus.GroupChannel,
-		agentbus.GroupUserTopic(name), groupMessageBody(name, text), "user:group"); err != nil {
+	latest, err := s.db.LatestGroupSeq(tenant, name)
+	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-
-	return &agentv1.SendGroupMessageResponse{DeliveredTo: []string{coordinator}}, nil
+	out := make([]*agentv1.GroupMessage, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, groupMessageToMsg(r))
+	}
+	return &agentv1.ListGroupMessagesResponse{Messages: out, LatestSeq: latest}, nil
 }
 
 /**
- * groupMessageBody is the payload the coordinator receives.
+ * WatchGroup streams a group's transcript.
  *
- * THE GROUP NAME IS IN THE PAYLOAD, not only in the source field. The model reads the rendered text;
- * a source string it never sees would tell it nothing, and "a user wrote to some group" is not enough
- * to answer with.
+ * REPLAY IS A QUERY, NOT A REPLAYED LOG. The messages are rows, so "everything after N" is one SELECT; only
+ * the live part needs a subscription. That is why this does not need the session-event machinery: there is
+ * no chain to reconstruct and no frame sequence to resume, just a table and a cursor.
+ *
+ * THE POLL IS DELIBERATE, AND IT IS THE SIMPLEST THING THAT IS CORRECT. A push notification would need the
+ * subscriber to be registered before the insert and to survive a replica restart; the table is already the
+ * authoritative record, so reading it on a tick means a missed notification costs one interval rather than
+ * a lost message. The tick is short because a group is interactive.
  */
-func groupMessageBody(group, text string) map[string]any {
-	return map[string]any{"group": group, "text": text}
+func (s *Server) WatchGroup(ctx context.Context, req *agentv1.WatchGroupRequest, stream agentv1connect.AgentServiceWatchGroupServerStream) error {
+	tenant := tenantOf(ctx)
+	name := strings.TrimSpace(req.GetGroup())
+	if name == "" {
+		return connect.NewError(connect.CodeInvalidArgument, "group name is required")
+	}
+	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+		return connect.NewError(connect.CodeInternal, err.Error())
+	} else if !ok {
+		return connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+	}
+	if sid := req.GetSession(); sid != "" {
+		member, err := s.db.IsGroupMember(tenant, name, sid)
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, err.Error())
+		}
+		if !member {
+			return connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+		}
+	}
+
+	latest, err := s.db.LatestGroupSeq(tenant, name)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err.Error())
+	}
+	if err := stream.Send(&agentv1.WatchGroupResponse{Event: "ready", LatestSeq: latest}); err != nil {
+		return err
+	}
+
+	cursor := req.GetSinceSeq()
+	for {
+		rows, err := s.db.ListGroupMessages(tenant, name, cursor, 100)
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, err.Error())
+		}
+		for _, r := range rows {
+			if err := stream.Send(&agentv1.WatchGroupResponse{
+				Event: "message", Message: groupMessageToMsg(r),
+			}); err != nil {
+				return err
+			}
+			cursor = r.Seq
+		}
+		if len(rows) > 0 {
+			// MORE MAY HAVE ARRIVED while this page was being sent; loop again immediately rather than
+			// waiting a tick for the rest.
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(s.groupWatchInterval()):
+		}
+	}
 }
 
-// channelsForGroup is the narrow view of the bus this file needs, so a test can supply a fake.
-type channelsForGroup interface {
-	PublishChannel(ctx context.Context, tenant, channel, topic string, payload any, source string) error
+// groupWatchInterval is the poll period for WatchGroup; a var so a test can shorten it.
+func (s *Server) groupWatchInterval() time.Duration {
+	if s.groupWatchTick > 0 {
+		return s.groupWatchTick
+	}
+	return 500 * time.Millisecond
 }
-
-var _ channelsForGroup = (*bus.Channels)(nil)

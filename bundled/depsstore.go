@@ -280,22 +280,53 @@ func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) err
 }
 
 /**
- * PublishGroupMessage implements Deps.
+ * PostGroupMessage implements Deps: store the message, then deliver it.
  *
- * IT PUBLISHES TO THE GROUP'S CHANNEL. The recipient hears it because its subscription pattern
- * matches — not because this code decided to deliver it. That is the property that makes "no direct
- * messaging" true rather than a rule everyone has to remember: there is no argument a caller can pass
- * that reaches a session which is not subscribed.
+ * THE ORDER IS THE CONTRACT. A message exists in the transcript before any member hears it, so a recipient
+ * can always find what it received and a reader who joins later can see it. Delivering first would allow a
+ * message to be heard and never recorded — the one failure that cannot be repaired, because there is
+ * nothing to point at.
+ *
+ * A DELIVERY FAILURE IS RETURNED, because at this layer the caller is a tool whose whole job that message
+ * was. The message is already stored either way; the error says the recipients were not reached.
  */
-func (d *StoreDeps) PublishGroupMessage(tenant, group, from, to, text string) error {
+func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, text string) error {
+	msg, err := d.DB.AppendGroupMessage(store.GroupMessage{
+		ID: newGroupMessageID(), Tenant: tenant, Group: group,
+		Sender: from, SenderName: d.sessionName(tenant, from), Body: text,
+	}, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
 	if d.ChannelFn == nil {
-		return fmt.Errorf("publish group message: channels are not configured")
+		return fmt.Errorf("deliver group message: channels are not configured")
 	}
 	// THE SUBJECT IS BUILT HERE FROM LITERALS, not from agentbus constants: bundled is imported BY
 	// agentbus, so naming them would be an import cycle. The two strings are pinned by a test in
 	// agentbus that asserts its own constants match, so a rename on one side cannot drift silently.
-	return d.ChannelFn(tenant, groupChannel, groupTopicTo(group, to),
-		map[string]any{"group": group, "from": from, "text": text}, "session:"+from)
+	var firstErr error
+	for _, rcpt := range to {
+		payload := map[string]any{
+			"group": group, "from": from, "text": text,
+			"message_id": msg.ID, "seq": msg.Seq,
+		}
+		if err := d.ChannelFn(tenant, groupChannel, groupTopicTo(group, rcpt), payload, "session:"+from); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// sessionName returns a session's display label, or "" when it cannot be read. The label is cosmetic in a
+// transcript, so a read failure must not fail the post.
+func (d *StoreDeps) sessionName(tenant, sid string) string {
+	if sid == "" {
+		return ""
+	}
+	if row, ok, _ := d.DB.GetSession(tenant, sid); ok {
+		return row.Name
+	}
+	return ""
 }
 
 // PublishMailbox implements Deps.
@@ -434,6 +465,15 @@ func sniffMime(b []byte) string {
  * arrives — is the exact failure this whole design exists to make impossible.
  */
 const groupChannel = "group"
+
+// newGroupMessageID is a fresh id for one transcript row.
+func newGroupMessageID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("gm-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
 
 func groupTopicTo(group, session string) string {
 	return group + ".to." + session

@@ -135,7 +135,7 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
 	}
 
 	desc := strings.TrimSpace(strArg(args, "description"))
-	if err := e.deps.PublishGroupMessage(tenant, group, session, worker, s.brief(session, group, task)); err != nil {
+	if err := e.deps.PostGroupMessage(tenant, group, session, []string{worker}, s.brief(session, group, task)); err != nil {
 		return agent.ToolOutcome{}, err
 	}
 
@@ -224,7 +224,7 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 	}
 
 	for _, rcpt := range to {
-		if err := e.deps.PublishGroupMessage(tenant, group, session, rcpt, text); err != nil {
+		if err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text); err != nil {
 			return agent.ToolOutcome{}, err
 		}
 	}

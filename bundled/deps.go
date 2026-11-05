@@ -83,12 +83,16 @@ type Deps interface {
 	 */
 	CreateGroupForSession(tenant, group, coordinator string) error
 	/**
-	 * PublishGroupMessage addresses one member of a group.
+	 * PostGroupMessage STORES a message in the group's transcript and then delivers it to the named members.
 	 *
-	 * IT GOES THROUGH THE GROUP'S CHANNEL, not a mailbox: the subscriber's pattern decides who hears
-	 * it, so a session that is not in the group cannot receive it no matter who calls this.
+	 * STORE FIRST, THEN DELIVER. A recipient that receives a message can always find it in the transcript;
+	 * the reverse order would let a message be heard and never recorded, which is the failure that cannot be
+	 * repaired afterwards.
+	 *
+	 * DELIVERY STILL GOES THROUGH THE GROUP'S CHANNEL, so the subscriber's pattern decides who hears it and
+	 * a session outside the group cannot receive it whoever calls this.
 	 */
-	PublishGroupMessage(tenant, group, from, to, text string) error
+	PostGroupMessage(tenant, group, from string, to []string, text string) error
 
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error

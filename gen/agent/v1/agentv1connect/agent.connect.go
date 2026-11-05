@@ -107,6 +107,11 @@ const (
 	// AgentServiceSendGroupMessageProcedure is the procedure name of the AgentService's
 	// SendGroupMessage RPC.
 	AgentServiceSendGroupMessageProcedure = "/agent.v1.AgentService/SendGroupMessage"
+	// AgentServiceListGroupMessagesProcedure is the procedure name of the AgentService's
+	// ListGroupMessages RPC.
+	AgentServiceListGroupMessagesProcedure = "/agent.v1.AgentService/ListGroupMessages"
+	// AgentServiceWatchGroupProcedure is the procedure name of the AgentService's WatchGroup RPC.
+	AgentServiceWatchGroupProcedure = "/agent.v1.AgentService/WatchGroup"
 	// AgentServiceStateProcedure is the procedure name of the AgentService's State RPC.
 	AgentServiceStateProcedure = "/agent.v1.AgentService/State"
 	// AgentServiceMailboxProcedure is the procedure name of the AgentService's Mailbox RPC.
@@ -448,6 +453,20 @@ var (
 			Procedure:  AgentServiceSendGroupMessageProcedure,
 		}
 	})
+	agentServiceListGroupMessagesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListGroupMessages"),
+			Procedure:  AgentServiceListGroupMessagesProcedure,
+		}
+	})
+	agentServiceWatchGroupSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeServer,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("WatchGroup"),
+			Procedure:  AgentServiceWatchGroupProcedure,
+		}
+	})
 	agentServiceStateSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -742,6 +761,10 @@ type AgentServiceClient interface {
 	// decides how to split the work and addresses members itself with `group-send`. "@" in this design
 	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
 	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
+	// A group's transcript, oldest first, paged by `after_seq`.
+	ListGroupMessages(context.Context, *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error)
+	// Live transcript: retained messages after `since_seq`, then everything new.
+	WatchGroup(context.Context, *v1.WatchGroupRequest) (AgentServiceWatchGroupClientStream, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -838,6 +861,26 @@ func (s AgentServiceWatchSessionsClientStream) Receive() (*v1.WatchSessionsRespo
 // Close releases the stream's resources. It is idempotent and is typically deferred to clean up a
 // stream abandoned before io.EOF.
 func (s AgentServiceWatchSessionsClientStream) Close() error {
+	return s.stream.Close()
+}
+
+// AgentServiceWatchGroupClientStream is the client stream for the AgentService's WatchGroup RPC.
+type AgentServiceWatchGroupClientStream struct {
+	stream connect.ClientStream
+}
+
+// Receive returns the next response message from the server.
+func (s AgentServiceWatchGroupClientStream) Receive() (*v1.WatchGroupResponse, error) {
+	var res v1.WatchGroupResponse
+	if err := s.stream.Receive(&res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// Close releases the stream's resources. It is idempotent and is typically deferred to clean up a
+// stream abandoned before io.EOF.
+func (s AgentServiceWatchGroupClientStream) Close() error {
 	return s.stream.Close()
 }
 
@@ -951,6 +994,10 @@ type AgentServiceHandler interface {
 	// decides how to split the work and addresses members itself with `group-send`. "@" in this design
 	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
 	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
+	// A group's transcript, oldest first, paged by `after_seq`.
+	ListGroupMessages(context.Context, *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error)
+	// Live transcript: retained messages after `since_seq`, then everything new.
+	WatchGroup(context.Context, *v1.WatchGroupRequest, AgentServiceWatchGroupServerStream) error
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
 	Mailbox(context.Context, *v1.MailboxRequest) (*v1.MailboxResponse, error)
 	UpdateSettings(context.Context, *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error)
@@ -1020,6 +1067,8 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceRemoveGroupMemberSpec(), Handler: adapter.removeGroupMember},
 		connect.Method{Spec: agentServiceSetGroupCoordinatorSpec(), Handler: adapter.setGroupCoordinator},
 		connect.Method{Spec: agentServiceSendGroupMessageSpec(), Handler: adapter.sendGroupMessage},
+		connect.Method{Spec: agentServiceListGroupMessagesSpec(), Handler: adapter.listGroupMessages},
+		connect.Method{Spec: agentServiceWatchGroupSpec(), Handler: adapter.watchGroup},
 		connect.Method{Spec: agentServiceStateSpec(), Handler: adapter.state},
 		connect.Method{Spec: agentServiceMailboxSpec(), Handler: adapter.mailbox},
 		connect.Method{Spec: agentServiceUpdateSettingsSpec(), Handler: adapter.updateSettings},
@@ -1096,6 +1145,21 @@ func (s AgentServiceWatchSessionsServerStream) SendHeaders() error {
 
 // Send sends a response message to the client.
 func (s AgentServiceWatchSessionsServerStream) Send(res *v1.WatchSessionsResponse) error {
+	return s.stream.Send(res)
+}
+
+// AgentServiceWatchGroupServerStream is the server stream for the AgentService's WatchGroup RPC.
+type AgentServiceWatchGroupServerStream struct {
+	stream connect.ServerStream
+}
+
+// SendHeaders flushes the response headers without a message. The first Send does this implicitly.
+func (s AgentServiceWatchGroupServerStream) SendHeaders() error {
+	return s.stream.SendHeaders()
+}
+
+// Send sends a response message to the client.
+func (s AgentServiceWatchGroupServerStream) Send(res *v1.WatchGroupResponse) error {
 	return s.stream.Send(res)
 }
 
@@ -1252,6 +1316,14 @@ func (UnimplementedAgentServiceHandler) SetGroupCoordinator(context.Context, *v1
 
 func (UnimplementedAgentServiceHandler) SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.SendGroupMessage is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListGroupMessages(context.Context, *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListGroupMessages is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) WatchGroup(context.Context, *v1.WatchGroupRequest, AgentServiceWatchGroupServerStream) error {
+	return connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.WatchGroup is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) State(context.Context, *v1.StateRequest) (*v1.StateResponse, error) {
@@ -1644,6 +1716,22 @@ func (c *agentServiceClient) SendGroupMessage(ctx context.Context, req *v1.SendG
 		return nil, err
 	}
 	return &res, nil
+}
+
+func (c *agentServiceClient) ListGroupMessages(ctx context.Context, req *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error) {
+	var res v1.ListGroupMessagesResponse
+	if err := c.client.CallUnary(ctx, agentServiceListGroupMessagesSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) WatchGroup(ctx context.Context, req *v1.WatchGroupRequest) (AgentServiceWatchGroupClientStream, error) {
+	stream, err := c.client.CallServerStream(ctx, agentServiceWatchGroupSpec(), req)
+	if err != nil {
+		return AgentServiceWatchGroupClientStream{}, err
+	}
+	return AgentServiceWatchGroupClientStream{stream: stream}, nil
 }
 
 func (c *agentServiceClient) State(ctx context.Context, req *v1.StateRequest) (*v1.StateResponse, error) {
@@ -2274,6 +2362,26 @@ func (h agentServiceHandler) sendGroupMessage(ctx context.Context, _ connect.Spe
 		return err
 	}
 	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listGroupMessages(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListGroupMessagesRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListGroupMessages(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) watchGroup(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.WatchGroupRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	return h.svc.WatchGroup(ctx, &req, AgentServiceWatchGroupServerStream{stream: stream})
 }
 
 func (h agentServiceHandler) state(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {

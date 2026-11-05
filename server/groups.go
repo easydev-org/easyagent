@@ -307,6 +307,12 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 	if err := s.db.DeleteGroup(tenant, name); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// THE TRANSCRIPT GOES WITH THE GROUP. Left behind, the rows are unreachable through any RPC and grow
+	// forever — and a later group with the same name would inherit a stranger's conversation.
+	if err := s.db.DeleteGroupMessages(tenant, name); err != nil {
+		return nil, connect.NewError(connect.CodeInternal,
+			"group deleted but its transcript remains: "+err.Error())
+	}
 	if s.channels != nil {
 		// A GROUP THAT STILL ROUTES AFTER ITS DELETION IS A LIE THE USER CANNOT SEE: members keep receiving
 		// messages from a group the console says is gone. Reported rather than swallowed; the group rows

@@ -67,6 +67,9 @@ type Server struct {
 	subs SubscriptionStore
 	// chanPub publishes one message onto a channel (nil = a group has no route).
 	chanPub ChannelPublisher
+	// groupWatchTick overrides the WatchGroup poll period; 0 uses the default. Set by tests only — a
+	// production deployment has no reason to change how often a transcript is read.
+	groupWatchTick time.Duration
 	// seedTenant applies deployment-pinned defaults to a fresh tenant.
 	seedTenant func(tenant string)
 
@@ -141,6 +144,8 @@ type Deps struct {
 	// ChannelPublisher publishes group messages onto a channel. nil means a group has no route, which
 	// the group RPCs report rather than silently accepting a message nobody will receive.
 	ChannelPublisher ChannelPublisher
+	// GroupWatchTick overrides the WatchGroup poll period. Tests set it; a deployment has no reason to.
+	GroupWatchTick time.Duration
 	// SeedTenant applies deployment-pinned defaults to a tenant created at runtime. nil means a new
 	// tenant gets no presets, which is what boot-time seeding covers for the known ones.
 	SeedTenant func(tenant string)
@@ -187,7 +192,8 @@ func New(d Deps) *Server {
 		presets: d.Presets, config: d.ConfigKV, runtimeBus: d.Bus, mail: d.Mailbox,
 		tools: d.Tools, bundledTools: d.BundledTools, bundledFields: d.BundledFields,
 		stream: d.Stream, lifecycle: d.Lifecycle,
-		channels: d.Channels, subs: d.Subs, chanPub: d.ChannelPublisher, seedTenant: d.SeedTenant,
+		channels: d.Channels, subs: d.Subs, chanPub: d.ChannelPublisher,
+		groupWatchTick: d.GroupWatchTick, seedTenant: d.SeedTenant,
 		blobStore: d.Blob,
 		blobs:     map[string][]byte{},
 	}

@@ -104,8 +104,10 @@ func (c *chainStub) IsGroupMember(_, group, session string) bool {
 	return false
 }
 
-func (c *chainStub) PublishGroupMessage(_, group, from, to, text string) error {
-	c.published = append(c.published, [3]string{group, to, text})
+func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string) error {
+	for _, rcpt := range to {
+		c.published = append(c.published, [3]string{group, rcpt, text})
+	}
 	return nil
 }
 
