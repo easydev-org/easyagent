@@ -570,7 +570,7 @@ tools:
       required: [text, code]
     required_config: [model.speech_clone]
 
-  # ---- cross-session: subsession (O(1) fork child) + direct messaging ----
+  # ---- cross-session: a group, its coordinator, and the workers in it ----
   - name: group-create
     description: >-
       Create a group with THIS session as its coordinator, or report that one already exists.
@@ -671,7 +671,7 @@ tools:
   # and a session that could assemble one would be able to choose its own collaborators — which is a
   # view of the tenant nobody granted it.
   #
-  # `delegate` ABOVE IS THE ONE EXCEPTION, and it is narrower than it looks: it creates a group whose
+  # `group-create` ABOVE IS THE ONE EXCEPTION, and it is narrower than it looks: it creates a group whose
   # only members are the caller (as coordinator) and one worker it just forked. It cannot add anyone
   # else, and it cannot touch a group it did not create.
   # ---- groups ----

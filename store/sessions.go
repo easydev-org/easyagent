@@ -28,7 +28,7 @@ type SessionInput struct {
 func (d *DB) CreateSession(tenant string, in *SessionInput) error {
 	// EVERY session carries a preset: the UI resolves the system prompt from it,
 	// so an empty preset means "no system prompt". This is the single choke
-	// point for session creation (create / fork / rename / subsession), so
+	// point for session creation (create / fork), so
 	// defaulting here guarantees the invariant for all of them — including a
 	// fork of a legacy row that was itself stored without a preset.
 	if in.Preset == "" {

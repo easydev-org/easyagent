@@ -46,7 +46,7 @@ agent:
   # Auto-resume a turn that ended "length" (truncated) or "retryable"
   # (transient). ON by default (30s); set 0 to disable.
   resume_watch_interval: 30s
-  disabled_tools: []           # e.g. ["bundled.subsession-create"]
+  disabled_tools: []           # e.g. ["bundled.group-create"]
 
 blob:
   backend: ""                  # "" (in-memory) | s3

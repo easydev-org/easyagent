@@ -153,7 +153,7 @@ func run(cfgPath string) error {
 	rtDeps.Config = agent.ConfigStore{C: tenantConfig}
 	seedPresets(presets, tenantConfig, db, cfg)
 	// The in-process bundled extension (Go rewrite of the TS bundled-extension):
-	// it supplies the memory/history/file/web/vision/generation/subsession tools.
+	// it supplies the memory/history/file/web/vision/generation/group tools.
 	// Bound AFTER the bus exists (below): the bundled tools must publish through the SAME path
 	// the channel distributor uses, and the bus is created later in this function. A nil check
 	// here would reintroduce the split this variable exists to remove, so the closure refuses
@@ -210,7 +210,7 @@ func run(cfgPath string) error {
 		 *
 		 * Discovered extensions fill this table from their manifests; `bundled` lives in this process,
 		 * so without this its `requires` named a permission nobody could be offered. The symptom is
-		 * quiet: the delegate tool refuses every call and the grant panel shows nothing to grant.
+		 * quiet: `group-create` refuses every call and the grant panel shows nothing to grant.
 		 */
 		if perms := bundledExt.Permissions(); len(perms) > 0 {
 			exec.WithBundledPermissions(map[string][]bundled.PermissionDecl{bundledExt.Manifest().ID: perms})

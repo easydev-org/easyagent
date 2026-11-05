@@ -210,11 +210,6 @@ func (d *StoreDeps) DeleteSessionRow(tenant, sid string) error {
 	return d.DB.DeleteSession(tenant, sid)
 }
 
-// DeleteSessionMailbox implements Deps.
-func (d *StoreDeps) DeleteSessionMailbox(tenant, sid string) error {
-	return d.DB.DeleteSession(tenant, sid) // DeleteSession already purges the queue
-}
-
 // GroupCoordinator implements Deps.
 func (d *StoreDeps) GroupCoordinator(tenant, group string) (string, error) {
 	return d.DB.GroupCoordinator(tenant, group)
@@ -246,7 +241,7 @@ func (d *StoreDeps) IsGroupMember(tenant, group, session string) bool {
 
 // GroupMembers implements Deps: the sessions in a group.
 func (d *StoreDeps) GroupMembers(tenant, group string) []string {
-	out, err := d.DB.SessionsInGroupNames(tenant, group, "")
+	out, err := d.DB.SessionsInGroupIDs(tenant, group, "")
 	if err != nil {
 		return nil
 	}
@@ -258,50 +253,10 @@ func (d *StoreDeps) CoordinatedGroup(tenant, session string) (string, error) {
 	return d.DB.CoordinatedGroup(tenant, session)
 }
 
-// CoordinatedGroupOrMembership implements Deps.
-func (d *StoreDeps) CoordinatedGroupOrMembership(tenant, session string) string {
-	if g, err := d.DB.CoordinatedGroup(tenant, session); err == nil && g != "" {
-		return g
-	}
-	groups, err := d.DB.GroupsOfSession(tenant, session)
-	if err != nil || len(groups) == 0 {
-		return ""
-	}
-	return groups[0].Name
-}
-
 // AddGroupMemberOnly implements Deps: a plain member, never a coordinator.
 func (d *StoreDeps) AddGroupMemberOnly(tenant, group, session string) error {
 	return d.DB.AddGroupMembers(tenant, group, []string{session},
 		time.Now().UTC().Format(time.RFC3339), "session:spawn")
-}
-
-/**
- * RevokeCapability implements Deps: drop the worker's group.create grant.
- *
- * A FAILED REVOCATION IS NOT IGNORED. A worker that kept the grant could create its own group and
- * recruit, which is the one level this design refuses to allow — so the caller treats an error here as
- * a reason to undo the fork rather than as a warning.
- */
-func (d *StoreDeps) RevokeCapability(tenant, session, extID, capability string) error {
-	grants, err := d.DB.ListGrants(tenant, session)
-	if err != nil {
-		return err
-	}
-	for _, g := range grants {
-		if g.ExtID == extID && g.Capability == capability {
-			if err := d.DB.RevokeGrant(tenant, session, g.ID); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// IsGroupMemberOfAny implements Deps.
-func (d *StoreDeps) IsGroupMemberOfAny(tenant, session string) bool {
-	groups, err := d.DB.GroupsOfSession(tenant, session)
-	return err == nil && len(groups) > 0
 }
 
 /**

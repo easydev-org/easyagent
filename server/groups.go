@@ -105,6 +105,28 @@ func (s *Server) syncGroupSubscriptions(ctx context.Context, tenant, group strin
 	return s.channels.SyncGroup(ctx, tenant, group, bySession, previous)
 }
 
+/**
+ * requireSessionsExist checks that every named session is real, before anything is written.
+ *
+ * IT IS THE SAME RULE IN THREE PLACES — creating a group, adding members, and (in the tool layer) picking
+ * a worker — and it is checked UP FRONT rather than per-row: a member list naming a session that is not
+ * there would show a participant who can never answer, and nothing in the API would ever remove it.
+ */
+func (s *Server) requireSessionsExist(tenant string, sessions []string) error {
+	for _, m := range sessions {
+		if m == "" {
+			continue
+		}
+		if _, ok, err := s.db.GetSession(tenant, m); err != nil {
+			return connect.NewError(connect.CodeInternal, err.Error())
+		} else if !ok {
+			return connect.NewError(connect.CodeNotFound,
+				fmt.Sprintf("session %q does not exist", m))
+		}
+	}
+	return nil
+}
+
 // CreateGroup makes a group and enrolls its members.
 func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupRequest) (*agentv1.CreateGroupResponse, error) {
 	tenant := tenantOf(ctx)
@@ -123,16 +145,8 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 	// a group whose member list silently omits the session the user meant to add. The coordinator is
 	// checked with the rest: it is a member, just one with a different routing role.
 	toCheck := append([]string{coordinator}, req.GetMembers()...)
-	for _, m := range toCheck {
-		if m == "" {
-			continue
-		}
-		if _, ok, err := s.db.GetSession(tenant, m); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err.Error())
-		} else if !ok {
-			return nil, connect.NewError(connect.CodeNotFound,
-				fmt.Sprintf("session %q does not exist", m))
-		}
+	if err := s.requireSessionsExist(tenant, toCheck); err != nil {
+		return nil, err
 	}
 
 	now := nowRFC3339()
@@ -211,11 +225,9 @@ func (s *Server) GetGroup(ctx context.Context, req *agentv1.GetGroupRequest) (*a
 		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
 	}
 
-	g, ok, err := s.db.GetGroup(tenant, name)
-	if err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
-	}
-	if !ok {
+	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
 
@@ -231,17 +243,13 @@ func (s *Server) GetGroup(ctx context.Context, req *agentv1.GetGroupRequest) (*a
 		}
 	}
 
-	members, err := s.db.ListGroupMembers(tenant, name)
+	// THE SAME ARM EVERY OTHER RPC USES, so "the group as it now stands" is assembled in one place and a
+	// change to what a group response carries cannot land in three of four handlers.
+	gm, members, err := s.groupWithMembers(ctx, tenant, name)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
+		return nil, err
 	}
-	out := make([]*agentv1.GroupMember, 0, len(members))
-	for _, m := range members {
-		out = append(out, memberToMsg(m))
-	}
-	return &agentv1.GetGroupResponse{
-		Group: groupToMsg(*g, len(members)), Members: out,
-	}, nil
+	return &agentv1.GetGroupResponse{Group: gm, Members: members}, nil
 }
 
 // UpdateGroup changes the group's picture.
@@ -265,15 +273,11 @@ func (s *Server) UpdateGroup(ctx context.Context, req *agentv1.UpdateGroupReques
 		}
 	}
 
-	g, ok, err := s.db.GetGroup(tenant, name)
+	gm, _, err := s.groupWithMembers(ctx, tenant, name)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
+		return nil, err
 	}
-	if !ok {
-		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
-	}
-	members, _ := s.db.ListGroupMembers(tenant, name)
-	return &agentv1.UpdateGroupResponse{Group: groupToMsg(*g, len(members))}, nil
+	return &agentv1.UpdateGroupResponse{Group: gm}, nil
 }
 
 // DeleteGroup removes a group and its memberships.
@@ -291,7 +295,7 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 	// UNSUBSCRIBE BEFORE THE ROWS GO: the member list is what says WHO to unsubscribe, so reading it
 	// after the delete would find nobody and leave every member still listening to a group that no
 	// longer exists.
-	previous, _ := s.db.SessionsInGroupNames(tenant, name, "")
+	previous, _ := s.db.SessionsInGroupIDs(tenant, name, "")
 	if err := s.db.DeleteGroup(tenant, name); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
@@ -314,25 +318,15 @@ func (s *Server) AddGroupMember(ctx context.Context, req *agentv1.AddGroupMember
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
 
-	// EVERY MEMBER MUST EXIST. A member list naming a session that is not there would show a
-	// participant who can never answer, and nothing would ever remove it.
-	for _, m := range req.GetMembers() {
-		if m == "" {
-			continue
-		}
-		if _, ok, err := s.db.GetSession(tenant, m); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err.Error())
-		} else if !ok {
-			return nil, connect.NewError(connect.CodeNotFound,
-				fmt.Sprintf("session %q does not exist", m))
-		}
+	if err := s.requireSessionsExist(tenant, req.GetMembers()); err != nil {
+		return nil, err
 	}
 
 	addedBy := req.GetAddedBy()
 	if addedBy == "" {
 		addedBy = "user"
 	}
-	previous, _ := s.db.SessionsInGroupNames(tenant, name, "")
+	previous, _ := s.db.SessionsInGroupIDs(tenant, name, "")
 	if err := s.db.AddGroupMembers(tenant, name, req.GetMembers(), nowRFC3339(), addedBy); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}

@@ -739,7 +739,7 @@ type AgentServiceClient interface {
 	RemoveGroupMember(context.Context, *v1.RemoveGroupMemberRequest) (*v1.RemoveGroupMemberResponse, error)
 	SetGroupCoordinator(context.Context, *v1.SetGroupCoordinatorRequest) (*v1.SetGroupCoordinatorResponse, error)
 	// Send a message FROM A USER to a group. It is delivered to the COORDINATOR only; the coordinator
-	// decides how to split the work and addresses members itself with `mail-send`. "@" in this design
+	// decides how to split the work and addresses members itself with `group-send`. "@" in this design
 	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
 	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)
@@ -948,7 +948,7 @@ type AgentServiceHandler interface {
 	RemoveGroupMember(context.Context, *v1.RemoveGroupMemberRequest) (*v1.RemoveGroupMemberResponse, error)
 	SetGroupCoordinator(context.Context, *v1.SetGroupCoordinatorRequest) (*v1.SetGroupCoordinatorResponse, error)
 	// Send a message FROM A USER to a group. It is delivered to the COORDINATOR only; the coordinator
-	// decides how to split the work and addresses members itself with `mail-send`. "@" in this design
+	// decides how to split the work and addresses members itself with `group-send`. "@" in this design
 	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
 	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
 	State(context.Context, *v1.StateRequest) (*v1.StateResponse, error)

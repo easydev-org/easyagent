@@ -52,7 +52,7 @@ func (Group) TableName() string { return "groups" }
  * group reaches:
  *
  *   coordinator  RECEIVES what the user says to the group. It reads the instruction, decides how to
- *                split the work, and hands pieces to individual members with `mail-send`. Exactly one
+ *                split the work, and hands pieces to individual members with `group-send`. Exactly one
  *                per group, because two would both answer the same user message and their answers
  *                would talk past each other.
  *   member       receives NOTHING by default. It is addressed when the coordinator names it — that
@@ -246,6 +246,13 @@ func (d *DB) AddGroupMembers(tenant, group string, sessions []string, now, added
  * I the coordinator of" has one answer — and a list would invite callers to handle a second entry that
  * cannot exist.
  */
+/**
+ * CoordinatedGroup returns the group this session coordinates, or ("", nil) when it coordinates none.
+ *
+ * AT MOST ONE, by the constraint in CreateGroup. Callers get a name, not a list, because "which group am
+ * I the coordinator of" has one answer — and a list would invite callers to handle a second entry that
+ * cannot exist.
+ */
 func (d *DB) CoordinatedGroup(tenant, session string) (string, error) {
 	var m GroupMember
 	err := d.g.Where("tenant = ? AND session = ? AND role = ?", tenant, session, GroupRoleCoordinator).
@@ -257,6 +264,32 @@ func (d *DB) CoordinatedGroup(tenant, session string) (string, error) {
 		return "", err
 	}
 	return m.Group, nil
+}
+
+/**
+ * GroupCoordinator returns the session that receives the group's user messages.
+ *
+ * THE OTHER DIRECTION OF THE SAME RULE as CoordinatedGroup — "who coordinates this group" versus "which
+ * group does this session coordinate". Both are needed: a coordinator picks its group when it spawns, and
+ * a group picks its coordinator when a message arrives. They are kept as two explicit queries rather than
+ * one parameterised by column name: a column name threaded through a query string is the kind of
+ * convenience that becomes a footgun the first time it carries a caller's value.
+ *
+ * Empty means the group has no coordinator — a state this code tries not to produce (creation requires
+ * one, and removing one is refused) but which a direct database edit can still create. The caller treats
+ * it as "this group routes nowhere" rather than guessing a recipient.
+ */
+func (d *DB) GroupCoordinator(tenant, group string) (string, error) {
+	var m GroupMember
+	err := d.g.Where("tenant = ? AND \"group\" = ? AND role = ?", tenant, group, GroupRoleCoordinator).
+		First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return m.Session, nil
 }
 
 /**
@@ -301,26 +334,6 @@ func (d *DB) SetGroupCoordinator(tenant, group, session string) error {
 			Where("tenant = ? AND \"group\" = ? AND session = ?", tenant, group, session).
 			Update("role", GroupRoleCoordinator).Error
 	})
-}
-
-/**
- * GroupCoordinator returns the session that receives the group's user messages.
- *
- * Empty means the group has no coordinator — a state this code tries not to produce (creation
- * requires one, and removing one is refused) but which a direct database edit can still create. The
- * caller treats it as "this group routes nowhere" rather than guessing a recipient.
- */
-func (d *DB) GroupCoordinator(tenant, group string) (string, error) {
-	var m GroupMember
-	err := d.g.Where("tenant = ? AND \"group\" = ? AND role = ?", tenant, group, GroupRoleCoordinator).
-		First(&m).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return m.Session, nil
 }
 
 /**
@@ -430,14 +443,15 @@ func (d *DB) GroupMemberCounts(tenant string, groups []string) (map[string]int, 
 	return out, nil
 }
 
-// SessionsInGroupNames returns the session names in a group, excluding one (pass "" to keep all).
+// SessionsInGroupIDs returns the session ids in a group, sorted, optionally excluding one.
 //
-// EXCLUDING the asker is the common case: "who else is here" is the question, and a caller that
-// receives itself in the list has to remember to filter it out — which every caller then does
-// differently, and one of them forgets.
-func (d *DB) SessionsInGroupNames(tenant, group, exclude string) ([]string, error) {
-	var rows []GroupMember
-	if err := d.g.Where("tenant = ? AND \"group\" = ?", tenant, group).Find(&rows).Error; err != nil {
+// IT IS ListGroupMembers REDUCED TO THE ID, not a second query: the two read the same table with the
+// same predicate, and a duplicate query is a second place for the membership rule to drift. The
+// exclusion exists because "who else is here" is the question, and a caller that receives itself in the
+// list has to remember to filter it out — which every caller then does differently, and one forgets.
+func (d *DB) SessionsInGroupIDs(tenant, group, exclude string) ([]string, error) {
+	rows, err := d.ListGroupMembers(tenant, group)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]string, 0, len(rows))

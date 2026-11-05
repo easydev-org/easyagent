@@ -118,7 +118,7 @@ type Message struct {
 	 *
 	 * SO THERE IS NO UNIQUENESS CONSTRAINT ON (prev_id, seq). Two children of one message legitimately
 	 * both occupy the next position in their own chains — that is exactly what a fork IS, and a
-	 * constraint there would break `subsession-create` on its first use.
+	 * constraint there would break the second fork of one message on its first use.
 	 *
 	 * IT NEVER CHANGES FOR A GIVEN SESSION, unlike depth (`len(chain) - 1 - i`), which was recomputed
 	 * from the chain length on every read and shifted for every message each time one was appended.

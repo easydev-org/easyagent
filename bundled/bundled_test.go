@@ -2,7 +2,6 @@ package bundled
 
 import (
 	"context"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 	"testing"
 
 	"github.com/easydev-org/easyagent/agent"
@@ -63,7 +62,6 @@ func (d *stubDeps) SessionTip(_ string, sid string) string {
 	}
 	return ""
 }
-func (d *stubDeps) SubsessionsOf(string, string) []string                            { return nil }
 func (d *stubDeps) GroupsOfSession(string, string) []GroupRow                        { return nil }
 func (d *stubDeps) IsGroupMember(string, string, string) bool                        { return false }
 func (d *stubDeps) GroupMembers(string, string) []string                             { return nil }
@@ -72,16 +70,10 @@ func (d *stubDeps) CoordinatedGroup(string, string) (string, error)             
 func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string               { return "" }
 func (d *stubDeps) AddGroupMemberOnly(string, string, string) error                  { return nil }
 func (d *stubDeps) RevokeCapability(string, string, string, string) error            { return nil }
-func (d *stubDeps) IsGroupMemberOfAny(string, string) bool                           { return false }
 func (d *stubDeps) CreateGroupForSession(string, string, string) error               { return nil }
 func (d *stubDeps) PublishGroupMessage(string, string, string, string, string) error { return nil }
 func (d *stubDeps) ForkSession(string, string, string, []string) (string, error)     { return "", nil }
 func (d *stubDeps) DeleteSessionRow(string, string) error                            { return nil }
-func (d *stubDeps) DeleteSessionMailbox(string, string) error                        { return nil }
-func (d *stubDeps) PublishMailbox(_, session string, _ mailbox.Type, _ any, _ string) error {
-	d.mails = append(d.mails, session)
-	return nil
-}
 func (d *stubDeps) MessageChain(_ string, tip string, _ int) []ChainEntry {
 	if d.chainByTip != nil {
 		return d.chainByTip[tip]

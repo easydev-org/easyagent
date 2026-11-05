@@ -481,7 +481,7 @@ func (r *Runtime) foldUserMessage(tenant, session string, it mailbox.Message) er
 	 * typed the message themselves: a job's completion notice rendered as their own prompt,
 	 * right-aligned and indistinguishable from something they said.
 	 *
-	 * `it.Source` already says where it came from — `session:<name>` for a subsession hand-off,
+	 * `it.Source` already says where it came from — `session:<id>` for a worker's report,
 	 * `system:<name>` for automation, empty for a human prompt submitted through the API. Passing it
 	 * through is the whole fix; the console has always known how to render each kind.
 	 */

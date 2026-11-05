@@ -34,7 +34,7 @@ func shortID() string {
  */
 func (e *Extension) groupCreate(_ context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
 	locale := e.localeOf(tenant, session)
-	s := subsessionStrings(locale)
+	s := groupStringsFor(locale)
 
 	if existing, err := e.deps.CoordinatedGroup(tenant, session); err != nil {
 		return agent.ToolOutcome{}, err
@@ -80,7 +80,7 @@ func (e *Extension) groupCreate(_ context.Context, tenant, session string, args 
  */
 func (e *Extension) spawn(_ context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
 	locale := e.localeOf(tenant, session)
-	s := subsessionStrings(locale)
+	s := groupStringsFor(locale)
 	task := strings.TrimSpace(strArg(args, "task"))
 	if task == "" {
 		return agent.ToolOutcome{Content: s.errMissingTask}, nil
@@ -164,7 +164,7 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
  */
 func (e *Extension) groupSend(_ context.Context, tenant, session string, args map[string]any) (agent.ToolOutcome, error) {
 	locale := e.localeOf(tenant, session)
-	s := subsessionStrings(locale)
+	s := groupStringsFor(locale)
 	group := strings.TrimSpace(strArg(args, "group"))
 	text := strArg(args, "text")
 
@@ -239,7 +239,7 @@ func isGroupExists(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "group already exists")
 }
 
-type subStrings struct {
+type groupStrings struct {
 	created               func(group string) string
 	alreadyCreated        func(group string) string
 	spawned               func(name, workerId, group, desc string) string
@@ -259,9 +259,9 @@ type subStrings struct {
 	errSelfAddress        string
 }
 
-func subsessionStrings(locale string) subStrings {
+func groupStringsFor(locale string) groupStrings {
 	if strings.HasPrefix(strings.ToLower(locale), "zh") {
-		return subStrings{
+		return groupStrings{
 			created: func(g string) string {
 				return fmt.Sprintf("已创建群 '%s'，你是它的协调者。用 group-send 向成员点名布置任务；"+
 					"用 group-members 查看成员。", g)
@@ -309,7 +309,7 @@ func subsessionStrings(locale string) subStrings {
 			errSelfAddress: "group-send: 不能发给自己。",
 		}
 	}
-	return subStrings{
+	return groupStrings{
 		created: func(g string) string {
 			return fmt.Sprintf("Created group %q with you as its coordinator. Use group-send to address a "+
 				"member with work, and group-members to see who is in it.", g)

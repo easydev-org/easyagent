@@ -24,7 +24,7 @@ type MailboxQueue interface {
 	 *
 	 * THE RUNTIME WRITES TO ITS OWN QUEUE in exactly one place: the resumer, which nudges a conversation
 	 * whose turn ended for a reason worth retrying. Everything else that enqueues is a producer outside
-	 * the turn — an API prompt, a subsession hand-off, an extension's completion notice.
+	 * the turn — an API prompt, a spawned worker's report, an extension's completion notice.
 	 */
 	Enqueue(ctx context.Context, tenant, session, id string, typ mailbox.Type, payload any, source string) (string, error)
 	// Pending reports what is waiting without taking it.

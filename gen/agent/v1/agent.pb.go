@@ -403,7 +403,7 @@ type Message struct {
 	// agent authored itself. A user message carries the mailbox source it was
 	// delivered with:
 	//   `user`               — a human prompt (HTTP Prompt route)
-	//   `session:{session}`  — another session (subsession-create / mail-send)
+	//   `session:{id}`       — another session (spawn / group-send)
 	//   `system:{name}`      — a system/automation source
 	//   other                — extension-defined; clients degrade gracefully
 	Source        string `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"`
@@ -577,7 +577,7 @@ type MailboxEntry struct {
 	// ORIGIN of the message, so a consumer can tell a person's prompt from
 	// another session's hand-off or a system event. Open string:
 	//   `user`                 — a human prompt (HTTP Prompt route)
-	//   `session:{session}`    — another session (subsession-create / mail-send)
+	//   `session:{id}`         — another session (spawn / group-send)
 	//   `system:{name}`        — a system/automation source
 	//   other                  — extension-defined; consumers degrade gracefully
 	Source        string `protobuf:"bytes,10,opt,name=source,proto3" json:"source,omitempty"`
@@ -4546,7 +4546,7 @@ func (x *Group) GetMemberCount() int32 {
 // THE ROLE IS ABOUT MESSAGE ROUTING, NOT MANAGEMENT:
 //
 //	"coordinator"  RECEIVES what the user says to the group. It reads the instruction, decides how to
-//	               split the work, and hands pieces to individual members with `mail-send`. Exactly
+//	               split the work, and hands pieces to individual members with `group-send`. Exactly
 //	               one per group — two would both answer the same message and talk past each other.
 //	"member"       receives nothing by default. It is addressed when the coordinator names it; that
 //	               is what "@" means in this design: the coordinator writes to that session's mailbox.

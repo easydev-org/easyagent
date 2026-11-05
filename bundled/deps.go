@@ -6,7 +6,6 @@ package bundled
 
 import (
 	"github.com/easydev-org/easyagent/llm"
-	"github.com/easydev-org/easybus-sdk/mailbox"
 )
 
 // Deps are the host capabilities the bundled tools need. agent-go supplies an
@@ -49,8 +48,6 @@ type Deps interface {
 	 */
 	ForkSession(tenant, parent, name string, exclude []string) (string, error)
 	DeleteSessionRow(tenant, sid string) error
-	DeleteSessionMailbox(tenant, sid string) error
-	PublishMailbox(tenant, session string, typ mailbox.Type, payload any, source string) error
 
 	// --- history ---
 	// MessageChain walks a chain from tip, OLDEST FIRST, each entry carrying its position (`Seq`).
@@ -72,26 +69,10 @@ type Deps interface {
 	// CoordinatedGroup returns the group this session coordinates ("" when none). At most one, by the
 	// store's constraint.
 	CoordinatedGroup(tenant, session string) (string, error)
-	// CoordinatedGroupOrMembership returns the group to put a worker in: the one the session
-	// coordinates if it has one, otherwise the one it is a member of.
-	CoordinatedGroupOrMembership(tenant, session string) string
 	// AddGroupMemberOnly enrolls a session as a plain member (never coordinator).
 	AddGroupMemberOnly(tenant, group, session string) error
 	/**
-	 * RevokeCapability removes one grant from a session.
-	 *
-	 * THE MASK IS A REVOCATION, not a flag on the fork. A worker that cannot create groups is one
-	 * without that grant, which puts the rule in the same place as every other permission — the gate
-	 * that already refuses privileged calls. A separate "is a worker" bit would be a second place to
-	 * check, and the first one to be forgotten.
-	 */
-	RevokeCapability(tenant, session, extID, capability string) error
-	// IsGroupMemberOfAny reports whether a session is in ANY group, which is how `delegate` enforces
-	// one level: a worker placed in a group cannot create a second group of its own.
-	IsGroupMemberOfAny(tenant, session string) bool
-	/**
-	 * CreateGroupForSession makes `group` with `coordinator` as its coordinator and `member` as its only
-	 * member.
+	 * CreateGroupForSession makes `group` with `coordinator` as its coordinator.
 	 *
 	 * THE ONLY group-creating capability an extension has, and it is narrow on purpose: it cannot add
 	 * anyone beyond the two sessions named, and it cannot touch a group it did not create. Permission
