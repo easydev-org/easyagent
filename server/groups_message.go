@@ -142,6 +142,13 @@ func groupRecipient(sender, coordinator string) []string {
  * that did not happen is a recipient that was not woken, which the next page or watch will show them.
  */
 func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender string, to []string, msg store.GroupMessage) {
+	// THE ORIGIN NAMES THE SENDER, because the distributor uses it to drop a session's own message. `group:<name>`
+	// was the label here and it names no session, so a coordinator's RPC-posted message would have echoed back to
+	// it. `session:<id>` is the same form the tool path uses.
+	origin := "user:group"
+	if sender != "" {
+		origin = "session:" + sender
+	}
 	if s.chanPub == nil || len(to) == 0 {
 		return
 	}
@@ -151,7 +158,7 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 	}
 	for _, rcpt := range to {
 		if err := s.chanPub.PublishChannel(ctx, tenant, agentbus.GroupChannel,
-			agentbus.GroupMemberTopic(group, rcpt), payload, "group:"+group); err != nil {
+			agentbus.GroupMemberTopic(group, rcpt), payload, origin); err != nil {
 			slog.Warn("group delivery failed",
 				"tenant", tenant, "group", group, "recipient", rcpt, "err", err)
 		}

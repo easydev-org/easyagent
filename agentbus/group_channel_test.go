@@ -66,3 +66,55 @@ func TestGroupPatternsSeparateRoles(t *testing.T) {
 		t.Error("a group's pattern must not match another group's topics")
 	}
 }
+
+/**
+ * A SENDER MUST NOT HEAR ITS OWN MESSAGE.
+ *
+ * The coordinator's pattern (`<group>.>`) has to match the members' replies, and the same pattern therefore
+ * matches the coordinator's own dispatches (`<group>.to.<member>`). On the live cluster that produced three
+ * rounds of near-identical replies: the coordinator received its own dispatch, read it as a new instruction,
+ * and dispatched again.
+ *
+ * The fix belongs in the distributor, where the sender's identity is known — a narrower pattern would lose the
+ * replies, which is the half the coordinator cannot do without.
+ */
+func TestSenderOfExtractsTheSession(t *testing.T) {
+	cases := []struct {
+		origin string
+		want   string
+	}{
+		{"session:abc123", "abc123"},
+		{"group:release-coordination", ""},
+		{"user:group", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := senderOf(c.origin); got != c.want {
+			t.Errorf("senderOf(%q) = %q, want %q", c.origin, got, c.want)
+		}
+	}
+}
+
+/**
+ * THE PATTERNS ARE UNCHANGED — the coordinator still follows `<group>.>`, because that is what lets it hear the
+ * members' replies. This pins the shape the distributor relies on: the self-echo is dropped by identity, not by
+ * narrowing the subscription.
+ */
+func TestCoordinatorFollowsTheWholeGroup(t *testing.T) {
+	coord := GroupPattern("incident", "coord", true)
+	if coord != "incident.>" {
+		t.Fatalf("coordinator pattern = %q, want the whole group", coord)
+	}
+	// It hears the user's side...
+	if !protocol.MatchSubject(coord, GroupUserTopic("incident")) {
+		t.Error("the coordinator must hear the user's message")
+	}
+	// ...and the members' replies...
+	if !protocol.MatchSubject(coord, GroupMemberTopic("incident", "w1")) {
+		t.Error("the coordinator must hear a member's reply")
+	}
+	// ...and therefore its own dispatches too, which is why the distributor drops them.
+	if !protocol.MatchSubject(coord, GroupMemberTopic("incident", "w2")) {
+		t.Error("the pattern is expected to match dispatches; the distributor is what suppresses the echo")
+	}
+}

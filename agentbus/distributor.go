@@ -91,6 +91,20 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 
 	n := 0
 	for session, subs := range matches {
+		/**
+		 * A SENDER DOES NOT HEAR ITS OWN MESSAGE.
+		 *
+		 * The coordinator's pattern (`<group>.>`) matches the dispatches it publishes (`<group>.to.<member>`),
+		 * because the same pattern has to match the members' replies. Without this check the coordinator
+		 * received its own dispatch back, read it as a new instruction, and dispatched again — three rounds of
+		 * near-identical replies, one per level of self-echo, each one costing a turn.
+		 *
+		 * `Origin` is the publisher's own label (`session:<id>` for a session, `group:<name>` for the group
+		 * RPC). Comparing it to the recipient is what makes the echo impossible rather than unlikely.
+		 */
+		if msg.Channel == GroupChannel && senderOf(msg.Source) == session {
+			continue
+		}
 		// One delivery per session, not per matching subscription: a session that follows the
 		// same topic twice should see the event once. Wake is true if ANY of its matching
 		// subscriptions asks for it — a session that wants to be woken is woken.
@@ -148,6 +162,20 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 	return n, nil
 }
 
+/**
+ * senderOf extracts the session id from a channel message's origin.
+ *
+ * `session:<id>` is what a session-built message carries; `group:<name>` and `user:group` are the group RPC's
+ * labels and name no session. An origin that does not parse belongs to nobody, so it never suppresses a
+ * delivery — a message whose sender cannot be identified is not a message to drop.
+ */
+func senderOf(origin string) string {
+	if rest, ok := strings.CutPrefix(origin, "session:"); ok {
+		return rest
+	}
+	return ""
+}
+
 // channelEventText renders a channel event as the prompt a woken session receives.
 //
 // A `trigger` becomes a USER MESSAGE, and the runtime builds that message from `text`. Leaving it
@@ -160,8 +188,41 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 // tool that wants to inspect the event structurally reads that instead of parsing prose.
 func channelEventText(msg bus.ChannelMessage) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "A %s event arrived on the %q channel", msg.Source, msg.Channel)
-	if msg.Source == "" {
+
+	/**
+	 * A GROUP MESSAGE IS RENDERED AS WHAT IT IS: something a person said.
+	 *
+	 * The generic form below ("A <source> event arrived on the <channel> channel…") describes a machine event,
+	 * and the model read it as one — it spent turns trying to work out what the payload meant instead of
+	 * answering it. A group has a sender and a body; saying so is the whole rendering.
+	 */
+	if msg.Channel == GroupChannel {
+		group, _ := msg.Payload.(map[string]any)["group"].(string)
+		if group == "" {
+			group = strings.SplitN(msg.Topic, ".", 2)[0]
+		}
+		from, _ := msg.Payload.(map[string]any)["from"].(string)
+		text, _ := msg.Payload.(map[string]any)["text"].(string)
+		who := "The user"
+		if from != "" {
+			who = "Another member of the group"
+		}
+		fmt.Fprintf(&b, "%s posted to group %q", who, group)
+		if text != "" {
+			b.WriteString(":\n\n")
+			b.WriteString(text)
+		} else {
+			b.WriteString(".")
+		}
+		return b.String()
+	}
+
+	// THE PREFIX IS WRITTEN ONCE. It used to be written twice for an empty source — the second Fprintf had no
+	// else — so every such event began with two nearly identical sentences.
+	switch {
+	case msg.Source != "":
+		fmt.Fprintf(&b, "A %s event arrived on the %q channel", msg.Source, msg.Channel)
+	default:
 		fmt.Fprintf(&b, "A channel event arrived on the %q channel", msg.Channel)
 	}
 	fmt.Fprintf(&b, " (topic %s).", msg.Topic)

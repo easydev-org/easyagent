@@ -64,7 +64,12 @@ func GroupMemberTopic(group, session string) string {
  */
 func GroupPattern(group, session string, coordinator bool) string {
 	if coordinator {
-		// `<group>.>` matches `in` AND `to.<session>`, which is exactly "the coordinator hears the group".
+		// `<group>.>` matches `in` AND `to.<session>`, which is what the coordinator needs: the user's
+		// instruction and the members' replies.
+		//
+		// IT ALSO MATCHES THE COORDINATOR'S OWN DISPATCHES (`to.<member>`), and that self-echo is dropped in
+		// the distributor rather than here: a narrower pattern would lose the replies, which is the half it
+		// cannot do without. See `Distributor.deliverGroup`.
 		return group + ".>"
 	}
 	return GroupMemberTopic(group, session)
