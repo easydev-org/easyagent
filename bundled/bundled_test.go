@@ -62,7 +62,7 @@ func (d *stubDeps) SessionTip(_ string, sid string) string {
 	}
 	return ""
 }
-func (d *stubDeps) GroupsOfSession(string, string) []GroupRow                        { return nil }
+func (d *stubDeps) GroupsOfSession(string, string) ([]GroupRow, error)               { return nil, nil }
 func (d *stubDeps) IsGroupMember(string, string, string) bool                        { return false }
 func (d *stubDeps) GroupMembers(string, string) []string                             { return nil }
 func (d *stubDeps) GroupCoordinator(string, string) (string, error)                  { return "", nil }

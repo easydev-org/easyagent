@@ -29,7 +29,10 @@ type groupListView struct {
 }
 
 func (e *Extension) groupList(_ context.Context, tenant, session string, _ map[string]any) (agent.ToolOutcome, error) {
-	groups := e.deps.GroupsOfSession(tenant, session)
+	groups, err := e.deps.GroupsOfSession(tenant, session)
+	if err != nil {
+		return agent.ToolOutcome{}, err
+	}
 	if len(groups) == 0 {
 		locale := e.localeOf(tenant, session)
 		if strings.HasPrefix(locale, "zh") {

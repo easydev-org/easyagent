@@ -62,7 +62,10 @@ type Deps interface {
 	// only ask what a session is part of and who else is in it. There is deliberately no
 	// CreateGroup/AddGroupMember here — an extension that could assemble a set of sessions would be
 	// choosing its own collaborators.
-	GroupsOfSession(tenant, session string) []GroupRow
+	// GroupsOfSession returns the groups a session is in. It reports an error rather than an empty slice:
+	// "you are in no groups" and "the lookup failed" are different answers, and a tool that says the first
+	// when the second happened tells the model its group does not exist.
+	GroupsOfSession(tenant, session string) ([]GroupRow, error)
 	IsGroupMember(tenant, group, session string) bool
 	GroupMembers(tenant, group string) []string
 	GroupCoordinator(tenant, group string) (string, error)

@@ -24,7 +24,9 @@ type groupStub struct {
 	members map[string][]string
 }
 
-func (g *groupStub) GroupsOfSession(_, session string) []GroupRow { return g.groups[session] }
+func (g *groupStub) GroupsOfSession(_, session string) ([]GroupRow, error) {
+	return g.groups[session], nil
+}
 func (g *groupStub) IsGroupMember(_, group, session string) bool {
 	for _, m := range g.members[group] {
 		if m == session {

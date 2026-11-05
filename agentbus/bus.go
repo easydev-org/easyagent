@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -476,16 +477,22 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 			// presence, and matching against a call's target happens in the extension.
 			def.Requires = t.Requires
 			/**
-			 * AN EXTENSION THAT DID NOT DECLARE AN EFFECT IS TREATED AS THE WORST.
+			 * A TOOL WITHOUT A VALID EFFECT IS NOT REGISTERED AT ALL.
 			 *
-			 * The declaration is new, so extensions built before it send an empty string — and a tool that
-			 * did not say what it does must not be presented as harmless. Falling back to `high` means the
-			 * console asks for confirmation once, which is recoverable; falling back to `none` would
-			 * silently tell a user that a destructive tool is safe.
+			 * THERE IS NO FALLBACK. Defaulting to `high` would have been "safe", and that is exactly why it
+			 * is wrong: it hides the defect. The tool keeps working, the console asks for confirmation, and
+			 * the real problem — an extension that never declared what it does — is never surfaced. Worse, a
+			 * default makes the declaration OPTIONAL IN PRACTICE no matter what the parser enforces, because
+			 * the path that matters is the one where a tool actually reaches the model.
+			 *
+			 * REFUSING IS LOUD WHERE IT SHOULD BE: at discovery, once, naming the tool and the extension. An
+			 * extension author sees it immediately; a user never sees a tool whose impact nobody stated.
 			 */
 			def.Effect = agentpkg.Effect(t.Effect)
 			if !def.Effect.Valid() {
-				def.Effect = agentpkg.EffectHigh
+				slog.Error("tool has no valid effect; refusing to register it",
+					"ext", m.Id, "tool", t.Name, "effect", t.Effect)
+				continue
 			}
 			e.defs[t.Name] = def
 		}

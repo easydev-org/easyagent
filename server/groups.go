@@ -173,7 +173,12 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 		return nil, connect.NewError(connect.CodeInternal,
 			"group created but its subscriptions could not be written: "+err.Error())
 	}
-	members, _ := s.db.ListGroupMembers(tenant, name)
+	// THE COUNT IS PART OF THE ANSWER, not decoration: `member_count: 0` on a group that HAS members is a
+	// lie the client cannot detect, and it would render an empty member list on a group the user just made.
+	members, err := s.db.ListGroupMembers(tenant, name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
 	return &agentv1.CreateGroupResponse{
 		Group: groupToMsg(g, len(members)),
 	}, nil
@@ -295,12 +300,21 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 	// UNSUBSCRIBE BEFORE THE ROWS GO: the member list is what says WHO to unsubscribe, so reading it
 	// after the delete would find nobody and leave every member still listening to a group that no
 	// longer exists.
-	previous, _ := s.db.SessionsInGroupIDs(tenant, name, "")
+	previous, err := s.db.SessionsInGroupIDs(tenant, name, "")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
 	if err := s.db.DeleteGroup(tenant, name); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if s.channels != nil {
-		_ = s.channels.DropGroup(ctx, tenant, name, previous)
+		// A GROUP THAT STILL ROUTES AFTER ITS DELETION IS A LIE THE USER CANNOT SEE: members keep receiving
+		// messages from a group the console says is gone. Reported rather than swallowed; the group rows
+		// are already deleted, so re-running the delete repairs the subscriptions.
+		if err := s.channels.DropGroup(ctx, tenant, name, previous); err != nil {
+			return nil, connect.NewError(connect.CodeInternal,
+				"group deleted but its subscriptions remain: "+err.Error())
+		}
 	}
 	return &agentv1.DeleteGroupResponse{}, nil
 }
@@ -326,11 +340,17 @@ func (s *Server) AddGroupMember(ctx context.Context, req *agentv1.AddGroupMember
 	if addedBy == "" {
 		addedBy = "user"
 	}
-	previous, _ := s.db.SessionsInGroupIDs(tenant, name, "")
+	previous, err := s.db.SessionsInGroupIDs(tenant, name, "")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
 	if err := s.db.AddGroupMembers(tenant, name, req.GetMembers(), nowRFC3339(), addedBy); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	_ = s.syncGroupSubscriptions(ctx, tenant, name, previous)
+	if err := s.syncGroupSubscriptions(ctx, tenant, name, previous); err != nil {
+		return nil, connect.NewError(connect.CodeInternal,
+			"members added but their subscriptions could not be written: "+err.Error())
+	}
 	g, members, err := s.groupWithMembers(ctx, tenant, name)
 	if err != nil {
 		return nil, err
@@ -362,7 +382,10 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *agentv1.RemoveGroup
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	_ = s.syncGroupSubscriptions(ctx, tenant, name, nil)
+	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
+		return nil, connect.NewError(connect.CodeInternal,
+			"member removed but their subscription could not be dropped: "+err.Error())
+	}
 	g, members, err := s.groupWithMembers(ctx, tenant, name)
 	if err != nil {
 		return nil, err
@@ -402,7 +425,10 @@ func (s *Server) SetGroupCoordinator(ctx context.Context, req *agentv1.SetGroupC
 	}
 	// THE PATTERN DEPENDS ON THE ROLE, so a role change is also a routing change: the promoted session
 	// must start seeing the group's user messages and the demoted one must stop.
-	_ = s.syncGroupSubscriptions(ctx, tenant, name, nil)
+	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
+		return nil, connect.NewError(connect.CodeInternal,
+			"role changed but the subscriptions could not be rewritten: "+err.Error())
+	}
 	g, members, err := s.groupWithMembers(ctx, tenant, name)
 	if err != nil {
 		return nil, err

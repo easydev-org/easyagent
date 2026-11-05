@@ -216,21 +216,27 @@ func (d *StoreDeps) GroupCoordinator(tenant, group string) (string, error) {
 }
 
 // GroupsOfSession implements Deps.
-func (d *StoreDeps) GroupsOfSession(tenant, session string) []GroupRow {
+func (d *StoreDeps) GroupsOfSession(tenant, session string) ([]GroupRow, error) {
 	groups, err := d.DB.GroupsOfSession(tenant, session)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	names := make([]string, 0, len(groups))
 	for _, g := range groups {
 		names = append(names, g.Name)
 	}
-	counts, _ := d.DB.GroupMemberCounts(tenant, names)
+	// A FAILED COUNT IS REPORTED AS AN ERROR, not as zero members. The tool renders "N member(s)"; a
+	// failure silently shown as 0 would tell a coordinator its group is empty when it is not — and the
+	// model would act on that.
+	counts, err := d.DB.GroupMemberCounts(tenant, names)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]GroupRow, 0, len(groups))
 	for _, g := range groups {
 		out = append(out, GroupRow{Name: g.Name, Members: counts[g.Name]})
 	}
-	return out
+	return out, nil
 }
 
 // IsGroupMember implements Deps.
