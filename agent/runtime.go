@@ -598,6 +598,7 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		Tenant: tenant, SessionPreset: s.Preset, SessionLocale: s.Locale,
 		SessionSystem: s.SystemPrompt, SessionMax: s.MaxTurns,
 		SessionIntro: s.Intro,
+		GroupEnv:     r.groupEnv(tenant, session),
 		DeniedTools:  r.deps.DeniedTools, Now: r.deps.Now(),
 		Grants: r.grantLines(tenant, session),
 	})

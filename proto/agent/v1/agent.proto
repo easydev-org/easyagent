@@ -687,6 +687,13 @@ message Group {
   string created_by = 3;
   string created_at = 4;
   int32 member_count = 5;
+  /**
+   * One line saying what this group is FOR — the same idea as a session's intro.
+   *
+   * EMPTY MEANS "SAY NOTHING". It is one line on purpose: a group's purpose is something a member reads
+   * before reaching the member list, not a document that has to be kept current.
+   */
+  string intro = 6;
 }
 
 // GroupMember is one session's membership.
@@ -723,6 +730,11 @@ message CreateGroupRequest {
   repeated string members = 4;
   // Recorded as the creator. Not a session name — sessions cannot create groups.
   string created_by = 5;
+  // One line saying what the group is for. May be empty.
+  //
+  // SET AT CREATION, because that is when the person naming the group knows the answer — and a member's
+  // first look at the group should not be an unexplained list of names.
+  string intro = 6;
 }
 message CreateGroupResponse { Group group = 1; }
 
@@ -753,6 +765,8 @@ message UpdateGroupRequest {
   string name = 1;
   // `optional`, like a session's own avatar: absent = leave alone, present-but-empty = clear.
   optional string avatar_file = 2;
+  // Same rule: absent = leave it alone, present-but-empty = clear it.
+  optional string intro = 3;
 }
 message UpdateGroupResponse { Group group = 1; }
 

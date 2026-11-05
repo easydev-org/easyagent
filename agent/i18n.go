@@ -54,6 +54,30 @@ func BuildEnvBlock(locale string, now time.Time) string {
  * prompt wholesale — so a one-line edit would cost the user everything else in it.
  */
 func BuildEnvBlockWithIntro(locale string, now time.Time, intro string) string {
+	return BuildEnvBlockFull(locale, now, intro, nil)
+}
+
+/**
+ * GroupEnv is what a session needs to know about the group it coordinates or belongs to.
+ *
+ * ONE LINE OF INTRO AND THE COORDINATOR, not the member list: membership is a tool call away and goes stale
+ * between turns, while "what this group is for" is the thing a woken coordinator cannot recover by asking.
+ */
+type GroupEnv struct {
+	Name        string
+	Intro       string
+	Coordinator string
+}
+
+/**
+ * BuildEnvBlockFull is the turn's environment with everything the model knows about itself.
+ *
+ * THE GROUP SECTION EXISTS BECAUSE A GROUP'S PURPOSE IS NOT IN THE TRANSCRIPT. A coordinator woken by a group
+ * message gets the message and the member ids; without the group's own intro it has to infer its job from the
+ * names of the sessions it is writing to, which is exactly the guess that produced a coordinator answering a
+ * question meant for the group. `Group.Coordinator` says which session's answer the reader expects.
+ */
+func BuildEnvBlockFull(locale string, now time.Time, intro string, group *GroupEnv) string {
 	lines := []string{
 		"<env>",
 		"  Today's date: " + now.UTC().Format("2006-01-02"),
@@ -61,6 +85,17 @@ func BuildEnvBlockWithIntro(locale string, now time.Time, intro string) string {
 	}
 	if intro = strings.TrimSpace(intro); intro != "" {
 		lines = append(lines, "  <intro>"+intro+"</intro>")
+	}
+	if group != nil && group.Name != "" {
+		lines = append(lines, "  <group>")
+		lines = append(lines, "    <name>"+group.Name+"</name>")
+		if purpose := strings.TrimSpace(group.Intro); purpose != "" {
+			lines = append(lines, "    <purpose>"+purpose+"</purpose>")
+		}
+		if group.Coordinator != "" {
+			lines = append(lines, "    <coordinator>"+group.Coordinator+"</coordinator>")
+		}
+		lines = append(lines, "  </group>")
 	}
 	lines = append(lines, "</env>")
 	return strings.Join(lines, "\n")
@@ -79,9 +114,14 @@ func BuildEnvBlockWithGrants(locale string, now time.Time, grants []GrantLine) s
 	return BuildEnvBlockAll(locale, now, "", grants)
 }
 
-// BuildEnvBlockAll is the full block: date, language, the session's intro, and its permissions.
+// BuildEnvBlockAll is the full block: date, language, the session's intro, the group, and the permissions.
 func BuildEnvBlockAll(locale string, now time.Time, intro string, grants []GrantLine) string {
-	block := BuildEnvBlockWithIntro(locale, now, intro)
+	return BuildEnvBlockWithGroup(locale, now, intro, nil, grants)
+}
+
+// BuildEnvBlockWithGroup is BuildEnvBlockAll plus what the session needs to know about its group.
+func BuildEnvBlockWithGroup(locale string, now time.Time, intro string, group *GroupEnv, grants []GrantLine) string {
+	block := BuildEnvBlockFull(locale, now, intro, group)
 	if len(grants) == 0 {
 		// Nothing granted: say so. Silence reads as "unrestricted" to a model.
 		zh := primaryOf(NormalizeLocale(locale)) == "zh"

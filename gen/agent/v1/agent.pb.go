@@ -4504,9 +4504,15 @@ type Group struct {
 	// honeycomb identicon from the name, so a group with no picture still has a stable face.
 	AvatarFile string `protobuf:"bytes,2,opt,name=avatar_file,json=avatarFile,proto3" json:"avatar_file,omitempty"`
 	// Provenance: whether a person or an operator's script made it. Never a session.
-	CreatedBy     string `protobuf:"bytes,3,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
-	CreatedAt     string `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	MemberCount   int32  `protobuf:"varint,5,opt,name=member_count,json=memberCount,proto3" json:"member_count,omitempty"`
+	CreatedBy   string `protobuf:"bytes,3,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	CreatedAt   string `protobuf:"bytes,4,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	MemberCount int32  `protobuf:"varint,5,opt,name=member_count,json=memberCount,proto3" json:"member_count,omitempty"`
+	//*
+	// One line saying what this group is FOR — the same idea as a session's intro.
+	//
+	// EMPTY MEANS "SAY NOTHING". It is one line on purpose: a group's purpose is something a member reads
+	// before reaching the member list, not a document that has to be kept current.
+	Intro         string `protobuf:"bytes,6,opt,name=intro,proto3" json:"intro,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4574,6 +4580,13 @@ func (x *Group) GetMemberCount() int32 {
 		return x.MemberCount
 	}
 	return 0
+}
+
+func (x *Group) GetIntro() string {
+	if x != nil {
+		return x.Intro
+	}
+	return ""
 }
 
 // GroupMember is one session's membership.
@@ -4670,7 +4683,12 @@ type CreateGroupRequest struct {
 	// Additional members. They receive nothing until the coordinator addresses them.
 	Members []string `protobuf:"bytes,4,rep,name=members,proto3" json:"members,omitempty"`
 	// Recorded as the creator. Not a session name — sessions cannot create groups.
-	CreatedBy     string `protobuf:"bytes,5,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	CreatedBy string `protobuf:"bytes,5,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
+	// One line saying what the group is for. May be empty.
+	//
+	// SET AT CREATION, because that is when the person naming the group knows the answer — and a member's
+	// first look at the group should not be an unexplained list of names.
+	Intro         string `protobuf:"bytes,6,opt,name=intro,proto3" json:"intro,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4736,6 +4754,13 @@ func (x *CreateGroupRequest) GetMembers() []string {
 func (x *CreateGroupRequest) GetCreatedBy() string {
 	if x != nil {
 		return x.CreatedBy
+	}
+	return ""
+}
+
+func (x *CreateGroupRequest) GetIntro() string {
+	if x != nil {
+		return x.Intro
 	}
 	return ""
 }
@@ -4989,7 +5014,9 @@ type UpdateGroupRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// `optional`, like a session's own avatar: absent = leave alone, present-but-empty = clear.
-	AvatarFile    *string `protobuf:"bytes,2,opt,name=avatar_file,json=avatarFile,proto3,oneof" json:"avatar_file,omitempty"`
+	AvatarFile *string `protobuf:"bytes,2,opt,name=avatar_file,json=avatarFile,proto3,oneof" json:"avatar_file,omitempty"`
+	// Same rule: absent = leave it alone, present-but-empty = clear it.
+	Intro         *string `protobuf:"bytes,3,opt,name=intro,proto3,oneof" json:"intro,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5034,6 +5061,13 @@ func (x *UpdateGroupRequest) GetName() string {
 func (x *UpdateGroupRequest) GetAvatarFile() string {
 	if x != nil && x.AvatarFile != nil {
 		return *x.AvatarFile
+	}
+	return ""
+}
+
+func (x *UpdateGroupRequest) GetIntro() string {
+	if x != nil && x.Intro != nil {
+		return *x.Intro
 	}
 	return ""
 }
@@ -11501,7 +11535,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x15\n" +
 	"\x13ListChannelsRequest\"I\n" +
 	"\x14ListChannelsResponse\x121\n" +
-	"\bchannels\x18\x01 \x03(\v2\x15.agent.v1.ChannelDeclR\bchannels\"\x9d\x01\n" +
+	"\bchannels\x18\x01 \x03(\v2\x15.agent.v1.ChannelDeclR\bchannels\"\xb3\x01\n" +
 	"\x05Group\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vavatar_file\x18\x02 \x01(\tR\n" +
@@ -11510,12 +11544,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"created_by\x18\x03 \x01(\tR\tcreatedBy\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12!\n" +
-	"\fmember_count\x18\x05 \x01(\x05R\vmemberCount\"u\n" +
+	"\fmember_count\x18\x05 \x01(\x05R\vmemberCount\x12\x14\n" +
+	"\x05intro\x18\x06 \x01(\tR\x05intro\"u\n" +
 	"\vGroupMember\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\x12\x1b\n" +
 	"\tjoined_at\x18\x03 \x01(\tR\bjoinedAt\x12\x1b\n" +
-	"\tjoined_by\x18\x04 \x01(\tR\bjoinedBy\"\xa4\x01\n" +
+	"\tjoined_by\x18\x04 \x01(\tR\bjoinedBy\"\xba\x01\n" +
 	"\x12CreateGroupRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vavatar_file\x18\x02 \x01(\tR\n" +
@@ -11523,7 +11558,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\vcoordinator\x18\x03 \x01(\tR\vcoordinator\x12\x18\n" +
 	"\amembers\x18\x04 \x03(\tR\amembers\x12\x1d\n" +
 	"\n" +
-	"created_by\x18\x05 \x01(\tR\tcreatedBy\"<\n" +
+	"created_by\x18\x05 \x01(\tR\tcreatedBy\x12\x14\n" +
+	"\x05intro\x18\x06 \x01(\tR\x05intro\"<\n" +
 	"\x13CreateGroupResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\"-\n" +
 	"\x11ListGroupsRequest\x12\x18\n" +
@@ -11535,12 +11571,14 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\asession\x18\x02 \x01(\tR\asession\"j\n" +
 	"\x10GetGroupResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"^\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\x83\x01\n" +
 	"\x12UpdateGroupRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12$\n" +
 	"\vavatar_file\x18\x02 \x01(\tH\x00R\n" +
-	"avatarFile\x88\x01\x01B\x0e\n" +
-	"\f_avatar_file\"<\n" +
+	"avatarFile\x88\x01\x01\x12\x19\n" +
+	"\x05intro\x18\x03 \x01(\tH\x01R\x05intro\x88\x01\x01B\x0e\n" +
+	"\f_avatar_fileB\b\n" +
+	"\x06_intro\"<\n" +
 	"\x13UpdateGroupResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\"(\n" +
 	"\x12DeleteGroupRequest\x12\x12\n" +

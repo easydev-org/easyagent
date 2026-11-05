@@ -21,8 +21,10 @@ import (
  * that owned a transcript would need its own read watermarks, unread counts and "what did I miss"
  * answer, all of which the session already has.
  *
- * NO DESCRIPTION FIELD. There was going to be one; it is not needed to answer "who else is here",
- * and every field a group carries is one more thing a member reads before reaching the member list.
+ * NO DESCRIPTION FIELD, but there IS a one-line INTRO — the same field a session has, for the same reason.
+ * It is not a description of the group's purpose written once and forgotten; it is what a member reads to
+ * remember what this set of sessions is FOR, and it rides in the turn's <env> so a woken coordinator does not
+ * have to infer its job from the member names. A full description would be a document nobody keeps current.
  */
 type Group struct {
 	Tenant string `gorm:"column:tenant;primaryKey;size:64"`
@@ -37,6 +39,15 @@ type Group struct {
 	 * so a group with no picture still has a stable, recognisable face rather than a blank circle.
 	 */
 	AvatarFile string `gorm:"column:avatar_file;size:64"`
+
+	/**
+	 * Intro is one line saying what this group is FOR — "release coordination for acme/app", "incident 42".
+	 *
+	 * IT IS THE SAME IDEA AS A SESSION'S INTRO, and it is deliberately one line: a group with a paragraph of
+	 * description would be a document that goes stale, and the member list is what a reader actually needs.
+	 * EMPTY MEANS "SAY NOTHING" — nothing renders an empty tag.
+	 */
+	Intro string `gorm:"column:intro;size:512"`
 
 	CreatedBy string `gorm:"column:created_by;size:128"`
 	CreatedAt string `gorm:"column:created_at"`
@@ -188,6 +199,21 @@ func (d *DB) GetGroup(tenant, name string) (*Group, bool, error) {
 func (d *DB) UpdateGroupAvatar(tenant, name, avatarFile, now string) error {
 	return d.g.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, name).
 		Updates(map[string]any{"avatar_file": avatarFile, "updated_at": now}).Error
+}
+
+/**
+ * UpdateGroupProfile writes the group's picture and one-line intro in one statement.
+ *
+ * `avatarFile` AND `intro` ARE PLAIN STRINGS, not pointers: the caller decides whether to include them, and
+ * both callers here always do — a profile save sends the whole card, so "absent = leave it alone" is handled
+ * once, at the wire, where an `optional` field can express it. Converting that to two nullable arguments here
+ * would duplicate the rule in a second place.
+ */
+func (d *DB) UpdateGroupProfile(tenant, name, avatarFile, intro, now string) error {
+	return d.g.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, name).
+		Updates(map[string]any{
+			"avatar_file": avatarFile, "intro": intro, "updated_at": now,
+		}).Error
 }
 
 // DeleteGroup removes a group and its memberships.

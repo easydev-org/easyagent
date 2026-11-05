@@ -64,6 +64,7 @@ func groupToMsg(g store.Group, memberCount int) *agentv1.Group {
 		CreatedBy:   g.CreatedBy,
 		CreatedAt:   g.CreatedAt,
 		MemberCount: int32(memberCount),
+		Intro:       g.Intro,
 	}
 }
 
@@ -152,6 +153,9 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 	now := nowRFC3339()
 	g := store.Group{
 		Name: name, AvatarFile: req.GetAvatarFile(),
+		// A GROUP'S INTRO IS SET AT CREATION, so the person naming the group also says what it is for — the
+		// moment they know the answer, and before the first member reads an unexplained list of names.
+		Intro:     strings.TrimSpace(req.GetIntro()),
 		CreatedBy: req.GetCreatedBy(), CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.db.CreateGroup(tenant, g, coordinator, req.GetMembers(), now); err != nil {
@@ -270,10 +274,27 @@ func (s *Server) UpdateGroup(ctx context.Context, req *agentv1.UpdateGroupReques
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
 
-	// `optional` IS THE POINT, exactly as on a session's avatar: absent = leave alone,
-	// present-but-empty = clear, which is how a group goes back to its derived identicon.
-	if req.AvatarFile != nil {
-		if err := s.db.UpdateGroupAvatar(tenant, name, req.GetAvatarFile(), nowRFC3339()); err != nil {
+	/**
+	 * `optional` IS THE POINT, exactly as on a session's avatar: absent = leave alone, present-but-empty =
+	 * clear. The two fields are written together when either arrives, because the profile page saves the whole
+	 * card — and a partial write would let the picture and the intro disagree about which save they came from.
+	 */
+	if req.AvatarFile != nil || req.Intro != nil {
+		current, ok, err := s.db.GetGroup(tenant, name)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error())
+		}
+		if !ok {
+			return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+		}
+		avatar, intro := current.AvatarFile, current.Intro
+		if req.AvatarFile != nil {
+			avatar = req.GetAvatarFile()
+		}
+		if req.Intro != nil {
+			intro = strings.TrimSpace(req.GetIntro())
+		}
+		if err := s.db.UpdateGroupProfile(tenant, name, avatar, intro, nowRFC3339()); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error())
 		}
 	}

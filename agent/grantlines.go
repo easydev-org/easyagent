@@ -84,3 +84,29 @@ func toText(v any) string {
 	}
 	return string(b)
 }
+
+/**
+ * groupEnv says which group this session belongs to, and what that group is for.
+ *
+ * A SESSION BELONGS TO AT MOST ONE GROUP THAT IT COORDINATES, but it may be a plain member of several. The
+ * coordinator's group is the one that matters for the prompt: that is where the messages addressed to this
+ * session arrive, and it is the only group whose purpose shapes what it should do. A member's groups are a
+ * lookup away (group-list) and change nothing about how it should answer.
+ *
+ * NIL, NOT AN EMPTY STRUCT, when the session coordinates nothing: the renderer then omits the section entirely,
+ * which is the same rule the session's own intro follows.
+ */
+func (r *Runtime) groupEnv(tenant, session string) *GroupEnv {
+	if r.deps.DB == nil {
+		return nil
+	}
+	coordinated, err := r.deps.DB.CoordinatedGroup(tenant, session)
+	if err != nil || coordinated == "" {
+		return nil
+	}
+	g, ok, err := r.deps.DB.GetGroup(tenant, coordinated)
+	if err != nil || !ok {
+		return nil
+	}
+	return &GroupEnv{Name: g.Name, Intro: g.Intro, Coordinator: session}
+}

@@ -77,8 +77,15 @@ type PlanInput struct {
 	SessionSystem string
 	// SessionIntro is the session's one-line description of itself, rendered into <env>.
 	SessionIntro string
-	SessionMax   int
-	DeniedTools  []string
+	/**
+	 * GroupEnv is the group this session coordinates (or belongs to), rendered into <env>.
+	 *
+	 * NIL MEANS "NO GROUP", which is the ordinary case. A group's purpose cannot be recovered from the
+	 * transcript, so a coordinator woken by a group message would have to infer it from the member names.
+	 */
+	GroupEnv    *GroupEnv
+	SessionMax  int
+	DeniedTools []string
 	// Grants summarises what this session may do, for the model's own benefit.
 	//
 	// Without it the model discovers its limits by trying and failing, which costs a turn
@@ -138,7 +145,7 @@ func Plan(ctx context.Context, deps RuntimeDeps, in PlanInput) (TurnPlan, error)
 	}
 	// The grants ride in the env block so the model plans within them instead of
 	// discovering its limits one refusal at a time.
-	system = system + "\n\n" + BuildEnvBlockAll(locale, in.Now, in.SessionIntro, in.Grants)
+	system = system + "\n\n" + BuildEnvBlockWithGroup(locale, in.Now, in.SessionIntro, in.GroupEnv, in.Grants)
 	if maxTurns == 0 {
 		maxTurns = firstNonZero(deps.MaxTurns, 8)
 	}

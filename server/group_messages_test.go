@@ -577,3 +577,65 @@ func TestThumbnailRowExistsWhenThumbCodeIsSet(t *testing.T) {
 		t.Fatalf("after a re-upload, thumb_code %q points at nothing: %v", *meta2.ThumbCode, err)
 	}
 }
+
+/**
+ * A GROUP HAS AN INTRO, AND IT REACHES THE PLACES THAT NEED IT.
+ *
+ * The intro is the one line saying what the group is FOR — the same idea as a session's intro, and the reason
+ * a woken coordinator does not have to infer its job from the names of the sessions it is writing to. That
+ * inference is exactly what produced a coordinator answering a question that was meant for the group.
+ *
+ * IT IS EDITABLE AFTER CREATION, with the same absent/empty rule the picture uses: absent = leave it alone,
+ * present-but-empty = clear it.
+ */
+func TestGroupIntroRoundTrips(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	created, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, CreatedBy: "user",
+		Intro: "release coordination for acme/app",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Group.Intro != "release coordination for acme/app" {
+		t.Errorf("intro = %q, want what was set at creation", created.Group.Intro)
+	}
+
+	// IT IS READABLE FROM THE GROUP, which is what the info page shows.
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Group.Intro != "release coordination for acme/app" {
+		t.Errorf("read back intro = %q", got.Group.Intro)
+	}
+
+	// LEAVING IT ALONE: a picture-only save must not wipe the intro.
+	pic := "file:abc"
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Name: "g", AvatarFile: &pic}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	if got.Group.Intro != "release coordination for acme/app" {
+		t.Errorf("a picture-only save changed the intro to %q", got.Group.Intro)
+	}
+
+	// CLEARING IT: present-but-empty means "say nothing".
+	empty := ""
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Name: "g", Intro: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	if got.Group.Intro != "" {
+		t.Errorf("intro = %q after clearing it", got.Group.Intro)
+	}
+	// AND THE PICTURE SURVIVED that save, for the same reason.
+	if got.Group.AvatarFile != pic {
+		t.Errorf("an intro-only save changed the picture to %q", got.Group.AvatarFile)
+	}
+}
