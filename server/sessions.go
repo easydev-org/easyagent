@@ -5,6 +5,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/store"
 )
@@ -91,6 +92,16 @@ func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRe
 		_ = s.channels.EnsureDefault(ctx, tenant, in.ID)
 	}
 	s.lifecycleFire(ctx, tenant, "created", in.ID, map[string]any{"kind": "created", "tenant": tenant, "session_id": in.ID})
+	/**
+	 * A NEW SESSION IS A NEW ROW, and every replica's list has to hear about it.
+	 *
+	 * NOTHING ANNOUNCED THIS BEFORE. A client only saw a new session because something else caused a refresh —
+	 * a page reopen, a send, a reconnect. With one replica that looks like "the list updates"; with two, a session
+	 * created through replica A stayed invisible on a list open against replica B for as long as the page lived.
+	 */
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindSession, Name: in.ID,
+	})
 	return &agentv1.CreateSessionResponse{Ok: true, SessionId: in.ID, Name: in.Name}, nil
 }
 
@@ -123,6 +134,10 @@ func (s *Server) DeleteSession(ctx context.Context, req *agentv1.DeleteSessionRe
 	// that succeeded. A leftover row is repaired by the next group read, which cannot resolve it.
 	_ = s.db.DeleteGroupMemberships(tenant, req.Id)
 	s.lifecycleFire(ctx, tenant, "deleted", req.Id, map[string]any{"kind": "deleted", "tenant": tenant, "session_name": req.Id})
+	// THE ROW IS GONE, so every replica's list must drop it — not just the replica that served the delete.
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindSession, Name: req.Id, Deleted: true,
+	})
 	return &agentv1.DeleteSessionResponse{Ok: true}, nil
 }
 
@@ -175,6 +190,10 @@ func (s *Server) Rename(ctx context.Context, req *agentv1.RenameRequest) (*agent
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	row.Name = req.Name
+	// A RENAME CHANGES WHAT THE ROW SAYS, and a list open on another replica has to be told.
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindSession, Name: req.Id,
+	})
 	s.lifecycleFire(ctx, tenant, "renamed", req.Id, map[string]any{
 		"kind": "renamed", "tenant": tenant, "session_id": req.Id, "name": req.Name,
 	})
@@ -195,6 +214,7 @@ func (s *Server) SetModel(ctx context.Context, req *agentv1.SetModelRequest) (*a
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, "session not found")
 	}
+	s.notifyListChange(tenant, agentbus.SessionListChange{Kind: agentbus.ListKindSession, Name: req.Id})
 	return &agentv1.SetModelResponse{Session: sessionToMsg(*row, s.statusOf(ctx, req.Id))}, nil
 }
 

@@ -450,6 +450,15 @@ type EventHub struct {
 	// backplane, when set, mirrors every published event onto the durable NATS
 	// session-events stream so OTHER replicas' watchers receive it.
 	backplane Backplane
+	/**
+	 * listChanges, when set, announces a row change to every replica.
+	 *
+	 * THE HUB PUBLISHES THE NUDGE, NOT ONLY THE SERVER. A session's preview changes when a TURN writes a step —
+	 * which happens in the runtime, not in an RPC handler — and the runtime has no Server. Routing it through
+	 * here is what keeps "the list is live" true for the one case a user notices most: a reply arriving while the
+	 * list is open.
+	 */
+	listChanges func(tenant, session string)
 }
 
 /**
@@ -573,6 +582,11 @@ func (h *EventHub) Publish(tenant, session string, ev agent.Event) {
 			default:
 			}
 		}
+		// AND THE OTHER REPLICAS. This is the path a turn's preview takes, which is why it cannot be left to the
+		// RPC handlers: they never see it.
+		if h.listChanges != nil {
+			h.listChanges(tenant, session)
+		}
 	}
 }
 
@@ -622,6 +636,9 @@ var listAffecting = map[string]bool{
 
 // SetBackplane installs the durable event sink.
 func (h *EventHub) SetBackplane(b Backplane) { h.backplane = b }
+
+// SetListChangeHook wires the cross-replica announcement for row changes.
+func (h *EventHub) SetListChangeHook(fn func(tenant, session string)) { h.listChanges = fn }
 
 // NextSeq returns a monotonic stream sequence.
 func (h *EventHub) NextSeq() int64 { return atomic.AddInt64(&h.seq, 1) }

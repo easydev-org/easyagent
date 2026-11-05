@@ -182,6 +182,13 @@ func run(cfgPath string) error {
 		// Mirror every published event onto the durable session-events stream
 		// so other replicas' watchers receive it (cross-replica WatchSession).
 		hub.SetBackplane(b)
+		// A TURN'S PREVIEW CHANGE ARRIVES HERE, not through an RPC: the hub is the only thing the runtime talks
+		// to, so the cross-replica announcement is wired onto it.
+		hub.SetListChangeHook(func(tenant, session string) {
+			_ = b.PublishListChange(context.Background(), tenant, agentbus.SessionListChange{
+				Kind: agentbus.ListKindSession, Name: session,
+			})
+		})
 		rtDeps.Lease = b
 		// THE RUNTIME DRAINS THIS SAME QUEUE. Wired here rather than at struct construction because the
 		// queue lives on the bus, and the bus is built after the deps it feeds.
