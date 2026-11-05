@@ -55,7 +55,7 @@ func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
  * That rule lives here rather than in the channel layer because it needs the membership table, and the
  * channel layer deliberately knows nothing about groups.
  */
-func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, text string, to []string) (*agentv1.GroupMessage, []string, error) {
+func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, text string) (*agentv1.GroupMessage, []string, error) {
 	name := strings.TrimSpace(group)
 	if name == "" {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
@@ -95,17 +95,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 		}
 	}
 
-	/**
-	 * THE RECIPIENTS ARE RESOLVED AND VALIDATED BEFORE THE MESSAGE IS STORED.
-	 *
-	 * A HALF-ADDRESSED MESSAGE IS WORSE THAN A REFUSED ONE: some sessions would start on an instruction the
-	 * others never received, and the transcript would not say which. So the whole list is checked first, and
-	 * only then does anything get written.
-	 */
-	delivered, err := s.resolveGroupRecipients(tenant, name, sender, coordinator, to)
-	if err != nil {
-		return nil, nil, err
-	}
+	delivered := groupRecipient(sender, coordinator)
 
 	msg, err := s.db.AppendGroupMessage(store.GroupMessage{
 		ID:         newUUID(),
@@ -124,68 +114,24 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 }
 
 /**
- * resolveGroupRecipients answers who hears a message.
+ * groupRecipient answers who hears a message.
  *
- * A USER CANNOT ADDRESS MEMBERS. A user writes to the GROUP, and the group's user-facing side is its
- * coordinator: the coordinator reads the message, decides how to split the work, and addresses members itself.
- * That is what the role means, and letting a user reach past it would make the coordinator optional at exactly
- * the moment its judgement is the point.
+ * ONE RECIPIENT, ONE RULE: THE COORDINATOR. A user writes to the group and a member reports to it; both arrive
+ * at the same place, because the coordinator is what a group's user-facing side means.
  *
- * `to` therefore belongs to sessions alone:
+ * A COORDINATOR'S OWN POST IS RECORDED AND DELIVERED TO NOBODY. It is addressing members through its own tool,
+ * which stores and delivers that message itself — this RPC is not how a coordinator hands out work. Keeping the
+ * rule here would duplicate a decision the tool already makes.
  *
- *	from a user          → the coordinator
- *	from a member        → the coordinator (a report; naming a peer would be peer-to-peer, which is refused)
- *	from the coordinator → exactly the names given; empty means the message is recorded and nobody is woken
- *
- * EVERY NAME IS VALIDATED BEFORE ANYTHING IS STORED OR SENT. A half-addressed message is worse than a refused
- * one: some members work on something the others never saw, and the transcript does not say which.
- *
- * DUPLICATES COLLAPSE and the order is preserved.
+ * THERE IS NO `to`. A field that a caller could set and the server would ignore is worse than no field: the
+ * caller believes it addressed someone, and the failure looks like delivery rather than like a missing
+ * capability.
  */
-func (s *Server) resolveGroupRecipients(tenant, group, sender, coordinator string, to []string) ([]string, error) {
-	// A USER ADDRESSES THE GROUP, NOT ITS MEMBERS.
-	if sender == "" {
-		if len(to) > 0 {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				"a user's message goes to the group; only its coordinator may address members")
-		}
-		return []string{coordinator}, nil
+func groupRecipient(sender, coordinator string) []string {
+	if sender == coordinator {
+		return nil
 	}
-
-	// A MEMBER REPORTS UPWARD and may name nobody. Reported rather than ignored: silently dropping the field
-	// would let a caller believe it had addressed someone.
-	if sender != coordinator && len(to) > 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			"a member may only address the coordinator, which it does by posting without `to`")
-	}
-	if sender != coordinator {
-		return []string{coordinator}, nil
-	}
-
-	// THE COORDINATOR ADDRESSES THE MEMBERS IT NAMES.
-	seen := make(map[string]bool, len(to))
-	out := make([]string, 0, len(to))
-	for _, raw := range to {
-		m := strings.TrimSpace(raw)
-		if m == "" || seen[m] {
-			continue
-		}
-		if m == coordinator {
-			return nil, connect.NewError(connect.CodeInvalidArgument,
-				"the coordinator cannot address itself; a message it posts is recorded for the group")
-		}
-		member, err := s.db.IsGroupMember(tenant, group, m)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err.Error())
-		}
-		if !member {
-			return nil, connect.NewError(connect.CodeNotFound,
-				fmt.Sprintf("%q is not a member of this group", m))
-		}
-		seen[m] = true
-		out = append(out, m)
-	}
-	return out, nil
+	return []string{coordinator}
 }
 
 /**
@@ -215,7 +161,7 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 // SendGroupMessage posts a message into a group.
 func (s *Server) SendGroupMessage(ctx context.Context, req *agentv1.SendGroupMessageRequest) (*agentv1.SendGroupMessageResponse, error) {
 	msg, delivered, err := s.sendGroupMessage(ctx, tenantOf(ctx),
-		req.GetGroup(), req.GetSender(), req.GetText(), req.GetTo())
+		req.GetGroup(), req.GetSender(), req.GetText())
 	if err != nil {
 		return nil, err
 	}

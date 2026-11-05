@@ -811,20 +811,12 @@ message SendGroupMessageRequest {
    * transcript from accepting messages from anyone who guesses the name.
    */
   string sender = 3;
-  /**
-   * MEMBERS TO ADDRESS — the "@" in the UI.
-   *
-   * EMPTY MEANS "THE DEFAULT RECIPIENT FOR THIS SENDER", which is not the same as "nobody":
-   *
-   *	from a user          → the coordinator
-   *	from a member        → the coordinator (a report)
-   *	from the coordinator → nobody, unless names are given here
-   *
-   * NAMES ARE VALIDATED BEFORE ANYTHING IS STORED OR SENT. A message that reached half its recipients would
-   * leave some sessions working on an instruction the others never saw, and nothing in the transcript says
-   * which.
-   */
-  repeated string to = 4;
+  // FIELD 4 WAS `to`, AND IT IS GONE. A message posted through this RPC has exactly one recipient, decided by
+  // the sender's role: a user's message and a member's report both reach the COORDINATOR, and a coordinator
+  // addresses members through its own `group-send` tool rather than through the console's RPC. Reserved so a
+  // future field cannot silently inherit the meaning.
+  reserved 4;
+  reserved "to";
 }
 message SendGroupMessageResponse {
   // The message as stored, including the sequence it was assigned.

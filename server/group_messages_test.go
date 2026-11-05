@@ -209,13 +209,13 @@ func TestCoordinatorCannotBeLeftAbsent(t *testing.T) {
 }
 
 /**
- * `to` IS THE "@" — AND WHAT IT MAY CONTAIN DEPENDS ON WHO IS SENDING.
+ * ONE RECIPIENT, ONE RULE: THE COORDINATOR.
  *
- * A GROUP ROUTES UPWARD AND DOWNWARD, NEVER SIDEWAYS. The coordinator addresses members; a member addresses
- * the coordinator; a user addresses the group (which means the coordinator). Letting a member name a peer
- * would make the coordinator optional, and it is the one thing that knows what it handed out.
+ * A user writes to the group and a member reports to it; both arrive at the same place. There is no `to` field
+ * any more, because a field a caller could set and the server would ignore is worse than no field: the caller
+ * believes it addressed someone, and the failure looks like delivery rather than like a missing capability.
  */
-func TestGroupSendTargetsFollowTheRole(t *testing.T) {
+func TestGroupMessageRecipientIsAlwaysTheCoordinator(t *testing.T) {
 	ts, db, _ := newTestServerWith(t, nil)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
@@ -223,48 +223,14 @@ func TestGroupSendTargetsFollowTheRole(t *testing.T) {
 
 	coord := newSession(t, c, "coord")
 	w1 := newSession(t, c, "w1")
-	w2 := newSession(t, c, "w2")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: coord, Members: []string{w1, w2}, CreatedBy: "user",
+		Name: "g", Coordinator: coord, Members: []string{w1}, CreatedBy: "user",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// COORDINATOR → the members it names, and only those.
-	res, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "both of you", Sender: coord, To: []string{w1, w2},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.DeliveredTo) != 2 {
-		t.Fatalf("delivered to %v, want both members", res.DeliveredTo)
-	}
-
-	// Duplicates collapse: naming one twice is a mistake, not two deliveries.
-	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "once", Sender: coord, To: []string{w1, w1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.DeliveredTo) != 1 {
-		t.Errorf("delivered to %v, want one", res.DeliveredTo)
-	}
-
-	// COORDINATOR with no `to` is RECORDED BUT ADDRESSES NOBODY — distinct from delivering to everyone.
-	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "a note", Sender: coord,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.DeliveredTo) != 0 {
-		t.Errorf("delivered to %v, want nobody", res.DeliveredTo)
-	}
-
-	// A USER reaches the coordinator by default...
-	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "hi"})
+	// A USER'S MESSAGE reaches the coordinator.
+	res, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,58 +238,66 @@ func TestGroupSendTargetsFollowTheRole(t *testing.T) {
 		t.Errorf("a user's message went to %v, want the coordinator", res.DeliveredTo)
 	}
 
-	// ...AND CANNOT NAME MEMBERS. A user writes to the GROUP; its coordinator decides who works on what. Letting
-	// a user reach past it would make the coordinator optional at the moment its judgement is the point.
-	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "w1, look at this", To: []string{w1},
-	}); err == nil {
-		t.Error("a user addressed a member directly")
-	}
-
-	// A MEMBER reports upward. Naming anyone — even the coordinator — is refused, because the default is
-	// already the coordinator and an explicit name would suggest peer addressing exists.
-	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "done", Sender: w1, To: []string{w2},
-	}); err == nil {
-		t.Error("a member addressed a peer")
-	}
-	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "done", Sender: w1})
+	// A MEMBER'S REPORT reaches the same place.
+	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group: "g", Text: "done", Sender: w1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(res.DeliveredTo) != 1 || res.DeliveredTo[0] != coord {
 		t.Errorf("a member's report went to %v, want the coordinator", res.DeliveredTo)
 	}
+
+	// A COORDINATOR'S POST IS RECORDED AND WAKES NOBODY: it hands out work through its own tool, which stores
+	// and delivers that message itself. This RPC is not that path.
+	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group: "g", Text: "a note", Sender: coord,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.DeliveredTo) != 0 {
+		t.Errorf("a coordinator's post reached %v, want nobody", res.DeliveredTo)
+	}
+
+	// ALL THREE ARE IN THE TRANSCRIPT, which is what makes the record complete regardless of who was woken.
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Messages) != 3 {
+		t.Fatalf("transcript holds %d messages, want 3", len(list.Messages))
+	}
 }
 
 /**
- * A BAD NAME REFUSES THE WHOLE MESSAGE — NOTHING IS STORED AND NOBODY IS WOKEN.
+ * A NON-MEMBER CANNOT POST, SO A MESSAGE CANNOT COME FROM OUTSIDE.
  *
- * A half-addressed instruction is worse than a refused one: some members work on something the others never
- * saw, and the transcript does not say which.
+ * The `to` targets are gone with the field, so the remaining validation is on the SENDER: a session that is not
+ * in the group gets NOT_FOUND, which is the same answer as a group that does not exist.
  */
-func TestGroupSendRefusesTheWholeMessageOnABadTarget(t *testing.T) {
+func TestGroupPostRefusesANonMemberSender(t *testing.T) {
 	ts, db, _ := newTestServerWith(t, nil)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
 	coord := newSession(t, c, "coord")
-	w1 := newSession(t, c, "w1")
 	outsider := newSession(t, c, "mallory")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: coord, Members: []string{w1}, CreatedBy: "user",
+		Name: "g", Coordinator: coord, CreatedBy: "user",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "x", Sender: coord, To: []string{w1, outsider},
+		Group: "g", Text: "x", Sender: outsider,
 	}); err == nil {
-		t.Fatal("a non-member was addressed")
+		t.Fatal("a non-member posted to the group")
 	}
 
-	// NOTHING WAS STORED: the transcript is still empty, so no recipient can find a half-run instruction.
+	// NOTHING WAS STORED, so no recipient can find a message from outside.
 	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
 	if err != nil {
 		t.Fatal(err)
