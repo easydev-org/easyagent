@@ -127,10 +127,9 @@ func (s *Server) TestProvider(ctx context.Context, req *agentv1.TestProviderRequ
 	tenant := tenantOf(ctx)
 	baseURL, apiKey := req.BaseUrl, req.ApiKey
 	capability := req.GetCapability()
-	if capability == "" {
-		capability = "text"
-	}
-	if req.ProviderId != "" {
+	// NO DEFAULT HERE EITHER. The request must name the capability; an existing row supplies it only when
+	// the caller is editing that exact provider, which is a resolved VALUE rather than an assumption.
+	if capability == "" && req.ProviderId != "" {
 		if row, ok, _ := s.providerByID(tenant, req.ProviderId); ok {
 			if baseURL == "" {
 				baseURL = row.BaseURL

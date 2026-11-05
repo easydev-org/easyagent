@@ -329,45 +329,19 @@ func searchParallel(ctx context.Context, query string, count int, timeout time.D
 		return nil, err
 	}
 
-	// The MCP result wraps a JSON STRING in `content[0].text`; the real payload is inside it.
-	var wrapper struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var wrapper mcpContent
 	if err := json.Unmarshal(res, &wrapper); err != nil {
 		return nil, fmt.Errorf("unexpected result shape: %w", err)
 	}
-	if len(wrapper.Content) == 0 {
+	text := wrapper.firstText()
+	if text == "" {
 		return nil, errors.New("empty content")
 	}
-	var payload struct {
-		Results []struct {
-			URL         string   `json:"url"`
-			Title       string   `json:"title"`
-			PublishDate string   `json:"publish_date"`
-			Excerpts    []string `json:"excerpts"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal([]byte(wrapper.Content[0].Text), &payload); err != nil {
+	var payload parallelPayload
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		return nil, fmt.Errorf("unexpected payload: %w", err)
 	}
-
-	out := make([]searchResult, 0, len(payload.Results))
-	for _, r := range payload.Results {
-		if r.URL == "" {
-			continue
-		}
-		out = append(out, searchResult{
-			URL: r.URL, Title: r.Title,
-			Content:  strings.Join(r.Excerpts, "\n\n"),
-			Provider: "parallel", Published: r.PublishDate,
-		})
-		if len(out) >= count {
-			break
-		}
-	}
-	return out, nil
+	return adaptParallel(payload, count), nil
 }
 
 // searchTavily queries Tavily's search API.
@@ -402,24 +376,11 @@ func searchTavily(ctx context.Context, query string, count int, timeout time.Dur
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
-	var payload struct {
-		Results []struct {
-			URL     string `json:"url"`
-			Title   string `json:"title"`
-			Content string `json:"content"`
-		} `json:"results"`
-	}
+	var payload tavilyPayload
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	out := make([]searchResult, 0, len(payload.Results))
-	for _, r := range payload.Results {
-		if r.URL == "" {
-			continue
-		}
-		out = append(out, searchResult{URL: r.URL, Title: r.Title, Content: r.Content, Provider: "tavily"})
-	}
-	return out, nil
+	return adaptTavily(payload, count), nil
 }
 
 // searchExa queries Exa's MCP endpoint.
@@ -433,21 +394,11 @@ func searchExa(ctx context.Context, query string, count int, timeout time.Durati
 	if err != nil {
 		return nil, err
 	}
-	var wrapper struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var wrapper mcpContent
 	if err := json.Unmarshal(res, &wrapper); err != nil {
 		return nil, fmt.Errorf("unexpected result shape: %w", err)
 	}
-	text := ""
-	for _, c := range wrapper.Content {
-		if c.Text != "" {
-			text = c.Text
-			break
-		}
-	}
+	text := wrapper.firstText()
 	if text == "" {
 		return nil, errors.New("empty content")
 	}
@@ -513,42 +464,19 @@ func searchTinyfish(ctx context.Context, query string, count int, timeout time.D
 	if err != nil {
 		return nil, err
 	}
-	var wrapper struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var wrapper mcpContent
 	if err := json.Unmarshal(res, &wrapper); err != nil {
 		return nil, fmt.Errorf("unexpected result shape: %w", err)
 	}
-	if len(wrapper.Content) == 0 {
+	text := wrapper.firstText()
+	if text == "" {
 		return nil, errors.New("empty content")
 	}
-	var payload struct {
-		Results []struct {
-			URL      string `json:"url"`
-			Title    string `json:"title"`
-			Snippet  string `json:"snippet"`
-			SiteName string `json:"site_name"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal([]byte(wrapper.Content[0].Text), &payload); err != nil {
+	var payload tinyfishPayload
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		return nil, fmt.Errorf("unexpected payload: %w", err)
 	}
-	out := make([]searchResult, 0, len(payload.Results))
-	for _, r := range payload.Results {
-		if r.URL == "" {
-			continue
-		}
-		content := tinyfishContent(r.Snippet, r.SiteName)
-		out = append(out, searchResult{
-			URL: r.URL, Title: r.Title, Content: content, Provider: "tinyfish",
-		})
-		if len(out) >= count {
-			break
-		}
-	}
-	return out, nil
+	return adaptTinyfish(payload, count), nil
 }
 
 // searchFirecrawl queries Firecrawl's MCP endpoint.
@@ -559,44 +487,21 @@ func searchFirecrawl(ctx context.Context, query string, count int, timeout time.
 	if err != nil {
 		return nil, err
 	}
-	var wrapper struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var wrapper mcpContent
 	if err := json.Unmarshal(res, &wrapper); err != nil {
 		return nil, fmt.Errorf("unexpected result shape: %w", err)
 	}
-	if len(wrapper.Content) == 0 {
+	// Firecrawl puts the payload in `content[0].text` as a JSON STRING — the same nesting as the others,
+	// which is why it is handled here rather than with a provider-specific route.
+	text := wrapper.firstText()
+	if text == "" {
 		return nil, errors.New("empty content")
 	}
-	// Firecrawl DOUBLE-ENCODES: the payload is a JSON string inside the text field.
-	var payload struct {
-		Success bool `json:"success"`
-		Data    struct {
-			Web []struct {
-				URL         string `json:"url"`
-				Title       string `json:"title"`
-				Description string `json:"description"`
-			} `json:"web"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(wrapper.Content[0].Text), &payload); err != nil {
+	var payload firecrawlPayload
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		return nil, fmt.Errorf("unexpected payload: %w", err)
 	}
-	out := make([]searchResult, 0, len(payload.Data.Web))
-	for _, r := range payload.Data.Web {
-		if r.URL == "" {
-			continue
-		}
-		out = append(out, searchResult{
-			URL: r.URL, Title: r.Title, Content: r.Description, Provider: "firecrawl",
-		})
-		if len(out) >= count {
-			break
-		}
-	}
-	return out, nil
+	return adaptFirecrawl(payload, count), nil
 }
 
 /**

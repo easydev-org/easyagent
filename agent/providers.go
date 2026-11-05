@@ -25,11 +25,16 @@ var ModelCapabilities = []ModelCapability{
 	CapText, CapImage, CapVideo, CapSpeech, CapTranscription, CapEmbedding, CapRerank, CapRealtime,
 }
 
-// ParseCapability normalizes a client-supplied capability (empty = text).
+// ParseCapability validates a client-supplied capability.
+//
+// EMPTY IS AN ERROR, not "text". A default here made two different situations indistinguishable: a caller
+// that forgot the field, and a caller that asked for a text model. The first is a client bug that should be
+// reported while the request is in hand; the second is an intention that should be stated. Anything that
+// reads a row written before this rule must resolve its own default explicitly, where it can be seen.
 func ParseCapability(raw string) (ModelCapability, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" {
-		return CapText, nil
+		return "", fmt.Errorf("capability is required (one of %s)", joinCaps(ModelCapabilities))
 	}
 	for _, c := range ModelCapabilities {
 		if string(c) == v {

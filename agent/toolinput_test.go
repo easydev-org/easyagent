@@ -10,32 +10,45 @@ import (
 // The client reads fields off `input` (`input.todos`, `input.repo`, …). Every encoding layer the
 // provider adds is invisible to `json.Unmarshal` — it just yields a string — so a card renders
 // empty with no error anywhere. These cases are the four shapes seen in practice.
-func TestDecodeToolInputReachesAnObject(t *testing.T) {
-	cases := []struct {
-		name string
-		args string
-	}{
-		{"plain object", `{"todos":[{"content":"a"}]}`},
-		{"json string", `"{\"todos\":[{\"content\":\"a\"}]}"`},
-		{"string in a string", `"\"{\\\"todos\\\":[{\\\"content\\\":\\\"a\\\"}]}\""`},
+/**
+ * THE UNWRAPPING MOVED TO THE LLM LAYER, so this function parses and nothing more.
+ *
+ * The loop that used to live here guessed at a nesting depth, and its bound was arbitrary. The stream
+ * protocol is now normalised where it is read (`llm.inputToString`), which means arguments arrive as an
+ * object's JSON text — one decode is the whole job, and a producer that sends something else is reported
+ * there rather than tripped over here.
+ */
+func TestDecodeToolInputParsesAnObject(t *testing.T) {
+	got := decodeToolInput(`{"todos":[{"content":"a"}]}`)
+	m, ok := got.(map[string]any)
+	if !ok {
+		t.Fatalf("decodeToolInput = %T, want map", got)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := decodeToolInput(c.args)
-			m, ok := got.(map[string]any)
-			if !ok {
-				t.Fatalf("decodeToolInput(%s) = %T, want map — a string here means every card "+
-					"reading a field of it shows nothing", c.args, got)
-			}
-			if _, ok := m["todos"]; !ok {
-				t.Fatalf("decoded map has no `todos` key: %#v", m)
-			}
-		})
+	if _, ok := m["todos"]; !ok {
+		t.Fatalf("decoded map has no `todos` key: %#v", m)
 	}
 }
 
-// A genuine bare string (a tool that takes a string argument) must survive as a string, and text
-// that is not JSON at all must be passed through rather than dropped.
+// An empty argument list is an EMPTY OBJECT, not an empty string: every tool handler reads fields off it,
+// and a string there would make each of them check the type first.
+func TestDecodeToolInputEmptyIsAnObject(t *testing.T) {
+	got := decodeToolInput("")
+	if m, ok := got.(map[string]any); !ok || len(m) != 0 {
+		t.Fatalf("decodeToolInput(\"\") = %#v, want an empty map", got)
+	}
+	if got := decodeToolInput("   "); got == nil {
+		t.Fatal("whitespace-only input produced nil")
+	}
+}
+
+/**
+ * A NON-OBJECT IS PASSED THROUGH, because it can be legitimate.
+ *
+ * A tool whose argument really is a bare string exists, and a model that emitted malformed JSON should have
+ * that text shown rather than dropped — the reader can see what it tried. What must NOT happen is the old
+ * behaviour of unwrapping a string repeatedly on the chance that its content parses: `"123"` is both a
+ * string argument and valid JSON, and the loop could turn one into the other by accident.
+ */
 func TestDecodeToolInputLeavesOtherShapesAlone(t *testing.T) {
 	if got := decodeToolInput(`"hello"`); got != "hello" {
 		t.Errorf(`decodeToolInput("\"hello\"") = %#v, want "hello"`, got)
@@ -43,14 +56,16 @@ func TestDecodeToolInputLeavesOtherShapesAlone(t *testing.T) {
 	if got := decodeToolInput(`not json`); got != "not json" {
 		t.Errorf("non-JSON input = %#v, want it unchanged", got)
 	}
-	if got := decodeToolInput(``); got != "" {
-		t.Errorf("empty input = %#v, want empty string", got)
+	// A string whose content IS valid JSON stays a string here — the LLM layer decides what a nested
+	// encoding means, and it does so where the protocol is known.
+	if got := decodeToolInput(`"{\"a\":1}"`); got != `{"a":1}` {
+		t.Errorf("a JSON-looking string was unwrapped to %#v", got)
 	}
 }
 
 // The emitted value must survive a JSON round-trip as an object — that is what the wire carries.
 func TestDecodeToolInputRoundTripsAsObject(t *testing.T) {
-	args := `"\"{\\\"todos\\\":[{\\\"content\\\":\\\"a\\\",\\\"status\\\":\\\"pending\\\"}]}\""`
+	args := `{"todos":[{"content":"a","status":"pending"}]}`
 	wire, err := json.Marshal(map[string]any{"input": decodeToolInput(args)})
 	if err != nil {
 		t.Fatal(err)

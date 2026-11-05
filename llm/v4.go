@@ -184,7 +184,15 @@ func (c *Client) decode(ctx context.Context, r io.Reader, out chan<- Event) {
 				return
 			}
 		case "tool-call":
-			tc := &ToolCall{ID: p.ToolCallID, Name: p.ToolName, Args: inputToString(p.Input)}
+			args, err := inputToString(p.Input)
+			if err != nil {
+				// THE ERROR SURFACES AS A FAILED CALL, not a silently empty one. A tool that receives no
+				// arguments and no explanation makes the model retry the same way; an error it can read
+				// lets it change what it does.
+				send(out, ctx, Event{Type: EventError, Err: fmt.Errorf("tool %q: %w", p.ToolName, err)})
+				continue
+			}
+			tc := &ToolCall{ID: p.ToolCallID, Name: p.ToolName, Args: args}
 			if !send(out, ctx, Event{Type: EventToolCall, ToolCall: tc}) {
 				return
 			}
@@ -231,17 +239,58 @@ func usageOf(p v4Part) *Usage {
 	return &u
 }
 
-// inputToString renders a stream tool-call `input`: it is a JSON string in the
-// stream spec, but tolerate an inline object.
-func inputToString(raw json.RawMessage) string {
+/**
+ * inputToString renders a stream tool-call `input` as the JSON text a tool receives.
+ *
+ * THE PROTOCOL ALLOWS EXACTLY TWO SHAPES, and this is the only place that knows it:
+ *
+ *	an OBJECT          the arguments, inline — used as-is
+ *	a JSON STRING      whose content is the arguments object — decoded, and the content used
+ *
+ * ANYTHING ELSE IS A PROTOCOL VIOLATION AND IS REPORTED. The previous version tried repeatedly until the
+ * value stopped changing, which handled a third shape (a string containing a string) by guessing at a
+ * nesting depth. That is what this function intentionally does NOT do any more:
+ *
+ *   · the depth was a bound nobody could justify, and exceeding it fell through silently anyway;
+ *   · a call whose arguments genuinely are a bare string could be unwrapped by accident when its content
+ *     happened to parse — `"123"` is both a string argument and valid JSON.
+ *
+ * A caller that has to cope with more shapes should normalise them at the EDGE, where the shape is
+ * observed, rather than here, where it is merely tripped over.
+ */
+func inputToString(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
-		return ""
+		return "", nil
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
+	switch raw[0] {
+	case 'n':
+		// `null` means NO ARGUMENTS, which is a legitimate value for a tool that takes none — distinct from
+		// a malformed payload, and handled before the shape check so it is not reported as a violation.
+		if string(raw) == "null" {
+			return "", nil
+		}
+		return "", fmt.Errorf("tool input is neither an object nor a string: %.40s", string(raw))
+	case '{':
+		// Shape 1: the object itself.
+		return string(raw), nil
+	case '"':
+		// Shape 2: a JSON string carrying the object.
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "", fmt.Errorf("tool input string is not decodable: %w", err)
+		}
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			return "", nil
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+			return "", fmt.Errorf("tool input string does not hold a JSON object: %w", err)
+		}
+		return trimmed, nil
+	default:
+		return "", fmt.Errorf("tool input is neither an object nor a string: %.40s", string(raw))
 	}
-	return string(raw)
 }
 
 func errMessage(raw json.RawMessage) string {

@@ -88,8 +88,11 @@ func TestCompactionSplitAndFold(t *testing.T) {
 }
 
 func TestProviderCapability(t *testing.T) {
-	if c, err := ParseCapability(""); err != nil || c != CapText {
-		t.Errorf("empty capability = %v, %v", c, err)
+	// EMPTY IS AN ERROR. A default here made "the caller forgot the field" indistinguishable from "the
+	// caller asked for a text model" — and the first is a client bug that should be reported while the
+	// request is still in hand.
+	if _, err := ParseCapability(""); err == nil {
+		t.Error("empty capability must be refused, not defaulted to text")
 	}
 	if c, err := ParseCapability("IMAGE"); err != nil || c != CapImage {
 		t.Errorf("IMAGE = %v, %v", c, err)

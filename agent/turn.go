@@ -723,58 +723,31 @@ func emit(ctx context.Context, e Emitter, name string, params map[string]any) er
 }
 
 /**
- * decodeToolInput turns a provider's tool-call argument text into the OBJECT a client can read
- * fields from.
+ * decodeToolInput parses the argument text a tool call carries into the value a client reads fields
+ * from.
  *
- * Providers disagree about how many times arguments are encoded. The stream spec says `input` is a
- * JSON *string*, but some send an object; and at least one wraps its JSON in a string inside that
- * string. Each extra layer survives `json.Unmarshal` as a `string` — which is not an error, so
- * nothing complains, and every client that reads `input.todos` (or any other field) finds nothing
- * and renders an empty card.
+ * THERE IS NO UNWRAPPING LOOP HERE ANY MORE. The llm layer is the only place that knows the stream
+ * protocol, and it now normalises what it receives into a single JSON object — reporting anything else as
+ * a failed call instead of guessing at a nesting depth (see llm.inputToString). By the time arguments
+ * reach this function they are the object's JSON text, so one decode is the whole job.
  *
- * So: decode until the result is no longer a string, with a small bound. Returning a string after
- * that is the honest answer — a tool whose arguments really are a bare string exists — but the
- * common case is an object, and this makes it one.
+ * A NON-OBJECT IS STILL POSSIBLE and is not an error: a tool whose arguments genuinely are a bare string
+ * exists, and a model that emitted malformed JSON should have that text shown rather than dropped.
  */
 func decodeToolInput(args string) any {
+	if strings.TrimSpace(args) == "" {
+		return map[string]any{}
+	}
 	var v any
 	if err := json.Unmarshal([]byte(args), &v); err != nil {
-		// Not JSON at all. Hand it over as text rather than dropping it: a card can still show it,
-		// and it means the model sent something that is not JSON, which is worth seeing.
+		// Not JSON at all. Hand it over as text rather than dropping it: a card can still show it, and it
+		// means the model sent something that is not JSON, which is worth seeing.
+		slog.Warn("tool arguments are not JSON", "head", truncateHead(args))
 		return args
 	}
-	// Unwrap while the value is still a STRING whose content parses as JSON. Each provider adds a
-	// different number of layers, so the count is discovered rather than assumed; the bound stops a
-	// pathological input from looping.
-	//
-	// Stopping on "no longer a string" is what makes a genuine string argument survive: a tool whose
-	// argument really is `"hello"` yields `hello`, which does not parse as JSON, so it is returned
-	// as-is below.
-	const maxUnwrap = 4
-	layers := 0
-	for layers < maxUnwrap {
-		s, ok := v.(string)
-		if !ok {
-			break
-		}
-		var next any
-		if err := json.Unmarshal([]byte(s), &next); err != nil {
-			break
-		}
-		v = next
-		layers++
-	}
-	// Silence on the normal path: most calls are one layer and need no comment.
-	//
-	// What IS worth a line is a value that is STILL a string after unwrapping, because a client that
-	// reads a field off it will render an empty card and nothing anywhere reports an error. Also
-	// worth a line: a call that needed more than one unwrap, since that means the provider changed
-	// shape and the bound is now doing real work.
-	if s, stillString := v.(string); stillString {
+	if _, ok := v.(map[string]any); !ok {
 		slog.Warn("tool arguments are not an object; cards that read fields of them will be empty",
-			"layers", layers, "head", truncateHead(s))
-	} else if layers > 1 {
-		slog.Warn("tool arguments needed extra unwrapping", "layers", layers)
+			"head", truncateHead(args))
 	}
 	return v
 }
