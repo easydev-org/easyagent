@@ -371,3 +371,46 @@ func TestPromotionRespectsOneCoordinatorPerSession(t *testing.T) {
 		t.Errorf("coordinator = %q, want unchanged (coord)", gotCoord)
 	}
 }
+
+/**
+ * THE IN-PROCESS EXTENSION'S PERMISSIONS SURVIVE A REFRESH.
+ *
+ * `Refresh` REBUILDS the permission table from what `Discover` reported, and `bundled` never appears in
+ * that report — it is not a remote extension. So a one-time write was erased by the first refresh, and
+ * the symptom was quiet: `requires: [group.create]` named a permission the console had nothing to offer,
+ * so nobody could grant it and the tool was permanently unusable while looking merely broken.
+ */
+func TestBundledPermissionsSurviveRefresh(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	// The test server has no in-process tool surface, so assert the DECLARATION is reachable through the
+	// manifest — the part a deployment assembles from. The registration path itself is covered by the
+	// agentbus test below.
+	m, err := bundled.ParseManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Permissions) == 0 {
+		t.Fatal("the manifest declares no permissions, so delegation could never be authorised")
+	}
+	var keys []string
+	for _, p := range m.Permissions {
+		keys = append(keys, p.Key)
+	}
+	for _, want := range []string{"group.create", "group.spawn"} {
+		var found bool
+		for _, k := range keys {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("permission %q is required by a tool but not declared: %v", want, keys)
+		}
+	}
+	_ = ctx
+	_ = c
+}

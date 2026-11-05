@@ -317,6 +317,12 @@ type ToolExecutor struct {
 	// extPerms maps an extension id -> the permissions it can require. A client renders
 	// the grant form from this, so it never has to know what any extension means.
 	extPerms map[string][]bundled.PermissionDecl
+	/**
+	 * bundledPerms is the IN-PROCESS extension's declared permissions, kept outside `extPerms` because
+	 * `Refresh` rebuilds that map from what `Discover` reported — and the in-process extension never
+	 * appears there. Without this the entry survived only until the first refresh.
+	 */
+	bundledPerms map[string][]bundled.PermissionDecl
 	// extChans maps an extension id -> the channels it publishes to. A client offers a
 	// subscription from this instead of asking the user to invent a pattern.
 	extChans map[string][]bundled.ChannelDecl
@@ -360,17 +366,23 @@ func (e *ToolExecutor) WithGrants(g GrantSource) *ToolExecutor {
  *
  * THE DISCOVERED EXTENSIONS FILL `extPerms` FROM THEIR MANIFESTS, and bundled has no manifest to fetch:
  * it lives in this process. Without this the executor's permission table had no entry for it, so
- * `group.create` was required by a tool but offered to nobody — the console would show no grantable
+ * `group.create` was required by a tool but offered to nobody — the console showed no grantable
  * permission and the user could not authorise delegation at all.
  *
- * A MAP RATHER THAN AN EXTENSION ID because the in-process surface may one day be several; today it is
- * one, and passing its id would hard-code that fact here.
+ * IT IS REMEMBERED SEPARATELY, not just written into `extPerms`, because `Refresh` REBUILDS that map from
+ * what Discover reported. The in-process extension is not in that report, so a one-time write was erased
+ * by the first refresh — and the symptom (a permission that exists in the manifest and nowhere else) is
+ * invisible until someone tries to grant it.
  */
 func (e *ToolExecutor) WithBundledPermissions(perms map[string][]bundled.PermissionDecl) *ToolExecutor {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.bundledPerms == nil {
+		e.bundledPerms = make(map[string][]bundled.PermissionDecl, len(perms))
+	}
 	for id, list := range perms {
 		if len(list) > 0 {
+			e.bundledPerms[id] = list
 			e.extPerms[id] = list
 		}
 	}
@@ -421,6 +433,11 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 	e.extFields = make(map[string][]bundled.ConfigField, len(e.extFields))
 	e.extNS = make(map[string][]bundled.Namespace, len(e.extNS))
 	e.extPerms = make(map[string][]bundled.PermissionDecl, len(e.extPerms))
+	// THE IN-PROCESS EXTENSION IS NOT IN `Discover`'s REPORT, so it has to be put back after every
+	// rebuild. Losing it makes `requires` name a permission no client can offer.
+	for id, list := range e.bundledPerms {
+		e.extPerms[id] = list
+	}
 	e.extChans = make(map[string][]bundled.ChannelDecl, len(e.extChans))
 	e.extVersions = make(map[string]string, len(e.extVersions))
 	// NOT CLEARED HERE: the bundled extension is registered separately and never appears in Discover,
