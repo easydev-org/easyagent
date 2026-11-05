@@ -555,4 +555,25 @@ func TestThumbnailRowExistsWhenThumbCodeIsSet(t *testing.T) {
 	if _, err := c.GetFileMeta(ctx, &agentv1.GetFileMetaRequest{Code: *meta.ThumbCode}); err != nil {
 		t.Fatalf("thumb_code %q points at nothing: %v", *meta.ThumbCode, err)
 	}
+
+	// AND IT SURVIVES A RE-UPLOAD OF THE SAME BYTES. The second upload reuses the parent row (identical digest),
+	// so the thumbnail row already exists — an insert that insists on creating it again fails on the primary
+	// key, and a caller that reads that failure as "not stored" leaves the parent pointing at nothing.
+	again, err := c.IngestFile(ctx, &agentv1.IngestFileRequest{Data: img, Name: "shot.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Code != res.Code {
+		t.Fatalf("the second upload minted a new code %q; this test needs deduplication", again.Code)
+	}
+	meta2, err := c.GetFileMeta(ctx, &agentv1.GetFileMetaRequest{Code: res.Code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta2.ThumbCode == nil || *meta2.ThumbCode == "" {
+		t.Fatal("the re-upload lost its thumbnail reference")
+	}
+	if _, err := c.GetFileMeta(ctx, &agentv1.GetFileMetaRequest{Code: *meta2.ThumbCode}); err != nil {
+		t.Fatalf("after a re-upload, thumb_code %q points at nothing: %v", *meta2.ThumbCode, err)
+	}
 }

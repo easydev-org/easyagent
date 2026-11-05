@@ -494,6 +494,33 @@ func (d *DB) CreateFileRow(f AgentFile) error {
 	return d.g.Create(&f).Error
 }
 
+/**
+ * EnsureFileRow creates a file row unless its CODE already exists.
+ *
+ * IT IS IDEMPOTENT BY CODE because a derived blob is re-derived every time its parent is ingested, and the
+ * parent is re-ingested whenever the same bytes are uploaded again (`UpsertFile` deduplicates by digest and
+ * returns the existing row). A plain insert would then fail on the primary key, and a caller that treats the
+ * failure as "not stored" leaves the parent pointing at nothing — which is how a re-upload lost its thumbnail
+ * while the first upload had one.
+ *
+ * A DIFFERENT DIGEST UNDER AN EXISTING CODE IS AN ERROR: the code names one blob, and two byte sequences
+ * claiming it means the caller is reusing an identity it does not own.
+ */
+func (d *DB) EnsureFileRow(f AgentFile) error {
+	var existing AgentFile
+	err := d.g.Where("code = ?", f.Code).First(&existing).Error
+	if err == nil {
+		if existing.SHA256 != f.SHA256 {
+			return errors.New("file code already exists with different bytes")
+		}
+		return nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return d.CreateFileRow(f)
+}
+
 // FileByCode returns (file, true) or (nil, false).
 func (d *DB) FileByCode(tenant, code string) (*AgentFile, bool, error) {
 	var f AgentFile

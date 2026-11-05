@@ -58,7 +58,12 @@ func (s *Server) IngestFile(ctx context.Context, req *agentv1.IngestFileRequest)
 		thumbSum := sha256.Sum256(facts.Thumb)
 		thumbSHA := hex.EncodeToString(thumbSum[:])
 		s.putBlob(ctx, thumbCode, facts.Thumb)
-		if err := s.db.CreateFileRow(store.AgentFile{
+		/**
+		 * IDEMPOTENT BY CODE: re-uploading the same bytes reuses the parent row, so the thumbnail row may
+		 * already exist from the first time. A plain insert would fail on the primary key and the parent would
+		 * keep pointing at nothing.
+		 */
+		if err := s.db.EnsureFileRow(store.AgentFile{
 			Code: thumbCode, Tenant: tenant, SHA256: thumbSHA,
 			Name: rec.Name + ".thumb.png", Mime: "image/png", Size: int64(len(facts.Thumb)),
 		}); err == nil {
