@@ -153,36 +153,38 @@ func TestRPCSessionCRUD(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s1", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
+	id := newSession(t, c, "s1")
+	// A DUPLICATE NAME IS NOT A CONFLICT ANY MORE: the name is a display label, and two sessions may
+	// share one because the label describes the work rather than the row.
+	sameName := newSession(t, c, "s1")
+	if sameName == id {
+		t.Error("two creates returned the same id")
 	}
-	// duplicate -> AlreadyExists
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s1"}); err == nil {
-		t.Error("duplicate create should fail")
-	}
-	got, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: "s1"})
-	if err != nil || got.Session.Name != "s1" || got.Session.Model != "gw/m" {
+	got, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: id})
+	if err != nil || got.Session.Id != id || got.Session.Name != "s1" || got.Session.Model != "gw/m" {
 		t.Fatalf("get = %+v, %v", got, err)
 	}
 	list, err := c.ListSessions(ctx, &agentv1.ListSessionsRequest{})
-	if err != nil || len(list.Sessions) != 1 {
+	if err != nil || len(list.Sessions) != 2 {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
-	// rename
-	if _, err := c.Rename(ctx, &agentv1.RenameRequest{Id: "s1", Name: "s2"}); err != nil {
+	// rename changes the LABEL; the id stays put, because the id is the address.
+	if _, err := c.Rename(ctx, &agentv1.RenameRequest{Id: id, Name: "s2"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: "s1"}); err == nil {
-		t.Error("old name should be gone after rename")
+	renamed, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: id})
+	if err != nil || renamed.Session.Name != "s2" {
+		t.Fatalf("renamed session = %+v, %v; want it still reachable by id with the new label", renamed, err)
 	}
-	if _, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: "s2"}); err != nil {
-		t.Error("renamed session should exist")
+	// A name is not an id, so the new label does not become an address.
+	if _, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: "s2"}); err == nil {
+		t.Error("a display name must not be usable as an id")
 	}
 	// delete
-	if _, err := c.DeleteSession(ctx, &agentv1.DeleteSessionRequest{Id: "s2"}); err != nil {
+	if _, err := c.DeleteSession(ctx, &agentv1.DeleteSessionRequest{Id: id}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: "s2"}); err == nil {
+	if _, err := c.GetSession(ctx, &agentv1.GetSessionRequest{Id: id}); err == nil {
 		t.Error("deleted session should be gone")
 	}
 }
@@ -300,3 +302,27 @@ func adminWithToken(ts *httptest.Server, token string) agentv1connect.AdminServi
 
 var _ = fmt.Sprintf
 var _ = llm.New
+
+/**
+ * newSession creates a session and returns its SERVER-ASSIGNED id.
+ *
+ * Tests used to pass a name and then address the session by it, because the two were the same value.
+ * They are not any more: the name is a label a test may reuse, and the id is what every RPC takes. This
+ * helper is the one place that knows the difference, so a test reads "create a session called alice"
+ * and gets something it can actually call with.
+ *
+ * Pass through `clientFor`'s client; the name may be empty (a session with no label at all is legal).
+ */
+func newSession(t *testing.T, c agentv1connect.AgentServiceClient, name string) string {
+	t.Helper()
+	res, err := c.CreateSession(context.Background(), &agentv1.CreateSessionRequest{
+		Name: name, Model: "gw/m",
+	})
+	if err != nil {
+		t.Fatalf("create session %q: %v", name, err)
+	}
+	if res.SessionId == "" {
+		t.Fatal("the server returned no session id")
+	}
+	return res.SessionId
+}

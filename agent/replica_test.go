@@ -66,7 +66,8 @@ func TestLeaseLossAbortsTurn(t *testing.T) {
 	srv := slowV4(t)
 	defer srv.Close()
 	db := newRuntimeDB(t)
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	lease := &fakeLease{}
 	lease.lostAt.Store(0) // lose on the FIRST renew
 	rt := NewRuntime(RuntimeDeps{
@@ -75,9 +76,9 @@ func TestLeaseLossAbortsTurn(t *testing.T) {
 		Lease: lease, LeaseTTL: 30 * time.Millisecond, Emit: &recorder{},
 		Presets: stubPresets{},
 	})
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	start := time.Now()
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	// The turn must abort promptly (renew fires at TTL/3 ≈ 10ms), not hang.
@@ -95,7 +96,8 @@ func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
 	srv := slowV4(t)
 	defer srv.Close()
 	db := newRuntimeDB(t)
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	// The interrupt watcher delivers an `interrupt` shortly after the run starts.
 	watch := func(ctx context.Context, _, _ string) (<-chan string, func(), error) {
 		ch := make(chan string, 1)
@@ -114,9 +116,9 @@ func TestCrossReplicaInterruptAbortsTurn(t *testing.T) {
 		Lease: NewMemoryLease(), InterruptWatch: watch, Emit: &recorder{},
 		Presets: stubPresets{},
 	})
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
 	start := time.Now()
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	if time.Since(start) > 3*time.Second {
@@ -129,35 +131,35 @@ func TestDrainLoopChainsWithoutReleasingLease(t *testing.T) {
 	// Each turn appends a text step; a second trigger enqueued DURING the first
 	// turn must be processed in the SAME busy period (one claim, one release).
 	var n int32
+	db := newRuntimeDB(t)
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		if atomic.AddInt32(&n, 1) == 1 {
 			// On the first call, enqueue a second trigger (simulating a prompt
 			// that lands mid-turn). It must be picked up by the drain loop.
-			_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u2", "text": "more"}, "user")
+			_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u2", "text": "more"}, "user")
 		}
 		fmt.Fprint(w, "data: {\"type\":\"text-delta\",\"id\":\"t\",\"delta\":\"ok\"}\n\n")
 		fmt.Fprint(w, "data: {\"type\":\"finish\",\"finishReason\":{\"unified\":\"stop\"}}\n\n")
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
-	db := newRuntimeDB(t)
-
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
 	lease := NewMemoryLease()
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
 		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: lease, Emit: &recorder{}, MaxTurns: 2, Presets: stubPresets{},
 	})
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	if n < 2 {
 		t.Errorf("drain loop did not process the mid-turn trigger (calls=%d)", n)
 	}
-	if hasPending(t, q, "t1", "s1") {
+	if hasPending(t, q, "t1", sess.ID) {
 		t.Error("mailbox should be drained at the end of the busy period")
 	}
 }
@@ -172,15 +174,16 @@ func TestRecoverOnBootWakesPending(t *testing.T) {
 	}))
 	defer srv.Close()
 	db := newRuntimeDB(t)
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "left over"}, "user")
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "left over"}, "user")
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
 		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: &recorder{}, Presets: stubPresets{},
 	})
 	rt.RecoverOnBoot(context.Background())
-	if hasPending(t, q, "t1", "s1") {
+	if hasPending(t, q, "t1", sess.ID) {
 		t.Error("boot recovery should have drained the pending wake")
 	}
 }

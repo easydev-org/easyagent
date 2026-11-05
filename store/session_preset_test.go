@@ -17,10 +17,12 @@ func TestCreateSessionAlwaysHasPreset(t *testing.T) {
 		{"explicit", "reviewer"},
 	}
 	for _, c := range cases {
-		if err := d.CreateSession("t", SessionInput{Name: c.name, Preset: c.preset}); err != nil {
+		in := &SessionInput{Name: c.name, Preset: c.preset}
+		if err := d.CreateSession("t", in); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		row, ok, err := d.GetSession("t", c.name)
+		// The id is generated, so it is the address to read back by — the name is only a label.
+		row, ok, err := d.GetSession("t", in.ID)
 		if err != nil || !ok {
 			t.Fatalf("%s: get: %v %v", c.name, ok, err)
 		}

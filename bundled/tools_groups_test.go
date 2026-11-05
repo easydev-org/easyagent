@@ -135,19 +135,23 @@ func TestGroupMembersRequiresAGroupName(t *testing.T) {
 }
 
 /**
- * THERE IS NO TOOL THAT CHANGES A GROUP.
+ * A SESSION MAY CREATE ITS OWN GROUP, AND NOTHING ELSE.
  *
- * A group is created and edited by a person. If a tool could add a member, an extension would be
- * choosing its own collaborators — and then reading the list back. This asserts the absence, because
- * an absence is exactly the kind of property that gets undone by a later "helpful" addition.
+ * `group-create` exists and is gated by the `group.create` grant, so the user still decides whether a
+ * session may assemble collaborators at all. What must NOT exist is any tool that edits membership or
+ * deletes a group: those would let a session change the shape of a group a person set up, and the
+ * member list would stop being something anyone can verify.
+ *
+ * This asserts the absences, because an absence is exactly the kind of property a later "helpful"
+ * addition undoes — and unlike the positive rules, nothing else would notice.
  */
-func TestNoGroupMutationTools(t *testing.T) {
+func TestOnlyGroupCreateMutatesGroups(t *testing.T) {
 	e := newGroupExt(t, &groupStub{stubDeps: &stubDeps{}})
 	for name := range e.handlers {
 		switch name {
-		case "group-create", "group-add-member", "group-remove-member",
-			"group-join", "group-leave", "group-update", "group-delete":
-			t.Errorf("handler %q exists; groups are created and edited by users only", name)
+		case "group-add-member", "group-remove-member", "group-join", "group-leave",
+			"group-update", "group-delete", "group-rename":
+			t.Errorf("handler %q exists; a session may create its own group but never edit one", name)
 		}
 	}
 }

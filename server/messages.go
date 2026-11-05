@@ -225,7 +225,7 @@ func (s *Server) WatchSessions(ctx context.Context, _ *agentv1.WatchSessionsRequ
 	}
 	upserts := make([]*agentv1.Session, 0, len(rows))
 	for _, r := range rows {
-		upserts = append(upserts, sessionToMsg(r, s.statusOf(ctx, r.Name)))
+		upserts = append(upserts, sessionToMsg(r, s.statusOf(ctx, r.ID)))
 	}
 	if err := stream.Send(&agentv1.WatchSessionsResponse{Upserts: upserts, Snapshot: true}); err != nil {
 		return err

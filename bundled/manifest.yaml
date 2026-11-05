@@ -571,50 +571,98 @@ tools:
     required_config: [model.speech_clone]
 
   # ---- cross-session: subsession (O(1) fork child) + direct messaging ----
-  - name: delegate
+  - name: group-create
     description: >-
-      Create a GROUP for a self-contained task and put a fresh worker session in it. YOU become the
-      group's coordinator: the result comes back to you as a group message, and you can send further
-      instructions to the worker the same way. The worker is forked from THIS session (zero-copy: it
-      shares this conversation's history and inherits its model/preset), so give it a complete,
-      self-contained task — it does not see this turn's instructions.
+      Create a group with THIS session as its coordinator, or report that one already exists.
 
-      IMPORTANT: after calling this tool you MUST end your turn immediately and wait for the result —
-      do NOT poll, sleep, or duplicate the work; you will be resumed when its message arrives. Use
-      group-members to see who is in the group. There is no direct messaging: every message between
-      sessions goes through a group, so a group is also how you talk to a session you did not create.
+      A session may coordinate at most ONE group. If you already coordinate one, this tool tells you
+      which — use it rather than creating a second, and use group-members to see who is in it.
+
+      A group is how sessions talk to each other. There is no direct messaging: to give work to another
+      session, put it in your group and address it with group-send.
+
+      Requires the `group.create` permission, granted by the user.
     descriptions:
       zh: >-
-        为一个自包含任务创建一个群，并在其中放入一个新的工作会话。你成为该群的协调者：结果会以群消息
-        的形式回到你这里，你也可以用同样方式继续向它下发指令。工作会话是从本会话 fork 出来的（零拷贝：
-        共享本会话历史，继承其模型/预设），因此请给它一个完整、自包含的任务——它看不到本轮对话中的指令。
+        创建一个以本会话为协调者的群；若已存在则直接告知。
 
-        重要：调用本工具后你必须立即结束本轮，等待结果——不要轮询、不要 sleep、不要重复它的工作；结果
-        到达时会自动恢复你。用 group-members 查看群里有谁。不存在直接私信：会话之间的所有消息都必须经过
-        群，因此群也是你与不是自己创建的会话对话的方式。
+        一个会话最多只能是一个群的协调者。若你已经是某个群的协调者，本工具会告诉你它叫什么——请直接使用它，
+        用 group-members 查看成员，而不是再建一个。
+
+        群是会话之间唯一的通信方式。不存在直接私信：要把工作交给另一个会话，就把它放进你的群，然后用
+        group-send 点名它。
+
+        需要用户授予 `group.create` 权限。
+    input_schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: >-
+            Optional group name. Defaults to a name derived from this session. Letters, digits, '_',
+            '-' and '.' only.
+          descriptions:
+            zh: 可选的群名称。默认由本会话名派生。只允许字母、数字、'_'、'-'、'.'。
+      required: []
+    requires: [group.create]
+
+  - name: spawn
+    description: >-
+      Fork THIS session into a new worker and put it in the group you coordinate, then hand it a task.
+
+      YOU MUST COORDINATE A GROUP. Being merely a member of one is not enough: a member that could add
+      sessions would be a second way in, past the person who owns the group. If you coordinate none,
+      create your own with group-create first.
+
+      THE WORKER INHERITS YOUR PERMISSIONS MINUS BOTH GROUP GRANTS. `group.create` and `group.spawn`
+      are removed, so it cannot assemble a group or put other sessions to work — each level would cost a
+      session nobody decided to create. Everything else it inherits, including your history, model and
+      preset. Give it a complete, self-contained task: it does not see this turn's instructions.
+
+      THE WORKER'S ID IS IN THE RESULT — address it with that id, not with the name you asked for,
+      because display names are not unique.
+
+      IMPORTANT: after calling this tool you MUST end your turn immediately and wait for the result —
+      do NOT poll, sleep, or duplicate the work. You will be resumed when the worker reports back.
+    descriptions:
+      zh: >-
+        把本会话 fork 出一个工作会话，放进**你作为协调者**的群，然后给它布置任务。
+
+        结果里会给出工作会话的 **id**——之后用 group-send 点名它时请填这个 id，而不是你请求的名称，
+        因为显示名称不唯一。
+
+        **你必须是一个群的协调者。** 仅仅作为成员是不够的：成员能往群里加人，就等于绕开了群的拥有者。若你
+        还不是任何群的协调者，请先用 group-create 创建自己的群。
+
+        **工作会话继承你的权限，但两个群权限会被移除**：`group.create` 与 `group.spawn` 都被撤销，因此它
+        既不能自己建群，也不能再派生工作会话——否则每一层都会产生一个没人决定要创建的会话。其余权限照常继承，
+        包括对话历史、模型与预设。请给它一个完整、自包含的任务——它看不到本轮对话的指令。
+
+        重要：调用本工具后你必须立即结束本轮，等待结果——不要轮询、不要 sleep、不要重复它的工作。工作会话
+        回报时会自动恢复你。
     input_schema:
       type: object
       properties:
         task:
           type: string
-          description: The complete, self-contained task for the worker session.
+          description: The complete, self-contained task for the worker.
           descriptions:
             zh: 给工作会话的完整、自包含任务描述。
-        description:
-          type: string
-          description: Optional short (3-5 words) label for the task.
-          descriptions:
-            zh: 可选的任务短标签（3-5 个词）。
         name:
           type: string
           description: Optional explicit worker session name (default is auto-generated).
           descriptions:
             zh: 可选的工作会话名称（默认自动生成）。
+        description:
+          type: string
+          description: Optional short (3-5 words) label for the task.
+          descriptions:
+            zh: 可选的任务短标签（3-5 个词）。
       required: [task]
-    # CREATING A GROUP IS THE PRIVILEGED PART, and this is the only tool in bundled that declares a
-    # requirement. Without the grant the tool is still listed (the console greys it out) but the call
-    # is refused with a message naming what to grant — see the gate in agentbus.
-    requires: [group.create]
+    # A SEPARATE GRANT FROM group.create, because they answer different questions: "may this session
+    # assemble a group" and "may it put other sessions to work". A session can legitimately have either
+    # without the other — a coordinator that hands work to people rather than to agents needs no spawn.
+    requires: [group.spawn]
 
   # ---- groups ----
   #
@@ -662,19 +710,36 @@ tools:
 
   - name: group-send
     description: >-
-      Send a message to one member of a group you coordinate. This is how a coordinator hands work to
-      a member or replies to its report. ONLY THE COORDINATOR MAY USE IT: a member cannot address
-      another member, and there is no direct messaging outside a group.
+      Send one message to one or more members of a group you are in.
 
-      The message is delivered as the group addressing that session, so the recipient knows which
-      group it belongs to. To talk to a session you did not create, add it to a group you coordinate.
+      `to` IS AN ARRAY because "the same thing, to several people" is one decision: three separate
+      calls would be three chances to write three slightly different texts, and the recipients would
+      disagree about what they were told. It is NOT a broadcast — every name is resolved and validated,
+      so exactly the sessions you name hear it. To address the whole group, list every member
+      (group-members gives you the list).
+
+      WHO MAY ADDRESS WHOM:
+        coordinator → members   hand out work
+        member      → coordinator   report back
+      A member cannot address another member, and nobody outside the group can be reached at all.
+
+      THE WHOLE LIST IS VALIDATED BEFORE ANYTHING IS SENT: a half-delivered instruction is worse than a
+      refused one, because some workers would start on a task the others never received.
     descriptions:
       zh: >-
-        向你作为协调者的群里的某个成员发送一条消息。协调者借此向成员下发任务或回复它的汇报。**只有协调者
-        可以使用**：成员不能给另一个成员发消息，群外也不存在直接私信。
+        向你在的群中的一位或多位成员发送同一条消息。
 
-        消息会以「该群点名该会话」的形式投递，因此接收方知道它属于哪个群。要与不是你创建的会话对话，请把它
-        加入你协调的群。
+        `to` 是**数组**，因为「同一件事交给多个人」是一个决定：拆成三次调用就有三次机会写出三份措辞略有
+        不同的文本，收件人会对「自己被交代了什么」产生分歧。这**不是广播**——每个名字都会被校验，因此只有
+        你点名的会话会收到。要向全群发，就列出所有成员（group-members 可拿到名单）。
+
+        **谁能发给谁**：
+          协调者 → 成员    下发任务
+          成员   → 协调者  上报结果
+        成员之间不能对话，群外的人完全无法触达。
+
+        **整份名单先全部校验，再开始发送**：只送达一部分比直接拒绝更糟，因为有些会话已经开工，而另一些连
+        任务都没收到。
     input_schema:
       type: object
       properties:
@@ -684,15 +749,22 @@ tools:
           descriptions:
             zh: 群名称。
         to:
-          type: string
-          description: Member session name to address.
+          type: array
+          items:
+            type: string
+          description: >-
+            One or more member session IDs (not display names — names are not unique). Duplicates are
+            collapsed and empty entries dropped. To address everyone, list every member explicitly;
+            group-members returns their ids.
           descriptions:
-            zh: 要投递的成员会话名称。
+            zh: >-
+              一个或多个成员会话的 **id**（不是显示名称——名称不唯一）。重复项会被合并，空项会被忽略。
+              要向所有人发，请显式列出全部成员；group-members 会返回它们的 id。
         text:
           type: string
-          description: Message body.
+          description: Message body, the same for every recipient.
           descriptions:
-            zh: 消息内容。
+            zh: 消息内容，所有收件人相同。
       required: [group, to, text]
 
 config:
@@ -822,4 +894,13 @@ permissions:
     # `write`, not `destructive`: nothing is deleted or overwritten. It is elevated because it
     # changes the session's reach — a session without it cannot start a conversation with another
     # session at all, which is the property this permission exists to guard.
+    risk: write
+  - key: group.spawn
+    # The label names the consequence: the session will be able to create sessions that work for it.
+    label: Spawn worker sessions (and hand them tasks in a group)
+    descriptions:
+      zh: 派生工作会话（并在群中向其布置任务）
+    # Same tier as group.create: nothing is destroyed, but the session gains the ability to make more
+    # sessions that run and spend. It is deliberately NOT implied by group.create — creating a group to
+    # talk to sessions that already exist is a smaller decision than making new ones.
     risk: write

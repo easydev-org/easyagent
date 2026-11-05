@@ -10,6 +10,10 @@ import (
 
 // SessionInput are the fields accepted at creation.
 type SessionInput struct {
+	// ID is optional. Empty means "generate one", which is what every caller except a migration wants:
+	// the value is random, so there is nothing for a caller to choose sensibly.
+	ID string
+	// Name is the DISPLAY label. Not unique, not an address.
 	Name         string
 	Model        string
 	Variant      string
@@ -21,7 +25,7 @@ type SessionInput struct {
 }
 
 // CreateSession inserts a session row.
-func (d *DB) CreateSession(tenant string, in SessionInput) error {
+func (d *DB) CreateSession(tenant string, in *SessionInput) error {
 	// EVERY session carries a preset: the UI resolves the system prompt from it,
 	// so an empty preset means "no system prompt". This is the single choke
 	// point for session creation (create / fork / rename / subsession), so
@@ -30,9 +34,20 @@ func (d *DB) CreateSession(tenant string, in SessionInput) error {
 	if in.Preset == "" {
 		in.Preset = DefaultPreset
 	}
+	id := in.ID
+	if id == "" {
+		var err error
+		if id, err = NewSessionID(); err != nil {
+			return err
+		}
+	}
+	// THE GENERATED ID GOES BACK TO THE CALLER THROUGH in, because there is nothing else to read it
+	// from: the caller has no handle on the row it just created, and a second SELECT to learn its own
+	// identity would be both slower and racy.
+	in.ID = id
 	now := nowStr()
 	s := Session{
-		Tenant: tenant, Name: in.Name, Model: in.Model, Variant: in.Variant,
+		Tenant: tenant, ID: id, Name: in.Name, Model: in.Model, Variant: in.Variant,
 		Preset: in.Preset, TipID: in.TipID, MaxTurns: in.MaxTurns,
 		SystemPrompt: in.SystemPrompt, Locale: in.Locale,
 		CreatedAt: now, UpdatedAt: now,
@@ -40,10 +55,14 @@ func (d *DB) CreateSession(tenant string, in SessionInput) error {
 	return d.g.Create(&s).Error
 }
 
-// GetSession returns (session, true) or (nil, false).
-func (d *DB) GetSession(tenant, name string) (*Session, bool, error) {
+// GetSession returns (session, true) or (nil, false), keyed by ID.
+//
+// IT USED TO BE KEYED BY NAME, and every caller had to know which of the two it held. Now there is one
+// answer: an id. A caller with a display name has no business loading a session by it, because names
+// are not unique.
+func (d *DB) GetSession(tenant, id string) (*Session, bool, error) {
 	var s Session
-	err := d.g.Where("tenant = ? AND name = ?", tenant, name).First(&s).Error
+	err := d.g.Where("tenant = ? AND id = ?", tenant, id).First(&s).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, false, nil
 	}
@@ -60,26 +79,26 @@ func (d *DB) ListSessions(tenant string) ([]Session, error) {
 	return out, err
 }
 
-// SessionExists reports whether (tenant, name) exists.
-func (d *DB) SessionExists(tenant, name string) (bool, error) {
+// SessionExists reports whether (tenant, id) exists.
+func (d *DB) SessionExists(tenant, id string) (bool, error) {
 	var n int64
-	err := d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).Count(&n).Error
+	err := d.g.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).Count(&n).Error
 	return n > 0, err
 }
 
 // DeleteSession removes a session and its private mailbox queue. Message
 // history is NOT touched (messages are append-only and shared by forks).
-func (d *DB) DeleteSession(tenant, name string) error {
+func (d *DB) DeleteSession(tenant, id string) error {
 	return d.g.Transaction(func(tx *gorm.DB) error {
-		return tx.Where("tenant = ? AND name = ?", tenant, name).Delete(&Session{}).Error
+		return tx.Where("tenant = ? AND id = ?", tenant, id).Delete(&Session{}).Error
 	})
 }
 
 // SessionTip returns the session's chain tip id ("" when none).
-func (d *DB) SessionTip(tenant, name string) (string, error) {
+func (d *DB) SessionTip(tenant, id string) (string, error) {
 	var s struct{ TipID *string }
 	err := d.g.Model(&Session{}).Select("tip_id").
-		Where("tenant = ? AND name = ?", tenant, name).Take(&s).Error
+		Where("tenant = ? AND id = ?", tenant, id).Take(&s).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", nil
 	}
@@ -98,9 +117,9 @@ func (d *DB) SessionTip(tenant, name string) (string, error) {
 // It returns the `updated_at` it wrote, so a caller that already holds the row
 // can patch it in memory instead of re-reading the row (undo used to issue a
 // second GetSession purely to return the refreshed session to the client).
-func (d *DB) SetTip(tenant, name string, tipID *string) (updatedAt string, err error) {
+func (d *DB) SetTip(tenant, id string, tipID *string) (updatedAt string, err error) {
 	updatedAt = nowStr()
-	err = d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+	err = d.g.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{"tip_id": tipID, "updated_at": updatedAt}).Error
 	return updatedAt, err
 }
@@ -108,11 +127,11 @@ func (d *DB) SetTip(tenant, name string, tipID *string) (updatedAt string, err e
 // AppendMessageTip atomically sets tip_id AND bumps message_seq, returning the
 // NEW counter. Two-phase (read-modify-write under a row lock) so it needs no
 // `RETURNING`.
-func (d *DB) AppendMessageTip(tenant, name, messageID string) (int64, error) {
+func (d *DB) AppendMessageTip(tenant, id, messageID string) (int64, error) {
 	var seq int64
 	err := d.g.Transaction(func(tx *gorm.DB) error {
 		var s Session
-		q := tx.Where("tenant = ? AND name = ?", tenant, name)
+		q := tx.Where("tenant = ? AND id = ?", tenant, id)
 		if tx.Dialector.Name() != "sqlite" {
 			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
@@ -125,7 +144,7 @@ func (d *DB) AppendMessageTip(tenant, name, messageID string) (int64, error) {
 		if s.TipID != nil {
 			prev = *s.TipID
 		}
-		slog.Debug("append message tip", "tenant", tenant, "session", name,
+		slog.Debug("append message tip", "tenant", tenant, "session", id,
 			"from", prev, "to", messageID, "seq", s.MessageSeq)
 		// message_seq is the CHAIN LENGTH, not a call counter.
 		//
@@ -140,7 +159,7 @@ func (d *DB) AppendMessageTip(tenant, name, messageID string) (int64, error) {
 			return cerr
 		}
 		seq = n
-		return tx.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+		return tx.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 			Updates(map[string]any{"tip_id": messageID, "message_seq": seq, "updated_at": nowStr()}).Error
 	})
 	return seq, err
@@ -178,11 +197,11 @@ func (d *DB) chainLength(tx *gorm.DB, tenant, tipID string) (int64, error) {
 
 // MarkRead advances the shared read watermark to at least seq, clamped to the
 // current message_seq. Monotonic: an older value never lowers it.
-func (d *DB) MarkRead(tenant, name string, seq int64) (int64, error) {
+func (d *DB) MarkRead(tenant, id string, seq int64) (int64, error) {
 	var out int64
 	err := d.g.Transaction(func(tx *gorm.DB) error {
 		var s Session
-		q := tx.Where("tenant = ? AND name = ?", tenant, name)
+		q := tx.Where("tenant = ? AND id = ?", tenant, id)
 		if tx.Dialector.Name() != "sqlite" {
 			q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 		}
@@ -205,41 +224,41 @@ func (d *DB) MarkRead(tenant, name string, seq int64) (int64, error) {
 			v = s.MessageSeq
 		}
 		out = v
-		return tx.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+		return tx.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 			Updates(map[string]any{"read_seq": v, "updated_at": nowStr()}).Error
 	})
 	return out, err
 }
 
 // AddUsage records the LAST step's token usage (overwritten, not accumulated).
-func (d *DB) AddUsage(tenant, name string, in, out int64) error {
-	return d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+func (d *DB) AddUsage(tenant, id string, in, out int64) error {
+	return d.g.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{
 			"last_input_tokens": in, "last_output_tokens": out, "last_used_at": nowStr(),
 		}).Error
 }
 
 // UpdateSessionSettings patches the mutable settings (nil = leave unchanged).
-func (d *DB) UpdateSessionSettings(tenant, name string, patch map[string]any) error {
+func (d *DB) UpdateSessionSettings(tenant, id string, patch map[string]any) error {
 	if len(patch) == 0 {
 		return nil
 	}
 	patch["updated_at"] = nowStr()
-	return d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+	return d.g.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(patch).Error
 }
 
 // SetSessionPreview updates the list-row preview projection.
-func (d *DB) SetSessionPreview(tenant, name, preview string) error {
+func (d *DB) SetSessionPreview(tenant, id, preview string) error {
 	now := nowStr()
-	return d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+	return d.g.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{"last_message_preview": preview, "last_message_at": now}).Error
 }
 
 // SetTurnEnd records why (and when) the last turn ended.
-func (d *DB) SetTurnEnd(tenant, name, reason string) error {
+func (d *DB) SetTurnEnd(tenant, id, reason string) error {
 	now := nowStr()
-	return d.g.Model(&Session{}).Where("tenant = ? AND name = ?", tenant, name).
+	return d.g.Model(&Session{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{"last_turn_reason": reason, "last_turn_at": now}).Error
 }
 

@@ -47,7 +47,10 @@ func (d *stubDeps) IngestBlob(_, _, name string, data []byte) (string, string, s
 func (d *stubDeps) SessionGroup(string, string) string { return "" }
 func (d *stubDeps) SessionExists(_ string, sid string) bool {
 	if d.existing != nil {
-		return d.existing[sid]
+		if ok, seen := d.existing[sid]; seen {
+			return ok
+		}
+		return false
 	}
 	return sid == "parent" || sid == "child"
 }
@@ -65,10 +68,14 @@ func (d *stubDeps) GroupsOfSession(string, string) []GroupRow                   
 func (d *stubDeps) IsGroupMember(string, string, string) bool                        { return false }
 func (d *stubDeps) GroupMembers(string, string) []string                             { return nil }
 func (d *stubDeps) GroupCoordinator(string, string) (string, error)                  { return "", nil }
+func (d *stubDeps) CoordinatedGroup(string, string) (string, error)                  { return "", nil }
+func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string               { return "" }
+func (d *stubDeps) AddGroupMemberOnly(string, string, string) error                  { return nil }
+func (d *stubDeps) RevokeCapability(string, string, string, string) error            { return nil }
 func (d *stubDeps) IsGroupMemberOfAny(string, string) bool                           { return false }
 func (d *stubDeps) CreateGroupForSession(string, string, string) error               { return nil }
 func (d *stubDeps) PublishGroupMessage(string, string, string, string, string) error { return nil }
-func (d *stubDeps) ForkSession(string, string, string) error                         { return nil }
+func (d *stubDeps) ForkSession(string, string, string, []string) (string, error)     { return "", nil }
 func (d *stubDeps) DeleteSessionRow(string, string) error                            { return nil }
 func (d *stubDeps) DeleteSessionMailbox(string, string) error                        { return nil }
 func (d *stubDeps) PublishMailbox(_, session string, _ mailbox.Type, _ any, _ string) error {
@@ -106,7 +113,7 @@ func TestManifestToolsAndNoTimeWait(t *testing.T) {
 	if names["time-wait"] {
 		t.Error("time-wait must NOT be in the Go bundled extension")
 	}
-	for _, want := range []string{"todo-write", "image-generate", "audio-transcribe", "tts-generate", "delegate", "group-list", "group-members", "group-send"} {
+	for _, want := range []string{"todo-write", "image-generate", "audio-transcribe", "tts-generate", "group-create", "spawn", "group-list", "group-members", "group-send"} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
 		}
@@ -192,7 +199,7 @@ func TestNoDirectMessagingTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name := range e.handlers {
-		if name == "mail-send" || name == "subsession-create" {
+		if name == "mail-send" || name == "subsession-create" || name == "delegate" {
 			t.Errorf("handler %q still exists; session-to-session messaging must go through a group", name)
 		}
 	}

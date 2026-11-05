@@ -91,7 +91,7 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		return
 	}
 	for _, s := range sessions {
-		if w.rt.IsActive(w.tenant, s.Name) || s.Model == "" {
+		if w.rt.IsActive(w.tenant, s.ID) || s.Model == "" {
 			continue
 		}
 		if !resumableReasons[s.LastTurnReason] {
@@ -103,7 +103,7 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		}
 		// Back off when the tip does not advance across consecutive resumes (the
 		// retry is not helping — e.g. the provider is still failing).
-		if w.backedOff(s.Name, tip) {
+		if w.backedOff(s.ID, tip) {
 			continue
 		}
 		/**
@@ -111,11 +111,11 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		 * them are two messages rather than one delivered twice. Deriving the id from the session would
 		 * make a second resume overwrite the first, which is the opposite of what a retry needs.
 		 */
-		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.Name, newUUID(), mailbox.Trigger, mailbox.Body{
+		_, _ = w.rt.deps.Mailbox.Enqueue(ctx, w.tenant, s.ID, newUUID(), mailbox.Trigger, mailbox.Body{
 			MessageID: newUUID(),
 			Text:      resumeText(s.LastTurnReason),
 		}, "system:resume")
-		_ = w.rt.Wake(ctx, w.tenant, s.Name)
+		_ = w.rt.Wake(ctx, w.tenant, s.ID)
 	}
 }
 

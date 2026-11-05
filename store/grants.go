@@ -116,6 +116,26 @@ func (d *DB) RevokeGrant(tenant, session, grantID string) error {
 //
 // The copies are INDEPENDENT rows: revoking one in the child must not affect the parent.
 func (d *DB) CopyGrantsFrom(tenant, from, to string) (int, error) {
+	return d.CopyGrantsFromExcept(tenant, from, to, nil, false)
+}
+
+/**
+ * CopyGrantsFromExcept duplicates a session's live grants onto another, minus some capabilities.
+ *
+ * TWO QUESTIONS, TWO ARGUMENTS. "Should a fork inherit permissions at all" and "which ones must it not"
+ * are decided by different callers for different reasons: the API lets a user choose the first, and a
+ * tool like `spawn` needs the second to stop a worker from recruiting. Folding both into one flag would
+ * force the caller that only wants an exception to also state a policy it has no opinion about.
+ *
+ * `except` is keyed by `ExtID + "/" + Capability`. The pair matters: two extensions may both declare a
+ * `merge`, and excluding one must not exclude the other.
+ */
+func (d *DB) CopyGrantsFromExcept(tenant, from, to string, except map[string]bool, none bool) (int, error) {
+	if none {
+		// INHERIT_NONE is answered without reading the parent: copying nothing is the whole operation,
+		// and a caller that asked for it does not care which grants existed.
+		return 0, nil
+	}
 	rows, err := d.ListGrants(tenant, from)
 	if err != nil {
 		return 0, err
@@ -123,6 +143,9 @@ func (d *DB) CopyGrantsFrom(tenant, from, to string) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	out := make([]SessionGrant, 0, len(rows))
 	for _, r := range rows {
+		if except[GrantKey(r.ExtID, r.Capability)] {
+			continue
+		}
 		out = append(out, SessionGrant{
 			Tenant: tenant, Session: to, ID: newGrantID(),
 			ExtID: r.ExtID, Capability: r.Capability, Params: r.Params, Risk: r.Risk,
@@ -137,6 +160,9 @@ func (d *DB) CopyGrantsFrom(tenant, from, to string) (int, error) {
 	}
 	return len(out), nil
 }
+
+// GrantKey identifies one capability within one extension, for exclusion sets.
+func GrantKey(extID, capability string) string { return extID + "/" + capability }
 
 // GrantSnapshot is one extension's grants, ready to hand to a tool call.
 type GrantSnapshot struct {

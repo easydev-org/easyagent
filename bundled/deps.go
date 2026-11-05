@@ -37,7 +37,17 @@ type Deps interface {
 	// --- sessions ---
 	SessionExists(tenant, sid string) bool
 	SessionTip(tenant, sid string) string
-	ForkSession(tenant, parent, child string) error
+	/**
+	 * ForkSession copies a session, optionally withholding capabilities from the copy.
+	 *
+	 * `exclude` holds `extID/capability` pairs. THE EXCLUSION IS APPLIED DURING THE COPY rather than by
+	 * revoking afterwards: a revoking loop leaves a window where the fork holds the grant, and a tool
+	 * call in that window would be authorised by a permission the user never intended the fork to have.
+	 *
+	 * `name` is the DISPLAY label only. THE RETURNED STRING IS THE NEW SESSION'S ID, because that is
+	 * what every later call needs — the name identifies nothing.
+	 */
+	ForkSession(tenant, parent, name string, exclude []string) (string, error)
 	DeleteSessionRow(tenant, sid string) error
 	DeleteSessionMailbox(tenant, sid string) error
 	PublishMailbox(tenant, session string, typ mailbox.Type, payload any, source string) error
@@ -59,6 +69,23 @@ type Deps interface {
 	IsGroupMember(tenant, group, session string) bool
 	GroupMembers(tenant, group string) []string
 	GroupCoordinator(tenant, group string) (string, error)
+	// CoordinatedGroup returns the group this session coordinates ("" when none). At most one, by the
+	// store's constraint.
+	CoordinatedGroup(tenant, session string) (string, error)
+	// CoordinatedGroupOrMembership returns the group to put a worker in: the one the session
+	// coordinates if it has one, otherwise the one it is a member of.
+	CoordinatedGroupOrMembership(tenant, session string) string
+	// AddGroupMemberOnly enrolls a session as a plain member (never coordinator).
+	AddGroupMemberOnly(tenant, group, session string) error
+	/**
+	 * RevokeCapability removes one grant from a session.
+	 *
+	 * THE MASK IS A REVOCATION, not a flag on the fork. A worker that cannot create groups is one
+	 * without that grant, which puts the rule in the same place as every other permission — the gate
+	 * that already refuses privileged calls. A separate "is a worker" bit would be a second place to
+	 * check, and the first one to be forgotten.
+	 */
+	RevokeCapability(tenant, session, extID, capability string) error
 	// IsGroupMemberOfAny reports whether a session is in ANY group, which is how `delegate` enforces
 	// one level: a worker placed in a group cannot create a second group of its own.
 	IsGroupMemberOfAny(tenant, session string) bool

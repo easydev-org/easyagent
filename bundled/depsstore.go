@@ -175,19 +175,34 @@ func (d *StoreDeps) SessionTip(tenant, sid string) string {
 }
 
 // ForkSession implements Deps (O(1) fork: copy inheritable cols, share the tip).
-func (d *StoreDeps) ForkSession(tenant, parent, child string) error {
+func (d *StoreDeps) ForkSession(tenant, parent, name string, exclude []string) (string, error) {
 	p, ok, err := d.DB.GetSession(tenant, parent)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !ok {
-		return fmt.Errorf("parent session not found: %s", parent)
+		return "", fmt.Errorf("parent session not found: %s", parent)
 	}
-	return d.DB.CreateSession(tenant, store.SessionInput{
-		Name: child, Model: p.Model, Variant: p.Variant, Preset: p.Preset,
+	// THE ROW FIRST, THEN THE GRANTS: a grant on a session that does not exist is a dangling row, and
+	// every reader of grants (the gate, the console) assumes the session is there.
+	in := &store.SessionInput{
+		Name: name, Model: p.Model, Variant: p.Variant, Preset: p.Preset,
 		TipID: p.TipID, SystemPrompt: p.SystemPrompt, MaxTurns: p.MaxTurns,
 		Locale: p.Locale,
-	})
+	}
+	if err := d.DB.CreateSession(tenant, in); err != nil {
+		return "", err
+	}
+	except := make(map[string]bool, len(exclude))
+	for _, k := range exclude {
+		except[k] = true
+	}
+	// THE GRANTS GO ON THE NEW ID, not on the label: `in.ID` is what CreateSession generated, and a copy
+	// keyed by the display name would land on no session at all.
+	if _, err := d.DB.CopyGrantsFromExcept(tenant, parent, in.ID, except, false); err != nil {
+		return "", err
+	}
+	return in.ID, nil
 }
 
 // DeleteSessionRow implements Deps.
@@ -236,6 +251,51 @@ func (d *StoreDeps) GroupMembers(tenant, group string) []string {
 		return nil
 	}
 	return out
+}
+
+// CoordinatedGroup implements Deps.
+func (d *StoreDeps) CoordinatedGroup(tenant, session string) (string, error) {
+	return d.DB.CoordinatedGroup(tenant, session)
+}
+
+// CoordinatedGroupOrMembership implements Deps.
+func (d *StoreDeps) CoordinatedGroupOrMembership(tenant, session string) string {
+	if g, err := d.DB.CoordinatedGroup(tenant, session); err == nil && g != "" {
+		return g
+	}
+	groups, err := d.DB.GroupsOfSession(tenant, session)
+	if err != nil || len(groups) == 0 {
+		return ""
+	}
+	return groups[0].Name
+}
+
+// AddGroupMemberOnly implements Deps: a plain member, never a coordinator.
+func (d *StoreDeps) AddGroupMemberOnly(tenant, group, session string) error {
+	return d.DB.AddGroupMembers(tenant, group, []string{session},
+		time.Now().UTC().Format(time.RFC3339), "session:spawn")
+}
+
+/**
+ * RevokeCapability implements Deps: drop the worker's group.create grant.
+ *
+ * A FAILED REVOCATION IS NOT IGNORED. A worker that kept the grant could create its own group and
+ * recruit, which is the one level this design refuses to allow — so the caller treats an error here as
+ * a reason to undo the fork rather than as a warning.
+ */
+func (d *StoreDeps) RevokeCapability(tenant, session, extID, capability string) error {
+	grants, err := d.DB.ListGrants(tenant, session)
+	if err != nil {
+		return err
+	}
+	for _, g := range grants {
+		if g.ExtID == extID && g.Capability == capability {
+			if err := d.DB.RevokeGrant(tenant, session, g.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // IsGroupMemberOfAny implements Deps.

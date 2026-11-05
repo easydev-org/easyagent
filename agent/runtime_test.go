@@ -44,7 +44,8 @@ func testStore(t *testing.T) *store.DB {
 func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 	q := mailbox.NewMemory()
 	db := testStore(t)
-	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"}); err != nil {
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m", Preset: "default"}
+	if err := db.CreateSession("t1", sess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,17 +70,17 @@ func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 	})
 
 	// enqueue a user trigger
-	if _, err := q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{
+	if _, err := q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{
 		"message_id": "u1", "text": "hi",
 	}, "user"); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 
 	// chain: user(u1) -> assistant(step)
-	tip, _ := db.SessionTip("t1", "s1")
+	tip, _ := db.SessionTip("t1", sess.ID)
 	if tip == "" {
 		t.Fatal("tip should be set")
 	}
@@ -108,7 +109,7 @@ func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 		t.Errorf("persisted reasoning = %q", reasoning)
 	}
 	// message_seq advanced by 2 (user + assistant)
-	s, _, _ := db.GetSession("t1", "s1")
+	s, _, _ := db.GetSession("t1", sess.ID)
 	if s.MessageSeq != 2 {
 		t.Errorf("message_seq = %d, want 2", s.MessageSeq)
 	}
@@ -124,19 +125,20 @@ func TestRuntimeWakeFoldsPromptAndPersistsStep(t *testing.T) {
 func TestRuntimeSecondWakeIsIdempotentForFoldedPrompt(t *testing.T) {
 	q := mailbox.NewMemory()
 	db := testStore(t)
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	srv := mockV4(t, `{"type":"text-delta","id":"t","delta":"ok"}`, `{"type":"finish","finishReason":{"unified":"stop"}}`)
 	defer srv.Close()
 	client := llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil)
 	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Client: client, Lease: NewMemoryLease(), Tools: &stubTools{}})
 
 	// Two triggers with the SAME message id must fold the user prompt once.
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
-	tip, _ := db.SessionTip("t1", "s1")
+	tip, _ := db.SessionTip("t1", sess.ID)
 	chain, _ := db.Chain("t1", tip, 10, "")
 	var users int
 	for _, m := range chain {
@@ -152,7 +154,8 @@ func TestRuntimeSecondWakeIsIdempotentForFoldedPrompt(t *testing.T) {
 func TestRuntimeLeaseSerializes(t *testing.T) {
 	q := mailbox.NewMemory()
 	db := testStore(t)
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	srv := mockV4(t, `{"type":"text-delta","id":"t","delta":"ok"}`, `{"type":"finish","finishReason":{"unified":"stop"}}`)
 	defer srv.Close()
 	client := llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil)
@@ -160,23 +163,23 @@ func TestRuntimeLeaseSerializes(t *testing.T) {
 	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Client: client, Lease: lease, Tools: &stubTools{}})
 
 	// Hold the lease, then Wake must be a no-op (no drain).
-	if ok, _ := lease.Claim(context.Background(), "t1", "s1"); !ok {
+	if ok, _ := lease.Claim(context.Background(), "t1", sess.ID); !ok {
 		t.Fatal("claim failed")
 	}
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
-	pending := hasPending(t, q, "t1", "s1")
+	pending := hasPending(t, q, "t1", sess.ID)
 	if !pending {
 		t.Error("a lease-held Wake must NOT drain the mailbox")
 	}
-	_ = lease.Release(context.Background(), "t1", "s1")
+	_ = lease.Release(context.Background(), "t1", sess.ID)
 	// now it drains
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
-	if hasPending(t, q, "t1", "s1") {
+	if hasPending(t, q, "t1", sess.ID) {
 		t.Error("mailbox should be drained after the lease is free")
 	}
 }

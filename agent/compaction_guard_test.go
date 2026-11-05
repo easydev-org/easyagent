@@ -18,10 +18,11 @@ func TestCompactBudgetsAreWindowFractions(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Migrate()
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"}) // no window configured
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"} // no window configured
+	_ = db.CreateSession("t1", sess)
 
 	rt := NewRuntime(RuntimeDeps{DB: db, Lease: NewMemoryLease()})
-	tail, fold := rt.compactBudgets("t1", "s1")
+	tail, fold := rt.compactBudgets("t1", sess.ID)
 	if tail != DefaultContextLimit*2/10 || fold != DefaultContextLimit/10 {
 		t.Errorf("no-window budgets = %d/%d, want %d/%d",
 			tail, fold, DefaultContextLimit*2/10, DefaultContextLimit/10)
@@ -29,7 +30,7 @@ func TestCompactBudgetsAreWindowFractions(t *testing.T) {
 
 	// With an explicit window, the fraction scales with it.
 	rt2 := NewRuntime(RuntimeDeps{DB: db, Lease: NewMemoryLease(), ContextLimit: 100_000})
-	tail2, fold2 := rt2.compactBudgets("t1", "s1")
+	tail2, fold2 := rt2.compactBudgets("t1", sess.ID)
 	if tail2 != 20_000 || fold2 != 10_000 {
 		t.Errorf("100k-window budgets = %d/%d, want 20000/10000", tail2, fold2)
 	}

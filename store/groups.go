@@ -92,6 +92,20 @@ var ErrGroupExists = errors.New("group already exists")
 // ErrNoCoordinator is returned when a group is created or edited without exactly one coordinator.
 var ErrNoCoordinator = errors.New("a group needs exactly one coordinator")
 
+/**
+ * ErrAlreadyCoordinating is returned when a session that already coordinates a group tries to create
+ * another.
+ *
+ * ONE COORDINATORSHIP PER SESSION, and the reason is attention rather than storage: a coordinator is
+ * where a group's work arrives. A session coordinating two groups receives instructions for both in the
+ * same turn and has no way to keep them apart — the second group's tasks are not "more work", they are
+ * a different job competing for the same context. One session, one job.
+ *
+ * The constraint also makes "which group does this session coordinate" a single answer everywhere,
+ * instead of a lookup that can return two rows and a caller that has to pick.
+ */
+var ErrAlreadyCoordinating = errors.New("this session already coordinates a group")
+
 // ErrNotGroupMember is returned when a session asks about a group it does not belong to.
 //
 // A SESSION THAT IS NOT A MEMBER MUST NOT LEARN THE GROUP EXISTS, so callers turn this into
@@ -111,6 +125,17 @@ func (d *DB) CreateGroup(tenant string, g Group, coordinator string, members []s
 		return ErrNoCoordinator
 	}
 	return d.g.Transaction(func(tx *gorm.DB) error {
+		// ONE COORDINATORSHIP PER SESSION, checked inside the transaction so two concurrent creations
+		// cannot both pass it. See ErrAlreadyCoordinating for why the rule exists.
+		var coordinating int64
+		if err := tx.Model(&GroupMember{}).
+			Where("tenant = ? AND session = ? AND role = ?", tenant, coordinator, GroupRoleCoordinator).
+			Count(&coordinating).Error; err != nil {
+			return err
+		}
+		if coordinating > 0 {
+			return ErrAlreadyCoordinating
+		}
 		var n int64
 		if err := tx.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, g.Name).
 			Count(&n).Error; err != nil {
@@ -215,6 +240,26 @@ func (d *DB) AddGroupMembers(tenant, group string, sessions []string, now, added
 }
 
 /**
+ * CoordinatedGroup returns the group this session coordinates, or ("", nil, nil) when it coordinates none.
+ *
+ * AT MOST ONE, by the constraint in CreateGroup. Callers get a name, not a list, because "which group am
+ * I the coordinator of" has one answer — and a list would invite callers to handle a second entry that
+ * cannot exist.
+ */
+func (d *DB) CoordinatedGroup(tenant, session string) (string, error) {
+	var m GroupMember
+	err := d.g.Where("tenant = ? AND session = ? AND role = ?", tenant, session, GroupRoleCoordinator).
+		First(&m).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return m.Group, nil
+}
+
+/**
  * SetGroupCoordinator moves the coordinator role to another member.
  *
  * ONE TRANSACTION, because the two writes are a single fact: demote the old and promote the new. A
@@ -234,6 +279,18 @@ func (d *DB) SetGroupCoordinator(tenant, group, session string) error {
 		}
 		if n == 0 {
 			return ErrNotGroupMember
+		}
+		// THE NEW COORDINATOR MUST NOT ALREADY COORDINATE ANOTHER GROUP. Checked before the demotion so a
+		// refused move leaves the group exactly as it was, rather than briefly having no coordinator.
+		var already int64
+		if err := tx.Model(&GroupMember{}).
+			Where("tenant = ? AND session = ? AND role = ? AND \"group\" <> ?",
+				tenant, session, GroupRoleCoordinator, group).
+			Count(&already).Error; err != nil {
+			return err
+		}
+		if already > 0 {
+			return ErrAlreadyCoordinating
 		}
 		if err := tx.Model(&GroupMember{}).
 			Where("tenant = ? AND \"group\" = ? AND role = ?", tenant, group, GroupRoleCoordinator).

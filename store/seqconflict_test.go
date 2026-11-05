@@ -44,7 +44,8 @@ func TestReinsertingTheSameIDIsStillIdempotent(t *testing.T) {
  */
 func TestForkDivergenceIsLegitimate(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "parent", Model: "m"}); err != nil {
+	parent := &SessionInput{Name: "parent", Model: "m"}
+	if err := d.CreateSession("t", parent); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.InsertMessage("t", "m1", "user", nil, ""); err != nil {
@@ -53,11 +54,12 @@ func TestForkDivergenceIsLegitimate(t *testing.T) {
 	if _, err := d.InsertMessage("t", "m2", "assistant", ptr("m1"), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AppendMessageTip("t", "parent", "m2"); err != nil {
+	if _, err := d.AppendMessageTip("t", parent.ID, "m2"); err != nil {
 		t.Fatal(err)
 	}
 	// The child forks AT m2 and shares the chain up to there.
-	if err := d.CreateSession("t", SessionInput{Name: "child", Model: "m", TipID: ptr("m2")}); err != nil {
+	child := &SessionInput{Name: "child", Model: "m", TipID: ptr("m2")}
+	if err := d.CreateSession("t", child); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,18 +71,18 @@ func TestForkDivergenceIsLegitimate(t *testing.T) {
 		t.Fatalf("the child could not append; subsession-create would fail: %v", err)
 	}
 	// Each session advances its OWN tip — the parent to p3, the child to c3.
-	if _, err := d.AppendMessageTip("t", "parent", "p3"); err != nil {
+	if _, err := d.AppendMessageTip("t", parent.ID, "p3"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AppendMessageTip("t", "child", "c3"); err != nil {
+	if _, err := d.AppendMessageTip("t", child.ID, "c3"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Each session reads its OWN chain-end. Both share m1 and m2 — that is what the fork inherited
 	// — and then diverge: the parent's third message is p3, the child's third is c3, and neither
 	// sees the other's.
-	ptip, _, _ := d.GetSession("t", "parent")
-	ctip, _, _ := d.GetSession("t", "child")
+	ptip, _, _ := d.GetSession("t", parent.ID)
+	ctip, _, _ := d.GetSession("t", child.ID)
 	pChain, _ := d.Chain("t", *ptip.TipID, 100, "")
 	cChain, _ := d.Chain("t", *ctip.TipID, 100, "")
 	if got := idsOf(pChain); len(got) != 3 || got[2] != "p3" {

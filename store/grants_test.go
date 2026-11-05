@@ -5,26 +5,30 @@ import (
 	"testing"
 )
 
-func newGrantDB(t *testing.T) *DB {
+// newGrantDB returns a DB plus the IDs of two sessions (display names "s1" and
+// "s2"): a grant is keyed by the session's id, not by its label.
+func newGrantDB(t *testing.T) (d *DB, s1, s2 string) {
 	t.Helper()
-	d := newTestDB(t)
-	if err := d.CreateSession("t1", SessionInput{Name: "s1", Model: "p/m"}); err != nil {
+	d = newTestDB(t)
+	in1 := &SessionInput{Name: "s1", Model: "p/m"}
+	if err := d.CreateSession("t1", in1); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.CreateSession("t1", SessionInput{Name: "s2", Model: "p/m"}); err != nil {
+	in2 := &SessionInput{Name: "s2", Model: "p/m"}
+	if err := d.CreateSession("t1", in2); err != nil {
 		t.Fatal(err)
 	}
-	return d
+	return d, in1.ID, in2.ID
 }
 
 func TestAddAndListGrants(t *testing.T) {
-	d := newGrantDB(t)
-	if _, err := d.AddGrant("t1", "s1", SessionGrant{
+	d, s1, _ := newGrantDB(t)
+	if _, err := d.AddGrant("t1", s1, SessionGrant{
 		ExtID: "gitea", Capability: "mr.merge", Params: `{"repo":"agentdev/mrflow"}`, Risk: "destructive",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := d.ListGrants("t1", "s1")
+	rows, err := d.ListGrants("t1", s1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +50,11 @@ func TestAddAndListGrants(t *testing.T) {
 // Several grants of the SAME capability with different params — the whole reason params
 // exist. Each is separately revocable.
 func TestSameCapabilityDifferentParams(t *testing.T) {
-	d := newGrantDB(t)
-	a, _ := d.AddGrant("t1", "s1", SessionGrant{ExtID: "gitea", Capability: "mr.merge", Params: `{"repo":"agentdev/mrflow"}`})
-	b, _ := d.AddGrant("t1", "s1", SessionGrant{ExtID: "gitea", Capability: "mr.merge", Params: `{"repo":"scratch/*"}`})
+	d, s1, _ := newGrantDB(t)
+	a, _ := d.AddGrant("t1", s1, SessionGrant{ExtID: "gitea", Capability: "mr.merge", Params: `{"repo":"agentdev/mrflow"}`})
+	b, _ := d.AddGrant("t1", s1, SessionGrant{ExtID: "gitea", Capability: "mr.merge", Params: `{"repo":"scratch/*"}`})
 
-	rows, _ := d.ListGrants("t1", "s1")
+	rows, _ := d.ListGrants("t1", s1)
 	if len(rows) != 2 {
 		t.Fatalf("got %d grants, want 2 independent instances", len(rows))
 	}
@@ -59,29 +63,29 @@ func TestSameCapabilityDifferentParams(t *testing.T) {
 	}
 
 	// Revoking one leaves the other: this is what "revoke that repository" means.
-	if err := d.RevokeGrant("t1", "s1", a.ID); err != nil {
+	if err := d.RevokeGrant("t1", s1, a.ID); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ = d.ListGrants("t1", "s1")
+	rows, _ = d.ListGrants("t1", s1)
 	if len(rows) != 1 || rows[0].ID != b.ID {
 		t.Fatalf("after revoking one, got %d grant(s)", len(rows))
 	}
 }
 
 func TestRevokeIsSoftDelete(t *testing.T) {
-	d := newGrantDB(t)
-	g, _ := d.AddGrant("t1", "s1", SessionGrant{ExtID: "gitea", Capability: "mr.merge"})
-	if err := d.RevokeGrant("t1", "s1", g.ID); err != nil {
+	d, s1, _ := newGrantDB(t)
+	g, _ := d.AddGrant("t1", s1, SessionGrant{ExtID: "gitea", Capability: "mr.merge"})
+	if err := d.RevokeGrant("t1", s1, g.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Gone from the live list...
-	rows, _ := d.ListGrants("t1", "s1")
+	rows, _ := d.ListGrants("t1", s1)
 	if len(rows) != 0 {
 		t.Fatalf("revoked grant still listed")
 	}
 	// ...but the row survives for audit, with a timestamp.
 	var all []SessionGrant
-	if err := d.g.Where("tenant = ? AND session = ?", "t1", "s1").Find(&all).Error; err != nil {
+	if err := d.g.Where("tenant = ? AND session = ?", "t1", s1).Find(&all).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(all) != 1 || all[0].RevokedAt == nil {
@@ -90,22 +94,22 @@ func TestRevokeIsSoftDelete(t *testing.T) {
 }
 
 func TestRevokeUnknownReportsNotFound(t *testing.T) {
-	d := newGrantDB(t)
+	d, s1, _ := newGrantDB(t)
 	// Distinguishing "revoked it" from "there was nothing" matters: a UI that silently
 	// succeeds on a stale id tells the user a permission is gone when it never existed.
-	if err := d.RevokeGrant("t1", "s1", "gr-nope"); !errors.Is(err, ErrGrantNotFound) {
+	if err := d.RevokeGrant("t1", s1, "gr-nope"); !errors.Is(err, ErrGrantNotFound) {
 		t.Fatalf("err = %v, want ErrGrantNotFound", err)
 	}
 }
 
 func TestCopyGrantsFromIsIndependent(t *testing.T) {
-	d := newGrantDB(t)
-	if _, err := d.AddGrant("t1", "s1", SessionGrant{
+	d, s1, s2 := newGrantDB(t)
+	if _, err := d.AddGrant("t1", s1, SessionGrant{
 		ExtID: "gitea", Capability: "mr.merge", Params: `{"repo":"agentdev/*"}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := d.CopyGrantsFrom("t1", "s1", "s2")
+	n, err := d.CopyGrantsFrom("t1", s1, s2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,40 +117,40 @@ func TestCopyGrantsFromIsIndependent(t *testing.T) {
 		t.Fatalf("copied %d, want 1", n)
 	}
 
-	rows, _ := d.ListGrants("t1", "s2")
+	rows, _ := d.ListGrants("t1", s2)
 	if len(rows) != 1 {
 		t.Fatalf("child has %d grants", len(rows))
 	}
 	// Provenance must say it was inherited, not granted by hand.
-	if rows[0].GrantedBy != "auto:fork:s1" {
-		t.Errorf("granted_by = %q, want auto:fork:s1", rows[0].GrantedBy)
+	if rows[0].GrantedBy != "auto:fork:"+s1 {
+		t.Errorf("granted_by = %q, want auto:fork:<parent id>", rows[0].GrantedBy)
 	}
 
 	// Revoking in the child must NOT touch the parent.
-	if err := d.RevokeGrant("t1", "s2", rows[0].ID); err != nil {
+	if err := d.RevokeGrant("t1", s2, rows[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	parent, _ := d.ListGrants("t1", "s1")
+	parent, _ := d.ListGrants("t1", s1)
 	if len(parent) != 1 {
 		t.Fatal("revoking in the fork must not revoke in the parent")
 	}
 }
 
 func TestCopyGrantsFromEmpty(t *testing.T) {
-	d := newGrantDB(t)
-	n, err := d.CopyGrantsFrom("t1", "s1", "s2")
+	d, s1, s2 := newGrantDB(t)
+	n, err := d.CopyGrantsFrom("t1", s1, s2)
 	if err != nil || n != 0 {
 		t.Fatalf("copying from an empty session = %d, %v", n, err)
 	}
 }
 
 func TestGrantsByExtGroups(t *testing.T) {
-	d := newGrantDB(t)
-	d.AddGrant("t1", "s1", SessionGrant{ExtID: "gitea", Capability: "mr.merge"})
-	d.AddGrant("t1", "s1", SessionGrant{ExtID: "gitea", Capability: "repo.delete"})
-	d.AddGrant("t1", "s1", SessionGrant{ExtID: "sandbox", Capability: "exec"})
+	d, s1, _ := newGrantDB(t)
+	d.AddGrant("t1", s1, SessionGrant{ExtID: "gitea", Capability: "mr.merge"})
+	d.AddGrant("t1", s1, SessionGrant{ExtID: "gitea", Capability: "repo.delete"})
+	d.AddGrant("t1", s1, SessionGrant{ExtID: "sandbox", Capability: "exec"})
 
-	byExt, err := d.GrantsByExt("t1", "s1")
+	byExt, err := d.GrantsByExt("t1", s1)
 	if err != nil {
 		t.Fatal(err)
 	}

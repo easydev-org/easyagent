@@ -42,17 +42,18 @@ func TestTurnRecoversFromContextOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Migrate()
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	// seed a couple of turns so compaction has something to fold
 	_, _ = db.InsertMessage("t1", "u1", "user", nil, "user")
 	_ = db.InsertPart("t1", "u1", "text", 0, map[string]any{"text": "q1"})
-	_, _ = db.AppendMessageTip("t1", "s1", "u1")
+	_, _ = db.AppendMessageTip("t1", sess.ID, "u1")
 	_, _ = db.InsertMessage("t1", "a1", "assistant", strOrNil("u1"), "")
 	_ = db.InsertPart("t1", "a1", "text", 0, map[string]any{"text": "a1"})
-	_, _ = db.AppendMessageTip("t1", "s1", "a1")
+	_, _ = db.AppendMessageTip("t1", sess.ID, "a1")
 	_, _ = db.InsertMessage("t1", "u2", "user", strOrNil("a1"), "user")
 	_ = db.InsertPart("t1", "u2", "text", 0, map[string]any{"text": "q2"})
-	_, _ = db.AppendMessageTip("t1", "s1", "u2")
+	_, _ = db.AppendMessageTip("t1", sess.ID, "u2")
 
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
@@ -65,8 +66,8 @@ func TestTurnRecoversFromContextOverflow(t *testing.T) {
 	rec := &recorder{}
 	rt.deps.Emit = rec
 	// enqueue a trigger and run
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u3", "text": "go"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u3", "text": "go"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	if !has(rec.names(), "compacted") {

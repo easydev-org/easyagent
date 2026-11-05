@@ -37,24 +37,23 @@ func (s *Server) ListSessions(ctx context.Context, _ *agentv1.ListSessionsReques
 	}
 	out := make([]*agentv1.Session, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, sessionToMsg(r, s.statusOf(ctx, r.Name)))
+		out = append(out, sessionToMsg(r, s.statusOf(ctx, r.ID)))
 	}
 	return &agentv1.ListSessionsResponse{Sessions: out}, nil
 }
 
-// CreateSession creates a session (idempotent on name conflict -> error).
+/**
+ * CreateSession creates a session. THE ID IS SERVER-ASSIGNED AND RANDOM.
+ *
+ * THERE IS NO NAME-CONFLICT CHECK ANY MORE, because there is no name to conflict on: the id is random
+ * and the name is a label two sessions may share. Creating the same "check the build" twice is a
+ * legitimate thing to want, and it used to be an error.
+ *
+ * The caller may pass a name; it is stored as the display label verbatim (including empty, which the
+ * console renders as the id).
+ */
 func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRequest) (*agentv1.CreateSessionResponse, error) {
 	tenant := tenantOf(ctx)
-	if req.Name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "name is required")
-	}
-	exists, err := s.db.SessionExists(tenant, req.Name)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
-	}
-	if exists {
-		return nil, connect.NewError(connect.CodeAlreadyExists, "session already exists")
-	}
 	model := req.Model
 	if model == "" && s.config != nil {
 		if v, ok := s.config.Get(tenant, "default_model"); ok {
@@ -72,23 +71,27 @@ func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRe
 	if preset == "" {
 		preset = DefaultPreset
 	}
-	in := store.SessionInput{
+	in := &store.SessionInput{
 		Name: req.Name, Model: model, Variant: req.Variant, Preset: preset,
 		Locale: req.Locale,
 	}
 	if err := s.db.CreateSession(tenant, in); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	// Give the session its built-in channel so anything can reach it by name.
+	// EVERYTHING BELOW ADDRESSES THE SESSION BY ID, never by the label the caller typed. CreateSession
+	// writes the generated id back into `in`, so there is no second read — and no window where the row
+	// exists but its identity is unknown to the caller.
+	//
+	// Give the session its built-in channel so anything can reach it by id.
 	//
 	// A failure here does NOT fail the session: the session exists and works, it is just
 	// not reachable on its channel until the subscription is written. Killing the creation
 	// would be worse — the user asked for a session, and a broker hiccup should not lose it.
 	if s.channels != nil {
-		_ = s.channels.EnsureDefault(ctx, tenant, req.Name)
+		_ = s.channels.EnsureDefault(ctx, tenant, in.ID)
 	}
-	s.lifecycleFire(ctx, tenant, "created", req.Name, map[string]any{"kind": "created", "tenant": tenant, "session_name": req.Name})
-	return &agentv1.CreateSessionResponse{Ok: true, SessionName: req.Name}, nil
+	s.lifecycleFire(ctx, tenant, "created", in.ID, map[string]any{"kind": "created", "tenant": tenant, "session_id": in.ID})
+	return &agentv1.CreateSessionResponse{Ok: true, SessionId: in.ID, Name: in.Name}, nil
 }
 
 // GetSession returns one session.
@@ -123,39 +126,59 @@ func (s *Server) DeleteSession(ctx context.Context, req *agentv1.DeleteSessionRe
 	return &agentv1.DeleteSessionResponse{Ok: true}, nil
 }
 
-// Rename renames a session (a new row with the same settings, the old removed).
+/**
+ * forkExclusions answers which capabilities the fork must not inherit.
+ *
+ * BOTH NON-INHERIT POLICIES END UP AS AN EXCLUSION SET: `INHERIT_NONE` excludes everything the parent
+ * holds, which the store cannot express as "all" without reading the parent first. Doing it here keeps
+ * one code path in the store instead of three, and the copy loop already has the rows in hand.
+ *
+ * AN UNKNOWN POLICY VALUE FALLS BACK TO INHERITING EVERYTHING, which is the pre-existing behaviour —
+ * a client from before this field existed sends 0 anyway, and quietly giving forks no permissions
+ * would break every caller that never asked about policy.
+ */
+func forkExclusions(req *agentv1.ForkRequest) map[string]bool {
+	if req.GetPermissions() != agentv1.ForkPermissionPolicy_FORK_PERMISSION_POLICY_INHERIT_EXCEPT_SOME {
+		return nil
+	}
+	except := make(map[string]bool, len(req.GetExcludeCapabilities()))
+	for _, k := range req.GetExcludeCapabilities() {
+		except[k] = true
+	}
+	return except
+}
+
+/**
+ * Rename changes a session's DISPLAY NAME. The id does not move.
+ *
+ * IT USED TO CREATE A NEW ROW AND DELETE THE OLD ONE, which was the only way to change the identity
+ * while the identity was the name. That made a rename a cascade: the session got a new mailbox subject,
+ * a new wake subject, a new subscription pattern, and every group slot naming the old id became a slot
+ * pointing at nothing.
+ *
+ * Now it is one UPDATE of one column. Nothing that addresses the session changes, so nothing has to be
+ * migrated, re-provisioned or re-added to a group.
+ *
+ * NO UNIQUENESS CHECK: two sessions may share a display name. Refusing the second would make the label
+ * serve the database instead of the reader.
+ */
 func (s *Server) Rename(ctx context.Context, req *agentv1.RenameRequest) (*agentv1.RenameResponse, error) {
 	tenant := tenantOf(ctx)
-	old, ok, err := s.db.GetSession(tenant, req.Id)
+	row, ok, err := s.db.GetSession(tenant, req.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, "session not found")
 	}
-	if exists, _ := s.db.SessionExists(tenant, req.Name); exists {
-		return nil, connect.NewError(connect.CodeAlreadyExists, "session already exists")
-	}
-	in := store.SessionInput{
-		Name: req.Name, Model: old.Model, Variant: old.Variant, Preset: old.Preset,
-		TipID: old.TipID, SystemPrompt: old.SystemPrompt, MaxTurns: old.MaxTurns,
-		Locale: old.Locale,
-	}
-	if err := s.db.CreateSession(tenant, in); err != nil {
+	if err := s.db.UpdateSessionSettings(tenant, req.Id, map[string]any{"name": req.Name}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	if err := s.db.DeleteSession(tenant, req.Id); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err.Error())
-	}
-	// A DELETED SESSION MUST NOT STAY IN A GROUP'S MEMBER LIST. The group would keep advertising a
-	// session that cannot answer, and nothing would ever remove it — the row's owner is gone.
-	//
-	// Best-effort: the session is already gone, and failing here would report an error for a deletion
-	// that succeeded. A leftover row is repaired by the next group read, which cannot resolve it.
-	_ = s.db.DeleteGroupMemberships(tenant, req.Id)
-	s.lifecycleFire(ctx, tenant, "renamed", req.Name, map[string]any{"kind": "renamed", "tenant": tenant, "from": req.Id, "to": req.Name})
-	row, _, _ := s.db.GetSession(tenant, req.Name)
-	return &agentv1.RenameResponse{Session: sessionToMsg(*row, "idle")}, nil
+	row.Name = req.Name
+	s.lifecycleFire(ctx, tenant, "renamed", req.Id, map[string]any{
+		"kind": "renamed", "tenant": tenant, "session_id": req.Id, "name": req.Name,
+	})
+	return &agentv1.RenameResponse{Session: sessionToMsg(*row, s.statusOf(ctx, req.Id))}, nil
 }
 
 // SetModel updates the session's model (+ variant).
@@ -200,6 +223,11 @@ func (s *Server) UpdateSettings(ctx context.Context, req *agentv1.UpdateSettings
 	}
 	if req.Intro != nil {
 		patch["intro"] = req.GetIntro()
+	}
+	// THE DISPLAY NAME LIVES HERE SO ONE SAVE COVERS THE PROFILE PAGE. It is the same column `Rename`
+	// writes; `Rename` remains for the callers that only change the label.
+	if req.Name != nil {
+		patch["name"] = req.GetName()
 	}
 	if err := s.db.UpdateSessionSettings(tenant, req.Id, patch); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -262,9 +290,6 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, "session not found")
 	}
-	if exists, _ := s.db.SessionExists(tenant, req.Name); exists {
-		return nil, connect.NewError(connect.CodeAlreadyExists, "session already exists")
-	}
 	var forkTip *string
 	if req.MessageId != "" {
 		if _, ok, _ := s.db.GetMessage(tenant, req.MessageId); !ok {
@@ -288,7 +313,9 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	if preset == "" {
 		preset = DefaultPreset
 	}
-	in := store.SessionInput{
+	// THE ID IS SERVER-ASSIGNED, and `in.ID` comes back filled — the fork is addressed by it from here
+	// on, never by the label the caller passed.
+	in := &store.SessionInput{
 		Name: req.Name, Model: parent.Model, Variant: parent.Variant, Preset: preset,
 		TipID: forkTip, SystemPrompt: parent.SystemPrompt, MaxTurns: parent.MaxTurns,
 		Locale: parent.Locale,
@@ -306,16 +333,22 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	//
 	// A failure here is not fatal: the session exists and simply starts with no grants,
 	// which is the safe direction for a permission problem.
-	_, _ = s.db.CopyGrantsFrom(tenant, req.Id, req.Name)
+	//
+	// THE POLICY COMES FROM THE CALLER because "same session, different approach" and "a clean slate
+	// for a worker" are different intents, and a fork that guessed would either strip a session the user
+	// meant to keep whole or hand a worker the grants it needs to recruit.
+	_, _ = s.db.CopyGrantsFromExcept(tenant, req.Id, in.ID,
+		forkExclusions(req),
+		req.GetPermissions() == agentv1.ForkPermissionPolicy_FORK_PERMISSION_POLICY_INHERIT_NONE)
 	// A fork is a NEW session, so it needs its OWN default channel. It does not inherit the
 	// parent's: a message addressed to the parent must not reach the child, and a child that
 	// was unreachable by name would be a strange kind of session.
 	if s.channels != nil {
-		_ = s.channels.EnsureDefault(ctx, tenant, req.Name)
+		_ = s.channels.EnsureDefault(ctx, tenant, in.ID)
 	}
-	s.publish(tenant, req.Name, "session-changed", map[string]any{"session_name": req.Name})
-	s.lifecycleFire(ctx, tenant, "forked", req.Name, map[string]any{"kind": "forked", "tenant": tenant, "parent": req.Id})
-	row, _, _ := s.db.GetSession(tenant, req.Name)
+	s.publish(tenant, in.ID, "session-changed", map[string]any{"session_id": in.ID})
+	s.lifecycleFire(ctx, tenant, "forked", in.ID, map[string]any{"kind": "forked", "tenant": tenant, "parent": req.Id})
+	row, _, _ := s.db.GetSession(tenant, in.ID)
 	return &agentv1.ForkResponse{Session: sessionToMsg(*row, "idle")}, nil
 }
 

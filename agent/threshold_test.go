@@ -52,7 +52,8 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Migrate()
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 
 	// Seed a LONG chain so the estimate exceeds a tiny window.
 	tip := ""
@@ -66,7 +67,7 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = db.InsertPart("t1", id, "text", 0, map[string]any{"text": strings.Repeat("x", 400)})
-		if _, err := db.AppendMessageTip("t1", "s1", id); err != nil {
+		if _, err := db.AppendMessageTip("t1", sess.ID, id); err != nil {
 			t.Fatal(err)
 		}
 		tip = id
@@ -82,8 +83,8 @@ func TestProactiveCompactionAtThreshold(t *testing.T) {
 	})
 	rt.compactTailTokens = 50
 	rt.compactFoldTokens = 5000
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	ev, ok := rec.first("compacted")
@@ -122,15 +123,16 @@ func TestNoProactiveCompactionWithoutLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Migrate()
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
 		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{}, // no ContextLimit
 	})
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := rec.first("compacted"); ok {
@@ -158,7 +160,8 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Migrate()
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 
 	// A long chain so there is something to fold.
 	tip := ""
@@ -172,7 +175,7 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = db.InsertPart("t1", id, "text", 0, map[string]any{"text": strings.Repeat("x", 300)})
-		if _, err := db.AppendMessageTip("t1", "s1", id); err != nil {
+		if _, err := db.AppendMessageTip("t1", sess.ID, id); err != nil {
 			t.Fatal(err)
 		}
 		tip = id
@@ -188,8 +191,8 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 	})
 	rt.compactTailTokens = 50
 	rt.compactFoldTokens = 5000
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "go"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	ev, ok := rec.first("compacted")
@@ -203,7 +206,7 @@ func TestForceThresholdAndContinuation(t *testing.T) {
 	// The running turn must have CONTINUED and persisted onto the NEW chain:
 	// the final tip is the assistant step, whose parent is the compaction
 	// checkpoint.
-	newTip, _ := db.SessionTip("t1", "s1")
+	newTip, _ := db.SessionTip("t1", sess.ID)
 	if newTip == tip {
 		t.Fatal("the chain tip should have advanced past the pre-compaction tip")
 	}

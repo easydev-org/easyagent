@@ -174,9 +174,10 @@ func TestEntryCostCountsAllClasses(t *testing.T) {
 func TestCompactEmptyChainIsNoop(t *testing.T) {
 	q := mailbox.NewMemory()
 	db := testStore(t)
-	_ = db.CreateSession("t", store.SessionInput{Name: "s", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s", Model: "gw/m"}
+	_ = db.CreateSession("t", sess)
 	rt := NewRuntime(RuntimeDeps{Mailbox: q, DB: db, Lease: NewMemoryLease()})
-	written, err := rt.compactWithBudgets(t.Context(), "t", "s", "manual", 1, 100000)
+	written, err := rt.compactWithBudgets(t.Context(), "t", sess.ID, "manual", 1, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,15 +26,16 @@ func TestStatusBusyIdleAndPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Migrate()
-	_ = db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"})
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	_ = db.CreateSession("t1", sess)
 	rec := &recorder{}
 	rt := NewRuntime(RuntimeDeps{
 		Mailbox: q,
 		DB:      db, Client: llm.New(llm.ProviderCredentials{BaseURL: srv.URL, APIKey: "k"}, nil),
 		Lease: NewMemoryLease(), Emit: rec, Presets: stubPresets{},
 	})
-	_, _ = q.Enqueue(context.Background(), "t1", "s1", "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
-	if err := rt.Wake(context.Background(), "t1", "s1"); err != nil {
+	_, _ = q.Enqueue(context.Background(), "t1", sess.ID, "", "trigger", map[string]any{"message_id": "u1", "text": "hi"}, "user")
+	if err := rt.Wake(context.Background(), "t1", sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	// B1: busy then idle, in order.
@@ -48,7 +49,7 @@ func TestStatusBusyIdleAndPreview(t *testing.T) {
 		t.Errorf("status events = %v, want busy...idle", statuses)
 	}
 	// B4: preview + turn-end reason recorded.
-	row, _, _ := db.GetSession("t1", "s1")
+	row, _, _ := db.GetSession("t1", sess.ID)
 	if row.LastMessagePreview != "the answer" {
 		t.Errorf("preview = %q", row.LastMessagePreview)
 	}

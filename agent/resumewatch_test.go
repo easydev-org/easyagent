@@ -23,16 +23,20 @@ func newResumeWatch(t *testing.T) (*ResumeWatch, *store.DB, *mailbox.Memory) {
 	return NewResumeWatch(rt, "t", 0), d, q
 }
 
-func mkSession(t *testing.T, d *store.DB, name, reason string) {
+// mkSession creates a session and returns the ID the watchdog must use; `name`
+// is only the display label.
+func mkSession(t *testing.T, d *store.DB, name, reason string) string {
 	t.Helper()
-	if err := d.CreateSession("t", store.SessionInput{Name: name, Model: "gw/m"}); err != nil {
+	in := &store.SessionInput{Name: name, Model: "gw/m"}
+	if err := d.CreateSession("t", in); err != nil {
 		t.Fatal(err)
 	}
 	if reason != "" {
-		if err := d.SetTurnEnd("t", name, reason); err != nil {
+		if err := d.SetTurnEnd("t", in.ID, reason); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return in.ID
 }
 
 // pendingTrigger reports whether a session has an unconsumed `trigger` whose
@@ -75,9 +79,9 @@ func TestResumeWatchResumesOnlyResumable(t *testing.T) {
 	}
 	for _, c := range cases {
 		w, d, q := newResumeWatch(t)
-		mkSession(t, d, "s", c.reason)
+		sid := mkSession(t, d, "s", c.reason)
 		w.Sweep(context.Background())
-		got := pendingTrigger(t, q, "s")
+		got := pendingTrigger(t, q, sid)
 		if got != c.resumable {
 			t.Errorf("reason %q: resumed=%v, want %v", c.reason, got, c.resumable)
 		}
@@ -87,12 +91,13 @@ func TestResumeWatchResumesOnlyResumable(t *testing.T) {
 // A resumable session with no model is skipped (nothing to run).
 func TestResumeWatchSkipsNoModel(t *testing.T) {
 	w, d, q := newResumeWatch(t)
-	if err := d.CreateSession("t", store.SessionInput{Name: "s"}); err != nil { // no model
+	in := &store.SessionInput{Name: "s"} // no model
+	if err := d.CreateSession("t", in); err != nil {
 		t.Fatal(err)
 	}
-	_ = d.SetTurnEnd("t", "s", "length")
+	_ = d.SetTurnEnd("t", in.ID, "length")
 	w.Sweep(context.Background())
-	if pendingTrigger(t, q, "s") {
+	if pendingTrigger(t, q, in.ID) {
 		t.Fatal("a model-less session should not be resumed")
 	}
 }

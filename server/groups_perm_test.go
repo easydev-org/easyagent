@@ -30,6 +30,8 @@ func TestDelegateRequiresTheGroupCreateGrant(t *testing.T) {
 	// READ FROM THE MANIFEST rather than through an RPC: this asserts a property of the DECLARATION,
 	// and a test server without the in-process tool surface would report "not listed" for a reason that
 	// has nothing to do with the declaration being wrong.
+	//
+	// THE TOOL IS `group-create`, not the earlier `delegate`: the name says what the privilege is FOR.
 	m, err := bundled.ParseManifest()
 	if err != nil {
 		t.Fatal(err)
@@ -37,15 +39,15 @@ func TestDelegateRequiresTheGroupCreateGrant(t *testing.T) {
 
 	var delegate *agent.ToolDef
 	for i := range m.Tools {
-		if m.Tools[i].Name == "delegate" {
+		if m.Tools[i].Name == "group-create" {
 			delegate = &m.Tools[i]
 		}
 	}
 	if delegate == nil {
-		t.Fatal("delegate is not declared in the manifest")
+		t.Fatal("group-create is not declared in the manifest")
 	}
 	if len(delegate.Requires) != 1 || delegate.Requires[0] != "group.create" {
-		t.Fatalf("delegate requires %v, want exactly [group.create]", delegate.Requires)
+		t.Fatalf("group-create requires %v, want exactly [group.create]", delegate.Requires)
 	}
 
 	// THE PERMISSION MUST ALSO BE GRANTABLE, or the requirement is a dead end: a `requires` naming a key
@@ -60,14 +62,29 @@ func TestDelegateRequiresTheGroupCreateGrant(t *testing.T) {
 		t.Error("group.create is required by `delegate` but not declared as a grantable permission")
 	}
 
-	// AND NO OTHER TOOL IS PRIVILEGED: the grant is for delegating, not a blanket gate that would make
-	// every tool fail for a session that never asked for group creation.
+	/**
+	 * ONLY THE TWO GROUP-ENTRY TOOLS ARE PRIVILEGED, AND THEY NEED DIFFERENT GRANTS.
+	 *
+	 * `spawn` carries its own (`group.spawn`): "may this session assemble a group" and "may it put other
+	 * sessions to work" are separate decisions, and neither grant may imply the other. Every OTHER tool
+	 * must stay unprivileged — a spawned worker loses both group grants, so a `group-send` that required
+	 * one would make its report impossible and every delegation a dead end.
+	 */
+	privileged := map[string]string{
+		"group-create": "group.create",
+		"spawn":        "group.spawn",
+	}
 	for _, tl := range m.Tools {
-		if tl.Name == "delegate" {
+		want, ok := privileged[tl.Name]
+		if !ok {
+			for _, r := range tl.Requires {
+				t.Errorf("tool %q requires %q; a spawned worker loses both group grants and must still be "+
+					"able to work and report back", tl.Name, r)
+			}
 			continue
 		}
-		for _, r := range tl.Requires {
-			t.Errorf("tool %q also requires %q; group.create should gate delegation only", tl.Name, r)
+		if len(tl.Requires) != 1 || tl.Requires[0] != want {
+			t.Errorf("%q requires %v, want [%s]", tl.Name, tl.Requires, want)
 		}
 	}
 }
@@ -84,18 +101,15 @@ func TestGroupCreateGrantIsPerSession(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	for _, name := range []string{"trusted", "untrusted"} {
-		if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: name, Model: "gw/m"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	trusted := newSession(t, c, "trusted")
+	untrusted := newSession(t, c, "untrusted")
 	if _, err := c.CreateGrant(ctx, &agentv1.CreateGrantRequest{
-		Id: "trusted", ExtId: "bundled", Capability: "group.create", Params: "", Risk: "write",
+		Id: trusted, ExtId: "bundled", Capability: "group.create", Params: "", Risk: "write",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	grants, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: "trusted"})
+	grants, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: trusted})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +124,7 @@ func TestGroupCreateGrantIsPerSession(t *testing.T) {
 	}
 
 	// The other session holds nothing: the grant is not an extension-wide switch.
-	other, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: "untrusted"})
+	other, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: untrusted})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,13 +137,13 @@ func TestGroupCreateGrantIsPerSession(t *testing.T) {
 	// And revoking takes it away again, which is the only way a user can undo the decision.
 	if err := func() error {
 		_, err := c.RevokeGrant(ctx, &agentv1.RevokeGrantRequest{
-			Id: "trusted", GrantId: grants.Grants[0].Id,
+			Id: trusted, GrantId: grants.Grants[0].Id,
 		})
 		return err
 	}(); err != nil {
 		t.Fatal(err)
 	}
-	after, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: "trusted"})
+	after, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: trusted})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,11 +163,9 @@ func TestUserGroupCreationNeedsNoSessionGrant(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
+	s := newSession(t, c, "s")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "user-made", Coordinator: "s", CreatedBy: "user:ops",
+		Name: "user-made", Coordinator: s, CreatedBy: "user:ops",
 	}); err != nil {
 		t.Fatalf("a user must be able to create a group without a session grant: %v", err)
 	}
@@ -189,18 +201,15 @@ func TestCoordinatorCannotBeRemovedDirectly(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	for _, name := range []string{"coord", "worker"} {
-		if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: name, Model: "gw/m"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	coord := newSession(t, c, "coord")
+	worker := newSession(t, c, "worker")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: "coord", Members: []string{"worker"}, CreatedBy: "user",
+		Name: "g", Coordinator: coord, Members: []string{worker}, CreatedBy: "user",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: "coord"})
+	_, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: coord})
 	if err == nil {
 		t.Fatal("removing the coordinator directly must fail")
 	}
@@ -209,10 +218,10 @@ func TestCoordinatorCannotBeRemovedDirectly(t *testing.T) {
 	}
 
 	// The supported way: move the role, then remove the old one.
-	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g", Session: "worker"}); err != nil {
+	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g", Session: worker}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: "coord"}); err != nil {
+	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: coord}); err != nil {
 		t.Fatalf("after the role moved, the old coordinator should be removable: %v", err)
 	}
 }
@@ -225,17 +234,14 @@ func TestSetCoordinatorRequiresExistingMember(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	for _, name := range []string{"coord", "stranger"} {
-		if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: name, Model: "gw/m"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	coord := newSession(t, c, "coord")
+	stranger := newSession(t, c, "stranger")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: "coord", CreatedBy: "user",
+		Name: "g", Coordinator: coord, CreatedBy: "user",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g", Session: "stranger"}); err == nil {
+	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g", Session: stranger}); err == nil {
 		t.Fatal("promoting a non-member must fail")
 	}
 }
@@ -252,13 +258,10 @@ func TestGroupMemberRoleRoundTrip(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	for _, name := range []string{"coord", "worker"} {
-		if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: name, Model: "gw/m"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	coord := newSession(t, c, "coord")
+	worker := newSession(t, c, "worker")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: "coord", Members: []string{"worker"}, CreatedBy: "user",
+		Name: "g", Coordinator: coord, Members: []string{worker}, CreatedBy: "user",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -270,10 +273,101 @@ func TestGroupMemberRoleRoundTrip(t *testing.T) {
 	for _, m := range got.Members {
 		roles[m.Session] = m.Role
 	}
-	if roles["coord"] != "coordinator" {
-		t.Errorf("coord role = %q, want coordinator", roles["coord"])
+	if roles[coord] != "coordinator" {
+		t.Errorf("coord role = %q, want coordinator", roles[coord])
 	}
-	if roles["worker"] != "member" {
-		t.Errorf("worker role = %q, want member", roles["worker"])
+	if roles[worker] != "member" {
+		t.Errorf("worker role = %q, want member", roles[worker])
+	}
+}
+
+/**
+ * A SESSION COORDINATES AT MOST ONE GROUP.
+ *
+ * A coordinator is where a group's work arrives. Two groups would put two unrelated jobs in the same
+ * turn with no way to keep them apart — not more work, but a different job competing for the same
+ * context. The constraint also makes "which group does this session coordinate" a single answer
+ * everywhere, instead of a lookup that can return two rows and a caller that has to pick.
+ */
+func TestSessionCoordinatesAtMostOneGroup(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "first", Coordinator: coord, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "second", Coordinator: coord, CreatedBy: "user",
+	})
+	if err == nil {
+		t.Fatal("a second group with the same coordinator must be refused")
+	}
+	if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+		t.Errorf("code = %v, want FailedPrecondition (a state to resolve, not a bad request)", got)
+	}
+
+	// The first group is untouched.
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Members[0].Role != "coordinator" {
+		t.Errorf("role = %q, want coordinator", got.Members[0].Role)
+	}
+}
+
+/**
+ * THE RULE FOLLOWS THE ROLE, NOT THE GROUP.
+ *
+ * Promoting a session that already coordinates elsewhere is the same collision arriving by a different
+ * door. Refused before the demotion, so a rejected move leaves the group exactly as it was rather than
+ * briefly having no coordinator at all.
+ */
+func TestPromotionRespectsOneCoordinatorPerSession(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	worker := newSession(t, c, "worker")
+	other := newSession(t, c, "other")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g1", Coordinator: coord, Members: []string{worker}, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A group coordinated by `other`, which is also a member of g1.
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g2", Coordinator: other, Members: []string{worker}, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// `other` already coordinates g2, so it cannot take over g1.
+	_, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g1", Session: other})
+	if err == nil {
+		t.Fatal("promoting a session that already coordinates elsewhere must be refused")
+	}
+
+	// And g1 still has its original coordinator — a refused move must not leave it headless.
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotCoord string
+	for _, m := range got.Members {
+		if m.Role == "coordinator" {
+			gotCoord = m.Session
+		}
+	}
+	if gotCoord != coord {
+		t.Errorf("coordinator = %q, want unchanged (coord)", gotCoord)
 	}
 }

@@ -17,12 +17,10 @@ func TestWatchSessionReturnsOnClientAbort(t *testing.T) {
 	ts, db := newTestServer(t)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
-	if _, err := c.CreateSession(context.Background(), &agentv1.CreateSessionRequest{Name: "s1", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
+	s1 := newSession(t, c, "s1")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := c.WatchSession(ctx, &agentv1.WatchSessionRequest{Id: "s1"})
+	stream, err := c.WatchSession(ctx, &agentv1.WatchSessionRequest{Id: s1})
 	if err != nil {
 		t.Fatal(err)
 	}

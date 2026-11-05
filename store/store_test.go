@@ -20,10 +20,11 @@ func ptr(s string) *string { return &s }
 
 func TestSessionCRUDAndCounters(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t1", SessionInput{Name: "s1", Model: "p/m", Preset: "default"}); err != nil {
+	in := &SessionInput{Name: "s1", Model: "p/m", Preset: "default"}
+	if err := d.CreateSession("t1", in); err != nil {
 		t.Fatal(err)
 	}
-	s, ok, err := d.GetSession("t1", "s1")
+	s, ok, err := d.GetSession("t1", in.ID)
 	if err != nil || !ok {
 		t.Fatalf("get: %v %v", ok, err)
 	}
@@ -35,7 +36,7 @@ func TestSessionCRUDAndCounters(t *testing.T) {
 	if _, err := d.InsertMessage("t1", "m1", "user", nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	seq, err := d.AppendMessageTip("t1", "s1", "m1")
+	seq, err := d.AppendMessageTip("t1", in.ID, "m1")
 	if err != nil || seq != 1 {
 		t.Fatalf("append seq = %d, %v", seq, err)
 	}
@@ -43,37 +44,37 @@ func TestSessionCRUDAndCounters(t *testing.T) {
 	if _, err := d.InsertMessage("t1", "m2", "user", &prev, ""); err != nil {
 		t.Fatal(err)
 	}
-	seq, _ = d.AppendMessageTip("t1", "s1", "m2")
+	seq, _ = d.AppendMessageTip("t1", in.ID, "m2")
 	if seq != 2 {
 		t.Errorf("append seq = %d, want 2", seq)
 	}
 	// MarkRead is monotonic and clamped to message_seq.
-	if v, _ := d.MarkRead("t1", "s1", 1); v != 1 {
+	if v, _ := d.MarkRead("t1", in.ID, 1); v != 1 {
 		t.Errorf("markRead 1 = %d", v)
 	}
 	// seq == 0 means "mark everything read" (advance to the current tip). The
 	// console calls MarkRead with no sequence when a session is opened, and the
 	// API documents "seq omitted => the current tip"; treating 0 as a value to
 	// compare left the unread badge stuck forever.
-	if v, _ := d.MarkRead("t1", "s1", 0); v != 2 {
+	if v, _ := d.MarkRead("t1", in.ID, 0); v != 2 {
 		t.Errorf("markRead 0 must advance to the tip (2), got %d", v)
 	}
 	// Still monotonic: an explicit older sequence must not lower the watermark.
-	if v, _ := d.MarkRead("t1", "s1", 1); v != 2 {
+	if v, _ := d.MarkRead("t1", in.ID, 1); v != 2 {
 		t.Errorf("markRead must not lower the watermark: %d", v)
 	}
-	if v, _ := d.MarkRead("t1", "s1", 999); v != 2 {
+	if v, _ := d.MarkRead("t1", in.ID, 999); v != 2 {
 		t.Errorf("markRead clamp = %d, want 2", v)
 	}
 	// tip reflects the last append.
-	if tip, _ := d.SessionTip("t1", "s1"); tip != "m2" {
+	if tip, _ := d.SessionTip("t1", in.ID); tip != "m2" {
 		t.Errorf("tip = %q", tip)
 	}
 	// SetTip does NOT bump message_seq.
-	if _, err := d.SetTip("t1", "s1", ptr("m1")); err != nil {
+	if _, err := d.SetTip("t1", in.ID, ptr("m1")); err != nil {
 		t.Fatal(err)
 	}
-	s, _, _ = d.GetSession("t1", "s1")
+	s, _, _ = d.GetSession("t1", in.ID)
 	if s.MessageSeq != 2 {
 		t.Errorf("message_seq after SetTip = %d, want 2", s.MessageSeq)
 	}
@@ -212,7 +213,7 @@ func TestTenantsAndTokens(t *testing.T) {
 
 func TestKnownTenants(t *testing.T) {
 	d := newTestDB(t)
-	_ = d.CreateSession("a", SessionInput{Name: "s"})
+	_ = d.CreateSession("a", &SessionInput{Name: "s"})
 	_ = d.CreateTenant("b", "")
 	_ = d.UpsertProvider(Provider{Tenant: "c", ProviderID: "p"})
 	got, err := d.KnownTenants()

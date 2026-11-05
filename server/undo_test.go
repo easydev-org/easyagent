@@ -19,15 +19,13 @@ func TestUndoReturnsPatchedSession(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s1"}); err != nil {
-		t.Fatal(err)
-	}
+	s1 := newSession(t, c, "s1")
 	// u1 -> a1 -> u2 (tip)
 	must := func(id, role string, prev *string) {
 		if _, err := db.InsertMessage("acme", id, role, prev, ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.AppendMessageTip("acme", "s1", id); err != nil {
+		if _, err := db.AppendMessageTip("acme", s1, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,7 +35,7 @@ func TestUndoReturnsPatchedSession(t *testing.T) {
 	p = "a1"
 	must("u2", "user", &p)
 
-	before, ok, err := db.GetSession("acme", "s1")
+	before, ok, err := db.GetSession("acme", s1)
 	if err != nil || !ok {
 		t.Fatalf("get session: %v %v", ok, err)
 	}
@@ -46,7 +44,7 @@ func TestUndoReturnsPatchedSession(t *testing.T) {
 	}
 
 	// Undo u2 => tip should move to a1.
-	res, err := c.Undo(ctx, &agentv1.UndoRequest{Id: "s1", MessageId: "u2"})
+	res, err := c.Undo(ctx, &agentv1.UndoRequest{Id: s1, MessageId: "u2"})
 	if err != nil {
 		t.Fatalf("undo: %v", err)
 	}
@@ -61,7 +59,7 @@ func TestUndoReturnsPatchedSession(t *testing.T) {
 	}
 
 	// The stored row must agree with what the response claimed.
-	after, _, err := db.GetSession("acme", "s1")
+	after, _, err := db.GetSession("acme", s1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,8 +12,26 @@ package store
 // Session is one agent session (a message chain + settings), scoped by tenant.
 // Composite PK (tenant, name).
 type Session struct {
-	Tenant       string  `gorm:"column:tenant;primaryKey;size:64"`
-	Name         string  `gorm:"column:name;primaryKey;size:128"`
+	Tenant string `gorm:"column:tenant;primaryKey;size:64"`
+	/**
+	 * ID is the session's identity AND its address: the mailbox subject, the wake subject, its default
+	 * subscription pattern and how a group addresses it all name this value.
+	 *
+	 * RANDOM AND IMMUTABLE, which is what lets Name be a display label. While the two were the same
+	 * column, renaming a session moved it to a different subject — its queue, its subscriptions and its
+	 * group slots all pointed at a name that no longer existed. Identity cannot be something a user
+	 * edits.
+	 */
+	ID string `gorm:"column:id;primaryKey;size:64"`
+	/**
+	 * Name is what a person calls this session: shown in lists, in the chat header, in group member
+	 * lists. It is NOT unique and NOT an address.
+	 *
+	 * Not unique on purpose — two sessions may be called "check the build" because the name describes
+	 * the work, and forcing a suffix would make the label serve the database. Nothing routes by it, so
+	 * nothing breaks when it repeats.
+	 */
+	Name         string  `gorm:"column:name;size:128"`
 	Model        string  `gorm:"column:model"`
 	Variant      string  `gorm:"column:variant"`
 	Preset       string  `gorm:"column:preset"`

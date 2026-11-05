@@ -12,7 +12,8 @@ import "testing"
 // so the badge and mark-read both go wrong.
 func TestAppendMessageTipIsIdempotentPerMessage(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t1", SessionInput{Name: "s1", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s1", Model: "m"}
+	if err := d.CreateSession("t1", sess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -23,7 +24,7 @@ func TestAppendMessageTipIsIdempotentPerMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		seq, err := d.AppendMessageTip("t1", "s1", "m1")
+		seq, err := d.AppendMessageTip("t1", sess.ID, "m1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,7 +38,7 @@ func TestAppendMessageTipIsIdempotentPerMessage(t *testing.T) {
 	if _, err := d.InsertMessage("t1", "m2", "user", &prev, ""); err != nil {
 		t.Fatal(err)
 	}
-	seq, err := d.AppendMessageTip("t1", "s1", "m2")
+	seq, err := d.AppendMessageTip("t1", sess.ID, "m2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,8 @@ func TestAppendMessageTipIsIdempotentPerMessage(t *testing.T) {
 // and the new message is invisible even though its row exists.
 func TestUndoThenAppendMovesTipBack(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t1", SessionInput{Name: "s1", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s1", Model: "m"}
+	if err := d.CreateSession("t1", sess); err != nil {
 		t.Fatal(err)
 	}
 
@@ -62,14 +64,14 @@ func TestUndoThenAppendMovesTipBack(t *testing.T) {
 	if _, err := d.InsertMessage("t1", "u1", "user", nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AppendMessageTip("t1", "s1", "u1"); err != nil {
+	if _, err := d.AppendMessageTip("t1", sess.ID, "u1"); err != nil {
 		t.Fatal(err)
 	}
 	a1 := "u1"
 	if _, err := d.InsertMessage("t1", "a1", "assistant", &a1, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AppendMessageTip("t1", "s1", "a1"); err != nil {
+	if _, err := d.AppendMessageTip("t1", sess.ID, "a1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,10 +80,10 @@ func TestUndoThenAppendMovesTipBack(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get a1: ok=%v err=%v", ok, err)
 	}
-	if _, err := d.SetTip("t1", "s1", m.PrevID); err != nil {
+	if _, err := d.SetTip("t1", sess.ID, m.PrevID); err != nil {
 		t.Fatal(err)
 	}
-	if tip, _ := d.SessionTip("t1", "s1"); tip != "u1" {
+	if tip, _ := d.SessionTip("t1", sess.ID); tip != "u1" {
 		t.Fatalf("after revert tip = %q, want u1", tip)
 	}
 
@@ -90,10 +92,10 @@ func TestUndoThenAppendMovesTipBack(t *testing.T) {
 	if _, err := d.InsertMessage("t1", "u2", "user", &u2prev, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AppendMessageTip("t1", "s1", "u2"); err != nil {
+	if _, err := d.AppendMessageTip("t1", sess.ID, "u2"); err != nil {
 		t.Fatal(err)
 	}
-	if tip, _ := d.SessionTip("t1", "s1"); tip != "u2" {
+	if tip, _ := d.SessionTip("t1", sess.ID); tip != "u2" {
 		t.Fatalf("after sending again tip = %q, want u2 — the new message is otherwise invisible", tip)
 	}
 

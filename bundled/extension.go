@@ -272,9 +272,10 @@ func (e *Extension) register() {
 	e.handlers["tts-generate"] = e.ttsGenerate
 	e.handlers["tts-clone"] = e.ttsClone
 	e.handlers["audio-transcribe"] = e.audioTranscribe
-	// `delegate` replaced `subsession-create`/`mail-send`: every session-to-session message now goes
-	// through a group, so there is no implicit delivery path left to register.
-	e.handlers["delegate"] = e.delegate
+	// Group-mediated delegation replaced `subsession-create`/`mail-send`: every session-to-session
+	// message now goes through a group, so there is no implicit delivery path left to register.
+	e.handlers["group-create"] = e.groupCreate
+	e.handlers["spawn"] = e.spawn
 	e.handlers["group-send"] = e.groupSend
 	// READ-ONLY group tools: a session can see who it is grouped with, never change it.
 	e.handlers["group-list"] = e.groupList
@@ -294,6 +295,43 @@ func strArg(args map[string]any, key string) string {
 		return fmt.Sprintf("%v", v)
 	}
 	return ""
+}
+
+/**
+ * strListArg reads an array-of-strings argument, trimming and dropping empties and duplicates.
+ *
+ * ORDER IS PRESERVED and duplicates are collapsed: the caller's order is what a reader sees, and a
+ * session named twice in one call is almost certainly a mistake rather than an instruction to send the
+ * same text twice. Empty strings are dropped for the same reason — an address with nothing in it is a
+ * gap in a list, not a recipient.
+ *
+ * A MISSING KEY AND A WRONG TYPE ARE DIFFERENT: missing returns nil with no error, because "the caller
+ * did not mention it" is a case every caller handles; a wrong type is a malformed request and says so.
+ */
+func strListArg(args map[string]any, key string) ([]string, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		// A bare string is refused rather than wrapped: accepting both shapes means a caller that meant
+		// one recipient can pass a scalar and never learn the field is an array, and the two paths would
+		// need to stay in sync forever.
+		return nil, fmt.Errorf("%q must be an array of strings", key)
+	}
+	out := make([]string, 0, len(list))
+	seen := make(map[string]bool, len(list))
+	for _, v := range list {
+		s, _ := v.(string)
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 func numArg(args map[string]any, key string) (float64, bool) {

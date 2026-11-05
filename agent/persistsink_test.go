@@ -25,18 +25,19 @@ func TestPersistSinkStoresToolResults(t *testing.T) {
 	q := mailbox.NewMemory()
 	db := testStore(t)
 	// The sink advances the session's tip, so the session has to exist first.
-	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "m"}); err != nil {
+	sess := &store.SessionInput{Name: "s1", Model: "m"}
+	if err := db.CreateSession("t1", sess); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.InsertMessage("t1", "user-1", "user", nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.AppendMessageTip("t1", "s1", "user-1"); err != nil {
+	if _, err := db.AppendMessageTip("t1", sess.ID, "user-1"); err != nil {
 		t.Fatal(err)
 	}
 
 	rt := &Runtime{deps: RuntimeDeps{Mailbox: q, DB: db}}
-	sink := &persistSink{rt: rt, tenant: "t1", session: "s1", prevID: "user-1"}
+	sink := &persistSink{rt: rt, tenant: "t1", session: sess.ID, prevID: "user-1"}
 	ctx := context.Background()
 
 	emit := func(name string, params map[string]any) {

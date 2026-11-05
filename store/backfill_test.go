@@ -14,7 +14,8 @@ import "testing"
  */
 func TestBackfillNumbersPreexistingMessages(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s", Model: "m"}
+	if err := d.CreateSession("t", sess); err != nil {
 		t.Fatal(err)
 	}
 	// Build a 3-message chain, then WIPE the seqs to imitate rows written before the column existed.
@@ -27,7 +28,7 @@ func TestBackfillNumbersPreexistingMessages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := d.AppendMessageTip("t", "s", "c"); err != nil {
+	if _, err := d.AppendMessageTip("t", sess.ID, "c"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.g.Model(&Message{}).Where("tenant = ?", "t").Update("seq", 0).Error; err != nil {
@@ -52,7 +53,8 @@ func TestBackfillNumbersPreexistingMessages(t *testing.T) {
 // Running it twice must not change anything: a normal boot does one cheap count.
 func TestBackfillIsIdempotent(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s", Model: "m"}
+	if err := d.CreateSession("t", sess); err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"a", "b"} {
@@ -64,7 +66,7 @@ func TestBackfillIsIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := d.AppendMessageTip("t", "s", "b"); err != nil {
+	if _, err := d.AppendMessageTip("t", sess.ID, "b"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Migrate(); err != nil {
@@ -87,7 +89,8 @@ func TestBackfillIsIdempotent(t *testing.T) {
  */
 func TestBackfillSkipsAbandonedMessages(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s", Model: "m"}
+	if err := d.CreateSession("t", sess); err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"a", "b", "c"} {
@@ -100,7 +103,7 @@ func TestBackfillSkipsAbandonedMessages(t *testing.T) {
 		}
 	}
 	// Undo to "b": "c" is now unreachable.
-	if _, err := d.AppendMessageTip("t", "s", "b"); err != nil {
+	if _, err := d.AppendMessageTip("t", sess.ID, "b"); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.g.Model(&Message{}).Where("tenant = ?", "t").Update("seq", 0).Error; err != nil {
@@ -131,7 +134,8 @@ func TestBackfillSkipsAbandonedMessages(t *testing.T) {
  */
 func TestBackfillTreatsNullAsUnnumbered(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s", Model: "m"}
+	if err := d.CreateSession("t", sess); err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"a", "b"} {
@@ -143,7 +147,7 @@ func TestBackfillTreatsNullAsUnnumbered(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := d.AppendMessageTip("t", "s", "b"); err != nil {
+	if _, err := d.AppendMessageTip("t", sess.ID, "b"); err != nil {
 		t.Fatal(err)
 	}
 	// The shape PostgreSQL leaves behind.

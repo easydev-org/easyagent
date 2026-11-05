@@ -12,7 +12,25 @@ option go_package = "github.com/easydev-org/easyagent/gen/agent/v1;agentv1";
 
 // Session is a row in the agent session table.
 message Session {
-  string name = 1;
+  /**
+   * FIELD 1 WAS `name`, AND IT WAS THE IDENTITY. Both halves of that are now wrong, so the wire breaks
+   * deliberately rather than quietly:
+   *
+   *   · the identifier is RANDOM and immutable (`id`), because it is also the address — mailbox subject,
+   *     wake subject, subscription pattern, group topic. A rename used to move a session to a different
+   *     subject, orphaning its queue and its group slots.
+   *   · `name` is a DISPLAY LABEL: not unique, and free to change.
+   *
+   * A client that still sends a name where an id is expected gets NOT_FOUND, which is the honest answer
+   * — there is no way to resolve one from the other, and guessing would let a display label address a
+   * session.
+   */
+  reserved 1;
+
+  // The session's identity and address. Random, immutable.
+  string id = 30;
+  // What a person calls it. Not unique, not an address, editable.
+  string name = 31;
   // Canonical model reference "provider_id/model_id". A bare model id is
   // never resolved by flat lookup: the provider must be named explicitly.
   string model = 2;
@@ -341,7 +359,18 @@ message CreateSessionRequest {
 }
 message CreateSessionResponse {
   bool ok = 1;
-  string session_name = 2;
+  /**
+   * FIELD 2 IS RETIRED. It carried the session's ONLY identifier, which was also its display name; the
+   * two are separate now, and a client that reads the old field would be holding a label it cannot
+   * address anything with.
+   */
+  reserved 2;
+  reserved "session_name";
+
+  // The server-assigned identity. Use this for every subsequent call.
+  string session_id = 3;
+  // The display label the caller asked for (may be empty).
+  string name = 4;
 }
 
 message GetSessionRequest { string id = 1; }
@@ -388,10 +417,49 @@ message PromptRequest {
 }
 
 message ForkRequest {
+  // The PARENT's id. The fork gets its own, server-assigned.
   string id = 1;
+  // The fork's DISPLAY NAME. Not its identity — the server assigns a new random id, so two forks of one
+  // parent can share a label.
   string name = 2;
   string message_id = 3;
   string preset = 4;
+  /**
+   * What the fork does with the parent's permissions.
+   *
+   * INHERIT is the default when this is unset, because a fork is normally "the same session, trying a
+   * different approach" — stripping its capabilities would make it fail on tools that worked a moment
+   * earlier, and the failure would look like a bug in the fork rather than a policy choice.
+   *
+   * THE FORK NEVER INHERITS GROUP MEMBERSHIP. It is a new session, not a new seat: it does not become a
+   * coordinator of the parent's group (which is unique, and already taken), and joining it as a member
+   * is a decision someone makes. See `ForkPermissionPolicy`.
+   */
+  ForkPermissionPolicy permissions = 5;
+  /**
+   * Capabilities to withhold when `permissions` is INHERIT_EXCEPT_SOME, as `extID/capability`.
+   *
+   * THE FULL PAIR, NOT A BARE KEY: two extensions may both declare `merge`, and excluding one must not
+   * exclude the other. Ignored for the other two policies, which are total rather than subtractive.
+   */
+  repeated string exclude_capabilities = 6;
+}
+
+/**
+ * How a fork treats the parent's permissions.
+ *
+ * These are the three answers a caller can actually want:
+ *
+ *   INHERIT_ALL          same session, different approach — the default.
+ *   INHERIT_NONE         a clean slate, for a fork handed to someone else.
+ *   INHERIT_EXCEPT_SOME  inherit, minus named capabilities. This is what `spawn` uses: everything the
+ *                        worker needs to do the work, without the grants that would let it start a
+ *                        branch of its own.
+ */
+enum ForkPermissionPolicy {
+  FORK_PERMISSION_POLICY_INHERIT_ALL = 0;
+  FORK_PERMISSION_POLICY_INHERIT_NONE = 1;
+  FORK_PERMISSION_POLICY_INHERIT_EXCEPT_SOME = 2;
 }
 message ForkResponse { Session session = 1; }
 
@@ -734,6 +802,15 @@ message UpdateSettingsRequest {
   // session goes back to the derived identicon or to saying nothing about itself.
   optional string avatar_file = 6;
   optional string intro = 7;
+  /**
+   * The session's DISPLAY NAME — the same field `Rename` sets, reachable here so one save covers the
+   * whole profile page.
+   *
+   * `optional` for the same reason as the two above: absent = leave it alone, present-but-empty = clear
+   * it. Clearing is legal and means "show the id instead", which is what a session with no label looks
+   * like.
+   */
+  optional string name = 8;
 }
 message UpdateSettingsResponse { Session session = 1; }
 

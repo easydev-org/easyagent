@@ -41,7 +41,8 @@ func TestSeqIsStableAcrossAppends(t *testing.T) {
  */
 func TestForkedChildContinuesTheSeq(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "parent", Model: "m"}); err != nil {
+	parent := &SessionInput{Name: "parent", Model: "m"}
+	if err := d.CreateSession("t", parent); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := d.InsertMessage("t", "m1", "user", nil, ""); err != nil {
@@ -50,11 +51,12 @@ func TestForkedChildContinuesTheSeq(t *testing.T) {
 	if _, err := d.InsertMessage("t", "m2", "assistant", ptr("m1"), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.AppendMessageTip("t", "parent", "m2"); err != nil {
+	if _, err := d.AppendMessageTip("t", parent.ID, "m2"); err != nil {
 		t.Fatal(err)
 	}
 	// Fork: the child starts AT the parent's tip.
-	if err := d.CreateSession("t", SessionInput{Name: "child", Model: "m", TipID: ptr("m2")}); err != nil {
+	child := &SessionInput{Name: "child", Model: "m", TipID: ptr("m2")}
+	if err := d.CreateSession("t", child); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,7 +84,8 @@ func TestForkedChildContinuesTheSeq(t *testing.T) {
  */
 func TestUndoDoesNotRenumber(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "m"}); err != nil {
+	sess := &SessionInput{Name: "s", Model: "m"}
+	if err := d.CreateSession("t", sess); err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"m1", "m2", "m3"} {
@@ -94,12 +97,12 @@ func TestUndoDoesNotRenumber(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := d.AppendMessageTip("t", "s", "m3"); err != nil {
+	if _, err := d.AppendMessageTip("t", sess.ID, "m3"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Undo to m2.
-	if _, err := d.SetTip("t", "s", ptr("m2")); err != nil {
+	if _, err := d.SetTip("t", sess.ID, ptr("m2")); err != nil {
 		t.Fatal(err)
 	}
 	chain, err := d.Chain("t", "m2", 100, "")

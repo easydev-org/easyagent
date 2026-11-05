@@ -22,7 +22,8 @@ import (
  */
 func TestStaleInterruptDoesNotDropTheNextPrompt(t *testing.T) {
 	db := newRuntimeDB(t)
-	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"}); err != nil {
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	if err := db.CreateSession("t1", sess); err != nil {
 		t.Fatal(err)
 	}
 	rt := NewRuntime(RuntimeDeps{DB: db, Mailbox: mailbox.NewMemory(), Lease: NewMemoryLease()})
@@ -37,12 +38,12 @@ func TestStaleInterruptDoesNotDropTheNextPrompt(t *testing.T) {
 	// cancel the turn. Reproduce that, then let handleBatch dispatch the batch.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rt.setActive("t1", "s1", cancel)
-	defer rt.clearActive("t1", "s1")
+	rt.setActive("t1", sess.ID, cancel)
+	defer rt.clearActive("t1", sess.ID)
 
-	_ = rt.handleBatch(ctx, "t1", "s1", items)
+	_ = rt.handleBatch(ctx, "t1", sess.ID, items)
 
-	if rt.takeCancelReason("t1", "s1") != "" {
+	if rt.takeCancelReason("t1", sess.ID) != "" {
 		t.Fatal("a stale interrupt cancelled the busy period, so the prompt beside it would be dropped")
 	}
 	if ctx.Err() != nil {
@@ -58,7 +59,8 @@ func TestStaleInterruptDoesNotDropTheNextPrompt(t *testing.T) {
  */
 func TestInterruptAfterPromptStillCancels(t *testing.T) {
 	db := newRuntimeDB(t)
-	if err := db.CreateSession("t1", store.SessionInput{Name: "s1", Model: "gw/m"}); err != nil {
+	sess := &store.SessionInput{Name: "s1", Model: "gw/m"}
+	if err := db.CreateSession("t1", sess); err != nil {
 		t.Fatal(err)
 	}
 	rt := NewRuntime(RuntimeDeps{DB: db, Mailbox: mailbox.NewMemory(), Lease: NewMemoryLease()})
@@ -71,15 +73,15 @@ func TestInterruptAfterPromptStillCancels(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rt.setActive("t1", "s1", cancel)
-	defer rt.clearActive("t1", "s1")
+	rt.setActive("t1", sess.ID, cancel)
+	defer rt.clearActive("t1", sess.ID)
 
-	_ = rt.handleBatch(ctx, "t1", "s1", items)
+	_ = rt.handleBatch(ctx, "t1", sess.ID, items)
 
 	if ctx.Err() == nil {
 		t.Fatal("an interrupt issued after the prompt did not cancel the turn")
 	}
-	if got := rt.takeCancelReason("t1", "s1"); got != "interrupted" {
+	if got := rt.takeCancelReason("t1", sess.ID); got != "interrupted" {
 		t.Fatalf("cancel reason = %q, want interrupted", got)
 	}
 }

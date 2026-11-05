@@ -220,7 +220,8 @@ func TestChainLimit(t *testing.T) {
 // shared read watermark (ported from message-seq.test.ts).
 func TestUnreadDerivation(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.CreateSession("t", SessionInput{Name: "s", Model: "p/m"}); err != nil {
+	sess := &SessionInput{Name: "s", Model: "p/m"}
+	if err := d.CreateSession("t", sess); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -236,11 +237,11 @@ func TestUnreadDerivation(t *testing.T) {
 		if _, err := d.InsertMessage("t", id, "user", prev, ""); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := d.AppendMessageTip("t", "s", id); err != nil {
+		if _, err := d.AppendMessageTip("t", sess.ID, id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	s, _, _ := d.GetSession("t", "s")
+	s, _, _ := d.GetSession("t", sess.ID)
 	if s.MessageSeq != 3 || s.ReadSeq != 0 {
 		t.Fatalf("seq=%d read=%d, want 3/0", s.MessageSeq, s.ReadSeq)
 	}
@@ -248,10 +249,10 @@ func TestUnreadDerivation(t *testing.T) {
 		t.Fatalf("unread = %d, want 3", unread)
 	}
 	// MarkRead advances the shared watermark; unread drops accordingly.
-	if _, err := d.MarkRead("t", "s", 2); err != nil {
+	if _, err := d.MarkRead("t", sess.ID, 2); err != nil {
 		t.Fatal(err)
 	}
-	s, _, _ = d.GetSession("t", "s")
+	s, _, _ = d.GetSession("t", sess.ID)
 	if unread := s.MessageSeq - s.ReadSeq; unread != 1 {
 		t.Fatalf("unread after markread = %d, want 1", unread)
 	}

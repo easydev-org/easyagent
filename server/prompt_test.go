@@ -93,10 +93,8 @@ func TestPromptStreamsTurnAndPersists(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s1", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
-	stream, err := c.Prompt(ctx, &agentv1.PromptRequest{Id: "s1", Prompt: "hi"})
+	s1 := newSession(t, c, "s1")
+	stream, err := c.Prompt(ctx, &agentv1.PromptRequest{Id: s1, Prompt: "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,12 +128,12 @@ func TestPromptStreamsTurnAndPersists(t *testing.T) {
 	}
 
 	// The turn persisted: user + assistant in the chain, and usage recorded.
-	tip, _ := db.SessionTip("default", "s1")
+	tip, _ := db.SessionTip("default", s1)
 	chain, _ := db.Chain("default", tip, 10, "")
 	if len(chain) != 2 || chain[0].Role != "user" || chain[1].Role != "assistant" {
 		t.Fatalf("chain = %+v", chain)
 	}
-	row, _, _ := db.GetSession("default", "s1")
+	row, _, _ := db.GetSession("default", s1)
 	if row.LastInputTokens != 4 || row.LastOutputTokens != 2 {
 		t.Errorf("usage = %d/%d", row.LastInputTokens, row.LastOutputTokens)
 	}

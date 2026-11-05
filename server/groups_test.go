@@ -22,20 +22,18 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	for _, name := range []string{"alice", "bob", "carol"} {
-		if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: name, Model: "gw/m"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	alice := newSession(t, c, "alice")
+	bob := newSession(t, c, "bob")
+	carol := newSession(t, c, "carol")
 
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "incident-42", Coordinator: "alice", Members: []string{"bob"}, CreatedBy: "user:ops",
+		Name: "incident-42", Coordinator: alice, Members: []string{bob}, CreatedBy: "user:ops",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// A MEMBER SEES THE OTHER MEMBERS. This is the whole feature: "who else is here".
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "incident-42", Session: "alice"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "incident-42", Session: alice})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,15 +44,17 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 	for _, m := range got.Members {
 		names[m.Session] = true
 	}
-	if !names["alice"] || !names["bob"] {
-		t.Errorf("members = %v, want alice and bob", names)
+	// MEMBERS ARE IDS. A display name is not unique, so a member list that carried names could not say
+	// which session it meant when two are called "alice".
+	if !names[alice] || !names[bob] {
+		t.Errorf("members = %v, want alice and bob ids", names)
 	}
 
 	// A NON-MEMBER GETS NOT_FOUND, NOT PERMISSION_DENIED.
 	//
 	// The difference matters: PERMISSION_DENIED would confirm the group exists, which turns this call
 	// into an oracle for enumerating every group in the tenant.
-	_, err = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "incident-42", Session: "carol"})
+	_, err = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "incident-42", Session: carol})
 	if err == nil {
 		t.Fatal("a non-member must not be able to read the group")
 	}
@@ -64,7 +64,7 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 
 	// AND THE LIST IS FILTERED THE SAME WAY: carol sees nothing, not an empty-looking entry for a
 	// group she cannot open.
-	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: "carol"})
+	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: carol})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 		t.Errorf("non-member sees %d groups, want 0", len(list.Groups))
 	}
 
-	list, err = c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: "bob"})
+	list, err = c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: bob})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,13 +94,11 @@ func TestCreateGroupHasNoSessionCaller(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s1", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
+	s1 := newSession(t, c, "s1")
 	// THE COORDINATOR IS ENROLLED BY THE CREATION ITSELF, so a group is never unreachable: the one
 	// session that can dispatch its work is a member from the first moment.
 	res, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "solo-group", Coordinator: "s1", CreatedBy: "user:ops",
+		Name: "solo-group", Coordinator: s1, CreatedBy: "user:ops",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +107,7 @@ func TestCreateGroupHasNoSessionCaller(t *testing.T) {
 		t.Errorf("group = %+v, want solo-group with the coordinator as its 1 member", res.Group)
 	}
 
-	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: "s1"})
+	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: s1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +128,9 @@ func TestAddGroupMemberRejectsUnknownSession(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "real", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
+	real := newSession(t, c, "real")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: "real", CreatedBy: "user:ops",
+		Name: "g", Coordinator: real, CreatedBy: "user:ops",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +150,7 @@ func TestAddGroupMemberRejectsUnknownSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Members) != 1 || got.Members[0].Session != "real" {
+	if len(got.Members) != 1 || got.Members[0].Session != real {
 		t.Errorf("members = %v, want [real]", got.Members)
 	}
 }
@@ -167,14 +163,12 @@ func TestAddGroupMemberIsIdempotent(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "g", Coordinator: "s", CreatedBy: "user:ops"}); err != nil {
+	s := newSession(t, c, "s")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "g", Coordinator: s, CreatedBy: "user:ops"}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		res, err := c.AddGroupMember(ctx, &agentv1.AddGroupMemberRequest{Group: "g", Members: []string{"s"}})
+		res, err := c.AddGroupMember(ctx, &agentv1.AddGroupMemberRequest{Group: "g", Members: []string{s}})
 		if err != nil {
 			t.Fatalf("add %d: %v", i, err)
 		}
@@ -192,28 +186,25 @@ func TestRemoveGroupMemberRevokesVisibility(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	for _, name := range []string{"a", "b"} {
-		if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: name, Model: "gw/m"}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	a := newSession(t, c, "a")
+	b := newSession(t, c, "b")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: "a", Members: []string{"b"}, CreatedBy: "user:ops",
+		Name: "g", Coordinator: a, Members: []string{b}, CreatedBy: "user:ops",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: "b"}); err != nil {
+	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: b}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g", Session: "b"}); err == nil {
+	if _, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g", Session: b}); err == nil {
 		t.Fatal("a removed member must lose visibility")
 	}
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g", Session: "a"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g", Session: a})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Members) != 1 || got.Members[0].Session != "a" {
+	if len(got.Members) != 1 || got.Members[0].Session != a {
 		t.Errorf("members = %v, want [a]", got.Members)
 	}
 }
@@ -226,11 +217,9 @@ func TestGroupAvatarClearAndKeep(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
+	s := newSession(t, c, "s")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", AvatarFile: "file:abc", Coordinator: "s", CreatedBy: "user:ops",
+		Name: "g", AvatarFile: "file:abc", Coordinator: s, CreatedBy: "user:ops",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -266,19 +255,25 @@ func TestGroupNameValidation(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "coord", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
+	// A DIFFERENT COORDINATOR PER NAME, because a session may coordinate only one group — reusing one
+	// would make every name after the first fail on that rule instead of on the one under test.
+	coords := []string{
+		newSession(t, c, "c0"),
+		newSession(t, c, "c1"),
+		newSession(t, c, "c2"),
 	}
+	next := 0
+	coord := func() string { s := coords[next%3]; next++; return s }
 	for _, name := range []string{"", "  ", "a b", "a>b", "a..b", ".a", "a."} {
 		if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-			Name: name, Coordinator: "coord", CreatedBy: "user",
+			Name: name, Coordinator: coord(), CreatedBy: "user",
 		}); err == nil {
 			t.Errorf("name %q was accepted, want rejection", name)
 		}
 	}
 	for _, name := range []string{"incident-42", "team.alpha", "A_b-9"} {
 		if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-			Name: name, Coordinator: "coord", CreatedBy: "user",
+			Name: name, Coordinator: coord(), CreatedBy: "user",
 		}); err != nil {
 			t.Errorf("name %q rejected: %v", name, err)
 		}
@@ -293,11 +288,9 @@ func TestDeleteGroupClearsMemberships(t *testing.T) {
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	if _, err := c.CreateSession(ctx, &agentv1.CreateSessionRequest{Name: "s", Model: "gw/m"}); err != nil {
-		t.Fatal(err)
-	}
+	s := newSession(t, c, "s")
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "g", Coordinator: "s", CreatedBy: "user:ops",
+		Name: "g", Coordinator: s, CreatedBy: "user:ops",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -307,14 +300,14 @@ func TestDeleteGroupClearsMemberships(t *testing.T) {
 
 	// RECREATED: the old membership must not resurface, and the only member is the coordinator that
 	// this creation named — not the one the previous incarnation had.
-	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "g", Coordinator: "s", CreatedBy: "user:ops"}); err != nil {
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "g", Coordinator: s, CreatedBy: "user:ops"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Members) != 1 || got.Members[0].Session != "s" {
+	if len(got.Members) != 1 || got.Members[0].Session != s {
 		t.Errorf("members = %v, want only the new coordinator", got.Members)
 	}
 	if got.Members[0].Role != "coordinator" {
