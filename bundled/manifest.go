@@ -31,6 +31,10 @@ type manifestTool struct {
 	 * layer or it does not exist.
 	 */
 	Requires []string `yaml:"requires"`
+	// Effect is no | low | mid | high (see agent.Effect). REQUIRED: leaving it out would let a tool
+	// default to something nobody chose, and a `high` tool declared as `no` is a risk the user is never
+	// told about.
+	Effect string `yaml:"effect"`
 }
 
 // manifestPermission is one declared permission.
@@ -88,12 +92,33 @@ type ConfigKnob struct {
 // ParseManifest parses the embedded manifest (equivalent to the TS
 // parseManifest + manifestConfig).
 func ParseManifest() (Manifest, error) {
+	return parseManifestBytes(manifestYAML)
+}
+
+/**
+ * parseManifestBytes is the parser WITHOUT the embedded file, so a test can prove that a malformed
+ * declaration is REJECTED rather than silently defaulted.
+ *
+ * The embedded manifest is the one that ships, and a test that can only feed it the good copy can only
+ * assert that the good copy is good. The rules that matter here — a missing effect, an unknown effect, a
+ * risk that understates its tool — are exactly the ones that must fail on bad input.
+ */
+func parseManifestBytes(data []byte) (Manifest, error) {
 	var doc manifestDoc
-	if err := yaml.Unmarshal(manifestYAML, &doc); err != nil {
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return Manifest{}, fmt.Errorf("bundled: manifest: %w", err)
 	}
 	m := Manifest{ID: doc.ID}
 	for _, t := range doc.Tools {
+		// EFFECT IS REQUIRED AND VALIDATED HERE, at parse time, because a wrong or missing one is
+		// UNDETECTABLE later: no test can tell that a destructive tool was declared harmless. The
+		// failure has to be at the moment the declaration is read.
+		eff := agent.Effect(t.Effect)
+		if !eff.Valid() {
+			return Manifest{}, fmt.Errorf(
+				"bundled: manifest: tool %q declares effect %q; want one of none|low|medium|high",
+				t.Name, t.Effect)
+		}
 		m.Tools = append(m.Tools, agent.ToolDef{
 			Name:           t.Name,
 			ExtID:          doc.ID,
@@ -102,12 +127,57 @@ func ParseManifest() (Manifest, error) {
 			InputSchema:    t.InputSchema,
 			RequiredConfig: t.RequiredConfig,
 			Requires:       t.Requires,
+			Effect:         eff,
 		})
 	}
 	for _, p := range doc.Permissions {
 		m.Permissions = append(m.Permissions, PermissionDecl{
 			Key: p.Key, Label: p.Label, Descriptions: p.Descriptions, Risk: p.Risk,
 		})
+	}
+	/**
+	 * A PERMISSION'S `risk` MAY NOT UNDERSTATE THE EFFECT OF A TOOL IT GATES.
+	 *
+	 * The two are different axes — one is "how dangerous is granting this", the other is "what does the
+	 * call do" — but they cannot contradict each other. A `high`-impact tool behind a permission labelled
+	 * `read` is a prompt to approve something while being told it is harmless.
+	 */
+	/**
+	 * THE TWO SCALES MUST BE COMPARABLE, and they are not the same length.
+	 *
+	 * `risk` has THREE values and `effect` has FOUR, so ranking them 0,1,2 against 0,1,2,3 made
+	 * `destructive` unable to cover `high` — the strictest permission looked weaker than the worst tool.
+	 * Each risk level is therefore mapped to the effect it is allowed to cover at minimum:
+	 *
+	 *	risk=read         covers effect=none
+	 *	risk=write        covers effect=low
+	 *	risk=destructive  covers effect=medium AND high
+	 *
+	 * `destructive` is the top of its scale, so it covers both of the top effects. There is no risk level
+	 * that means "medium only" — and inventing one would be a fourth permission tier nothing else uses.
+	 */
+	riskRank := map[string]int{"read": 0, "write": 1, "destructive": 3}
+	for _, t := range m.Tools {
+		if len(t.Requires) == 0 {
+			continue
+		}
+		for _, p := range m.Permissions {
+			found := false
+			for _, need := range t.Requires {
+				if need == p.Key {
+					found = true
+				}
+			}
+			if !found {
+				continue
+			}
+			if riskRank[p.Risk] < t.Effect.Rank() {
+				return Manifest{}, fmt.Errorf(
+					"bundled: manifest: permission %q is risk=%q but gates tool %q with effect=%q; "+
+						"a grant must not look safer than what it unlocks",
+					p.Key, p.Risk, t.Name, t.Effect)
+			}
+		}
 	}
 	for _, c := range doc.Config {
 		def := ""

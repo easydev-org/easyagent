@@ -49,6 +49,7 @@ func (s *Server) ListTools(ctx context.Context, req *agentv1.ListToolsRequest) (
 		}
 		info.RequiredConfig = d.RequiredConfig
 		info.Requires = d.Requires
+		info.Effect = string(d.Effect)
 		// The knob surface of THIS tool.
 		//
 		// Both branches matter and only one used to exist: `bundled` is in-process

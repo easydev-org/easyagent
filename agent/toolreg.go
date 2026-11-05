@@ -25,6 +25,19 @@ type ToolDef struct {
 	// call's target and only the extension can resolve that. The extension re-checks
 	// in its own tool and is the real boundary.
 	Requires []string
+	/**
+	 * Effect is the IMPACT of calling this tool, independent of who may call it.
+	 *
+	 * SEPARATE FROM `Requires`, which answers "does this session hold the permission". A session can be
+	 * fully authorised and still deserve a confirmation before merging a pull request — authorisation
+	 * and consequence are different questions.
+	 *
+	 * EMPTY IS TREATED AS `high`, not as `no`. A tool that forgot to declare its effect must not be
+	 * silently presented as harmless: the safe direction for an unknown impact is to assume the worst,
+	 * and the manifest validation flags the omission so this fallback should never be reached in
+	 * practice.
+	 */
+	Effect Effect
 }
 
 // ToolRegistry supplies the tools a session may call. The production impl

@@ -5,6 +5,8 @@ lifecycle: [deleted]
 tools:
   # ---- memory / history / file / vision (from memory-extension) ----
   - name: todo-write
+    # replaces the session's own todo list; nothing else depends on it
+    effect: low
     description: Replace the session's todo list (stored in the database, not a file).
     descriptions:
       zh: 替换会话的待办列表（存于数据库，而非文件）。
@@ -40,6 +42,8 @@ tools:
       required: [todos]
 
   - name: history-search
+    # reads the chain
+    effect: none
     description: >-
       Search a conversation's chat history by keyword. Matches are case-insensitive substrings.
       WHICH CONTENT IS SEARCHED IS EXPLICIT: `include` defaults to ["text"] — the messages' own
@@ -128,6 +132,8 @@ tools:
       required: [query]
 
   - name: history-range-read
+    # reads the chain
+    effect: none
     description: >-
       Read a conversation's history by POSITION. `from_seq`/`to_seq` bound the window by each
       message's position in the chain: the oldest message is 1 and a message's number NEVER CHANGES,
@@ -204,6 +210,8 @@ tools:
             zh: text 渲染的总字符预算（默认 100000；0 = 不限）。
 
   - name: history-read
+    # reads the chain
+    effect: none
     description: >-
       Return ONE message from a conversation in FULL, by its `seq` position — the number the other
       history tools print as `[seq N]`. This is the other half of the truncation they apply: when an
@@ -242,6 +250,8 @@ tools:
       required: [seq]
 
   - name: file-info
+    # reads metadata
+    effect: none
     description: >-
       Return metadata (name, mime type, size, sha256) for a previously uploaded file
       referenced as file:<code>. Use this first to learn a file's type and size before
@@ -260,6 +270,8 @@ tools:
       required: [code]
 
   - name: file-read
+    # reads bytes
+    effect: none
     description: >-
       Read the TEXT content of a previously uploaded file referenced as file:<code>,
       line-numbered, windowed by offset/limit. Only plain-text formats are supported
@@ -291,6 +303,8 @@ tools:
       required: [code]
 
   - name: image-read
+    # reads bytes and describes them
+    effect: none
     description: >-
       Understand a previously uploaded image referenced as file:<code> using a vision model.
       Pass a question (prompt); the model returns a natural-language description/answer
@@ -316,6 +330,8 @@ tools:
 
   # ---- audio-transcribe (ASR) ----
   - name: audio-transcribe
+    # produces a new transcript; nothing existing changes
+    effect: low
     description: >-
       Transcribe a previously uploaded audio file referenced as file:<code> to
       text, using the configured transcription model (config `model.transcription`, a
@@ -340,6 +356,8 @@ tools:
 
   # ---- web-search ----
   - name: web-search
+    # reads the web; nothing changes here
+    effect: none
     description: >-
       Search the web and return titles, URLs and excerpts. Use this for current information beyond
       your knowledge cutoff. The current year is 2026; use this year when searching for recent
@@ -374,6 +392,8 @@ tools:
 
   # ---- web-fetch ----
   - name: web-fetch
+    # reads a page
+    effect: none
     description: >-
       Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML.
       Markdown is the default. Use a more targeted tool when one is available. This tool is
@@ -405,6 +425,8 @@ tools:
       required: [url]
 
   - name: image-generate
+    # produces a new image
+    effect: low
     description: >-
       Generate an image from a natural-language prompt using the configured image
       model (config `model.image`, a provider_id/model_id registered on the agent
@@ -435,6 +457,8 @@ tools:
     required_config: [model.image]
 
   - name: image-edit
+    # produces a NEW image; the source is untouched
+    effect: low
     description: >-
       Edit an image (referenced by file:<code>) using the configured image-edit
       model (config `model.image_edit`, a provider_id/model_id with
@@ -462,6 +486,8 @@ tools:
     required_config: [model.image_edit]
 
   - name: video-generate
+    # produces a new video
+    effect: low
     description: >-
       Generate a short video from a natural-language prompt using the configured
       video model (config `model.video`, a provider_id/model_id registered on the
@@ -515,6 +541,8 @@ tools:
     required_config: [model.video]
 
   - name: tts-generate
+    # produces new audio
+    effect: low
     description: >-
       Synthesize speech audio from text using the configured preset-voice TTS
       model (config `model.speech`, a provider_id/model_id registered on the
@@ -537,6 +565,8 @@ tools:
     required_config: [model.speech]
 
   - name: tts-clone
+    # produces new audio; the source sample is untouched
+    effect: low
     description: >-
       Synthesize speech from text while CLONING the voice from a reference audio
       clip. Uses the configured voice-cloning TTS model (config
@@ -572,6 +602,8 @@ tools:
 
   # ---- cross-session: a group, its coordinator, and the workers in it ----
   - name: group-create
+    # creates a group of the caller's own; no existing group changes
+    effect: low
     description: >-
       Create a group with THIS session as its coordinator, or report that one already exists.
 
@@ -607,6 +639,8 @@ tools:
     requires: [group.create]
 
   - name: spawn
+    # creates a worker session; nothing existing changes
+    effect: low
     description: >-
       Fork THIS session into a new worker and put it in the group you coordinate, then hand it a task.
 
@@ -681,6 +715,8 @@ tools:
   # and a session that could assemble one would be able to choose its own collaborators — which is a
   # view of the tenant nobody granted it.
   - name: group-list
+    # reads membership
+    effect: none
     description: >-
       List the groups this session belongs to, with their member counts. A group is a named set of
       sessions that can see each other; use group-members to see who is in one.
@@ -692,6 +728,8 @@ tools:
       properties: {}
 
   - name: group-members
+    # reads membership
+    effect: none
     description: >-
       List the sessions in a group this session belongs to, including itself. This is how a session
       learns who else is working on the same thing. Returns nothing for a group it is not in.
@@ -709,6 +747,8 @@ tools:
       required: [group]
 
   - name: group-send
+    # adds a message to another session; nothing is replaced
+    effect: low
     description: >-
       Send one message to one or more members of a group you are in.
 

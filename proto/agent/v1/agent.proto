@@ -210,6 +210,19 @@ message ToolInfo {
    * WHAT to grant, because the requirement never left the server.
    */
   repeated string requires = 7;
+  /**
+   * What CALLING this tool does, independent of who may call it.
+   *
+   * SEPARATE FROM `requires`, which answers "does this session hold the permission". A session can be
+   * fully authorised and still deserve a confirmation before merging a pull request — authorisation and
+   * consequence are different questions.
+   *
+   *   "none"    nothing changes
+   *   "low"     only the caller's own state changes; nothing others depend on
+   *   "medium"  state others already depend on changes
+   *   "high"    an asset is consumed; nothing to revert to
+   */
+  string effect = 8;
 }
 
 // Declared config knob for a tool/extension.

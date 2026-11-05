@@ -970,7 +970,19 @@ type ToolInfo struct {
 	// WITHOUT THIS THE CONSOLE CANNOT OFFER THE GRANT. The gate refuses the call regardless — it reads the
 	// same declaration server-side — but a user looking at a tool that keeps failing had no way to see
 	// WHAT to grant, because the requirement never left the server.
-	Requires      []string `protobuf:"bytes,7,rep,name=requires,proto3" json:"requires,omitempty"`
+	Requires []string `protobuf:"bytes,7,rep,name=requires,proto3" json:"requires,omitempty"`
+	//*
+	// What CALLING this tool does, independent of who may call it.
+	//
+	// SEPARATE FROM `requires`, which answers "does this session hold the permission". A session can be
+	// fully authorised and still deserve a confirmation before merging a pull request — authorisation and
+	// consequence are different questions.
+	//
+	//   "none"    nothing changes
+	//   "low"     only the caller's own state changes; nothing others depend on
+	//   "medium"  state others already depend on changes
+	//   "high"    an asset is consumed; nothing to revert to
+	Effect        string `protobuf:"bytes,8,opt,name=effect,proto3" json:"effect,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1052,6 +1064,13 @@ func (x *ToolInfo) GetRequires() []string {
 		return x.Requires
 	}
 	return nil
+}
+
+func (x *ToolInfo) GetEffect() string {
+	if x != nil {
+		return x.Effect
+	}
+	return ""
 }
 
 // Declared config knob for a tool/extension.
@@ -10802,7 +10821,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
 	"\rcontext_limit\x18\x03 \x01(\x03R\fcontextLimit\x12\x1d\n" +
 	"\n" +
-	"model_type\x18\x04 \x01(\tR\tmodelType\"\x9a\x02\n" +
+	"model_type\x18\x04 \x01(\tR\tmodelType\"\xb2\x02\n" +
 	"\bToolInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1a\n" +
@@ -10812,7 +10831,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"parameters\x12>\n" +
 	"\rconfig_fields\x18\x05 \x03(\v2\x19.agent.v1.ToolConfigFieldR\fconfigFields\x12'\n" +
 	"\x0frequired_config\x18\x06 \x03(\tR\x0erequiredConfig\x12\x1a\n" +
-	"\brequires\x18\a \x03(\tR\brequires\"\xa2\x03\n" +
+	"\brequires\x18\a \x03(\tR\brequires\x12\x16\n" +
+	"\x06effect\x18\b \x01(\tR\x06effect\"\xa2\x03\n" +
 	"\x0fToolConfigField\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
