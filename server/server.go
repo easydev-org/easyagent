@@ -59,6 +59,9 @@ type Server struct {
 	bundledFields ConfigFieldSource
 	// stream is the durable session-event source (nil = in-process hub only).
 	stream StreamSource
+	// listChanges carries list-row change hints between replicas. nil = local only, which is correct for a
+	// single-replica deployment and silently stale for any other.
+	listChanges ListChangeBus
 	// lifecycle is the lifecycle broadcaster (nil = not wired).
 	lifecycle LifecyclePublisher
 	// channels provisions each session's built-in channel subscription (nil = no broker).
@@ -144,6 +147,14 @@ type Deps struct {
 	// ChannelPublisher publishes group messages onto a channel. nil means a group has no route, which
 	// the group RPCs report rather than silently accepting a message nobody will receive.
 	ChannelPublisher ChannelPublisher
+	/**
+	 * ListChanges carries list-row change hints between replicas. nil = local only.
+	 *
+	 * WITHOUT IT A LIST IS CORRECT ONLY ON THE REPLICA THAT WROTE IT. A preview, an unread count or a group's
+	 * last message would stay stale on every other replica's clients until something forced a refresh — and
+	 * nothing in the console forces one, so the staleness lasted as long as the page stayed open.
+	 */
+	ListChanges ListChangeBus
 	// GroupWatchTick overrides the WatchGroup poll period. Tests set it; a deployment has no reason to.
 	GroupWatchTick time.Duration
 	// SeedTenant applies deployment-pinned defaults to a tenant created at runtime. nil means a new
@@ -193,6 +204,7 @@ func New(d Deps) *Server {
 		tools: d.Tools, bundledTools: d.BundledTools, bundledFields: d.BundledFields,
 		stream: d.Stream, lifecycle: d.Lifecycle,
 		channels: d.Channels, subs: d.Subs, chanPub: d.ChannelPublisher,
+		listChanges:    d.ListChanges,
 		groupWatchTick: d.GroupWatchTick, seedTenant: d.SeedTenant,
 		blobStore: d.Blob,
 		blobs:     map[string][]byte{},
@@ -440,6 +452,41 @@ type EventHub struct {
 	backplane Backplane
 }
 
+/**
+ * ListChangeBus carries list-row changes between replicas.
+ *
+ * A SEPARATE INTERFACE FROM Backplane because it is a DIFFERENT KIND of message: Backplane mirrors a session's
+ * event stream (ordered, replayable, per-session); this carries "row X changed" hints on one tenant-wide subject,
+ * and replaying them would be wrong — a watcher that just loaded a snapshot needs the future, not the past.
+ */
+type ListChangeBus interface {
+	PublishListChange(ctx context.Context, tenant string, c agentbus.SessionListChange) error
+	SubscribeListChanges(ctx context.Context, tenant string) (<-chan agentbus.SessionListChange, func(), error)
+}
+
+// SetListChanges wires the cross-replica list-change bus. Without it, list updates reach only clients connected
+// to the replica that wrote them — correct with one replica, silently stale with two.
+func (s *Server) SetListChanges(b ListChangeBus) { s.listChanges = b }
+
+/**
+ * notifyListChange tells every replica that a list row changed.
+ *
+ * IT DOES BOTH: the local hub (so this replica's clients update immediately, without a round trip through the
+ * broker) and the bus (so the others do). Skipping the local path would make a single-replica deployment depend on
+ * a broker being up to redraw its own list.
+ */
+func (s *Server) notifyListChange(tenant string, c agentbus.SessionListChange) {
+	// The local hub key stays a single channel for "any list row changed": the watcher re-reads the row named in
+	// the nudge, and a client does not care which replica told it.
+	nudge := agent.Event{Name: "list-changed", Params: map[string]any{
+		"kind": c.Kind, "name": c.Name, "deleted": c.Deleted,
+	}}
+	s.hub.Publish(tenant, listHubKey, nudge)
+	if s.listChanges != nil {
+		_ = s.listChanges.PublishListChange(context.WithoutCancel(context.Background()), tenant, c)
+	}
+}
+
 // Backplane is the durable, cross-replica event sink.
 type Backplane interface {
 	PublishSessionEvent(ctx context.Context, tenant, session, id string, payload any) error
@@ -451,6 +498,15 @@ func NewEventHub() *EventHub {
 }
 
 func hubKey(tenant, session string) string { return tenant + "\x00" + session }
+
+/**
+ * listHubKey is the hub channel for "some list row changed".
+ *
+ * IT IS NOT A SESSION ID, and it deliberately cannot collide with one: a session id is 32 hex characters, so a
+ * key starting with NUL is unreachable by any real session. The same string used to be spelled inline in three
+ * places, which is how the cross-replica path came to be forgotten in one of them.
+ */
+const listHubKey = "\x00lists"
 
 // Subscribe returns a channel of events for one session + a cancel func.
 func (h *EventHub) Subscribe(tenant, session string) (<-chan agent.Event, func()) {
@@ -507,9 +563,11 @@ func (h *EventHub) Publish(tenant, session string, ev agent.Event) {
 	}
 	// B3: an event that changes a session's LIST row also nudges the tenant's
 	// sessions channel, so WatchSessions re-emits that row live.
-	if session != "\x00sessions" && listAffecting[ev.Name] {
-		nudge := agent.Event{Name: "session-changed", Params: map[string]any{"session_name": session}}
-		for _, ch := range h.subs[hubKey(tenant, "\x00sessions")] {
+	if session != listHubKey && listAffecting[ev.Name] {
+		nudge := agent.Event{Name: "list-changed", Params: map[string]any{
+			"kind": agentbus.ListKindSession, "name": session,
+		}}
+		for _, ch := range h.subs[hubKey(tenant, listHubKey)] {
 			select {
 			case ch <- nudge:
 			default:

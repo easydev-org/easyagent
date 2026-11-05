@@ -196,6 +196,15 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 	}
 
 	s.publishGroupMessage(ctx, tenant, name, sender, delivered, msg)
+	/**
+	 * THE GROUP'S LIST ROW CHANGED: a new message means a new preview and a new timestamp.
+	 *
+	 * ANNOUNCED AFTER THE STORE, not before, for the same reason the message itself is: a client told to re-read a
+	 * row that has not been written yet would read the old preview and keep it until the next change.
+	 */
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindGroup, Name: name,
+	})
 	return groupMessageToMsg(msg), delivered, nil
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 
+	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/store"
 )
@@ -189,6 +190,11 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// A NEW GROUP IS A NEW ROW. Announced before the subscription sync, because the list should show it even if
+	// routing takes another moment to establish.
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindGroup, Name: name,
+	})
 	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
 		// THE GROUP EXISTS AND IS CORRECT; only its routing is not established yet. Reported rather
 		// than ignored so the operator can re-run, and not rolled back because deleting a group the user
@@ -362,6 +368,10 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 				"group deleted but its subscriptions remain: "+err.Error())
 		}
 	}
+	// THE ROW IS GONE, SO THE LIST MUST DROP IT — on every replica, not only the one that served the delete.
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindGroup, Name: name, Deleted: true,
+	})
 	return &agentv1.DeleteGroupResponse{}, nil
 }
 
@@ -428,6 +438,11 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *agentv1.RemoveGroup
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
+	// A NEW GROUP IS A NEW ROW. Announced before the subscription sync, because the list should show it even if
+	// routing takes another moment to establish.
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindGroup, Name: name,
+	})
 	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			"member removed but their subscription could not be dropped: "+err.Error())
@@ -471,6 +486,11 @@ func (s *Server) SetGroupCoordinator(ctx context.Context, req *agentv1.SetGroupC
 	}
 	// THE PATTERN DEPENDS ON THE ROLE, so a role change is also a routing change: the promoted session
 	// must start seeing the group's user messages and the demoted one must stop.
+	// A NEW GROUP IS A NEW ROW. Announced before the subscription sync, because the list should show it even if
+	// routing takes another moment to establish.
+	s.notifyListChange(tenant, agentbus.SessionListChange{
+		Kind: agentbus.ListKindGroup, Name: name,
+	})
 	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			"role changed but the subscriptions could not be rewritten: "+err.Error())

@@ -345,6 +345,16 @@ message WatchSessionsResponse {
   // True for the initial full snapshot: the client replaces its whole list
   // with `upserts` (dropping anything not present) instead of merging.
   bool snapshot = 3;
+  /**
+   * New/updated GROUPS, on the same stream.
+   *
+   * A GROUP IS A CONVERSATION ROW IN THE SAME LIST, so a page that renders sessions and groups together needs one
+   * stream that keeps both live. A separate watch would render the page in two steps and make it jump when the
+   * second answer arrived.
+   */
+  repeated Group groups = 4;
+  // Group names that were removed.
+  repeated string removed_groups = 5;
 }
 
 // A file reference (attachment).

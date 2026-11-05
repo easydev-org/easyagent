@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"connectrpc.com/connect/v2"
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/gen/agent/v1/agentv1connect"
 	"github.com/easydev-org/easybus-sdk/mailbox"
@@ -218,9 +220,71 @@ func (s *Server) WatchSession(ctx context.Context, req *agentv1.WatchSessionRequ
 	}
 }
 
-// WatchSessions streams the session list (an initial snapshot then upserts).
+/**
+ * WatchSessions streams the lists a client shows: sessions AND groups, snapshot then changes.
+ *
+ * THE LIST IS TWO KINDS OF ROW IN ONE PAGE. A group is a conversation the user opens and types into, exactly as a
+ * session is, and the console renders them together — so the stream that keeps that page live has to carry both.
+ * Sending only sessions meant a group's preview, name or member count went stale until the page was reopened.
+ *
+ * CHANGES CROSS REPLICAS. A nudge used to be published straight into this process's subscriber map, so a row
+ * written on replica A never reached a client connected to replica B. It now travels on a tenant-wide bus subject
+ * (best-effort, like the event stream it mirrors), and every replica answers it by RE-READING the row from the
+ * database — the notification says which row, never what it contains, so no two replicas can disagree about a
+ * value neither of them owns.
+ */
 func (s *Server) WatchSessions(ctx context.Context, _ *agentv1.WatchSessionsRequest, stream agentv1connect.AgentServiceWatchSessionsServerStream) error {
 	tenant := tenantOf(ctx)
+
+	// THE SNAPSHOT IS BOTH KINDS, read once. A watcher that had to call ListGroups separately would render the
+	// page in two steps and jump when the second answer arrived.
+	if err := s.sendListSnapshot(ctx, tenant, stream); err != nil {
+		return err
+	}
+
+	ch, cancel := s.hub.Subscribe(tenant, listHubKey)
+	defer cancel()
+
+	// THE OTHER REPLICAS. nil when unwired, which is a single-replica deployment — the local hub above already
+	// covers it.
+	var remote <-chan agentbus.SessionListChange
+	if s.listChanges != nil {
+		r, cancelRemote, err := s.listChanges.SubscribeListChanges(ctx, tenant)
+		if err != nil {
+			// NOT FATAL: this replica can still serve its own changes, and a list that refreshes on reconnect is
+			// better than a failed watch. Logged because "cross-replica updates are off" is worth seeing.
+			slog.Warn("watch: cross-replica list changes unavailable", "tenant", tenant, "err", err)
+		} else {
+			remote = r
+			defer cancelRemote()
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case ev := <-ch:
+			if err := s.pushListChange(ctx, tenant, stream,
+				asStr(ev.Params["kind"]), asStr(ev.Params["name"]), asBool(ev.Params["deleted"])); err != nil {
+				return err
+			}
+		case c, ok := <-remote:
+			if !ok {
+				// THE BUS WENT AWAY. Keep serving the local hub rather than ending the watch: a broken broker
+				// must not blank the list of a client that is connected.
+				remote = nil
+				continue
+			}
+			if err := s.pushListChange(ctx, tenant, stream, c.Kind, c.Name, c.Deleted); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// sendListSnapshot pushes the current rows of both kinds.
+func (s *Server) sendListSnapshot(ctx context.Context, tenant string, stream agentv1connect.AgentServiceWatchSessionsServerStream) error {
 	rows, err := s.db.ListSessions(tenant)
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, err.Error())
@@ -232,34 +296,73 @@ func (s *Server) WatchSessions(ctx context.Context, _ *agentv1.WatchSessionsRequ
 	if err := stream.Send(&agentv1.WatchSessionsResponse{Upserts: upserts, Snapshot: true}); err != nil {
 		return err
 	}
-	// Live upserts are driven by session-changed nudges carried on the hub
-	// under a per-tenant key. (A multi-replica build backs this with the
-	// durable session-changed stream.)
-	ch, cancel := s.hub.Subscribe(tenant, "\x00sessions")
-	defer cancel()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case ev := <-ch:
-			name := asStr(ev.Params["session_name"])
-			if name == "" {
-				continue
-			}
-			if row, ok, _ := s.db.GetSession(tenant, name); ok {
-				if err := stream.Send(&agentv1.WatchSessionsResponse{
-					Upserts: []*agentv1.Session{sessionToMsg(*row, s.statusOf(ctx, name))},
-				}); err != nil {
-					return err
-				}
-			} else {
-				// The session is gone (deleted or renamed away) → emit a removal.
-				if err := stream.Send(&agentv1.WatchSessionsResponse{Removed: []string{name}}); err != nil {
-					return err
-				}
-			}
-		}
+	groups, err := s.db.ListGroups(tenant)
+	if err != nil {
+		// GROUPS ARE DECORATION HERE TOO: a session list that renders without them is worth more than a failed
+		// watch on a page the client can still use.
+		return nil
 	}
+	names := make([]string, 0, len(groups))
+	for _, g := range groups {
+		names = append(names, g.Name)
+	}
+	counts, _ := s.db.GroupMemberCounts(tenant, names)
+	rowsOut := make([]*agentv1.Group, 0, len(groups))
+	for _, g := range groups {
+		rowsOut = append(rowsOut, s.groupToRow(tenant, g, counts[g.Name]))
+	}
+	if len(rowsOut) == 0 {
+		return nil
+	}
+	return stream.Send(&agentv1.WatchSessionsResponse{Groups: rowsOut})
+}
+
+/**
+ * pushListChange answers one nudge by re-reading that row and sending its CURRENT state.
+ *
+ * THE ROW IS READ, NOT CARRIED. The nudge named the row; what it looks like now is the database's answer. This is
+ * what makes a best-effort, possibly-duplicated, possibly-out-of-order notification safe: applying the same nudge
+ * twice sends the same row twice, and a later read always wins.
+ */
+func (s *Server) pushListChange(ctx context.Context, tenant string, stream agentv1connect.AgentServiceWatchSessionsServerStream, kind, name string, deleted bool) error {
+	switch kind {
+	case agentbus.ListKindGroup:
+		if deleted {
+			return stream.Send(&agentv1.WatchSessionsResponse{RemovedGroups: []string{name}})
+		}
+		g, ok, err := s.db.GetGroup(tenant, name)
+		if err != nil {
+			return nil // a failed read is a skipped update, not a broken watch
+		}
+		if !ok {
+			return stream.Send(&agentv1.WatchSessionsResponse{RemovedGroups: []string{name}})
+		}
+		counts, _ := s.db.GroupMemberCounts(tenant, []string{name})
+		return stream.Send(&agentv1.WatchSessionsResponse{
+			Groups: []*agentv1.Group{s.groupToRow(tenant, *g, counts[name])},
+		})
+	default:
+		if deleted {
+			return stream.Send(&agentv1.WatchSessionsResponse{Removed: []string{name}})
+		}
+		row, ok, err := s.db.GetSession(tenant, name)
+		if err != nil {
+			return nil
+		}
+		if !ok {
+			// The session is gone (deleted, or renamed away) → emit a removal.
+			return stream.Send(&agentv1.WatchSessionsResponse{Removed: []string{name}})
+		}
+		return stream.Send(&agentv1.WatchSessionsResponse{
+			Upserts: []*agentv1.Session{sessionToMsg(*row, s.statusOf(ctx, name))},
+		})
+	}
+}
+
+// asBool reads a payload flag, treating anything that is not `true` as false.
+func asBool(v any) bool {
+	b, _ := v.(bool)
+	return b
 }
 
 // State reports the session's runtime status.

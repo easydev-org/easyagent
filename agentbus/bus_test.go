@@ -184,3 +184,68 @@ func TestLifecyclePublishConsume(t *testing.T) {
 		t.Errorf("lifecycle subjects = %v", seen)
 	}
 }
+
+/**
+ * A LIST CHANGE PUBLISHED ON ONE REPLICA REACHES A SUBSCRIBER ON ANOTHER.
+ *
+ * This is the cross-replica contract, exercised on the bus alone: two subscribers, one publish, both see it. The
+ * server-level test cannot show this because it would need two processes — what it CAN show is that the server
+ * publishes at all, and this shows the transport carries it.
+ */
+func TestListChangeCrossesReplicas(t *testing.T) {
+	b := startBus(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Two subscribers standing in for two replicas' watchers.
+	a, stopA, err := b.SubscribeListChanges(ctx, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopA()
+	c, stopC, err := b.SubscribeListChanges(ctx, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopC()
+
+	if err := b.PublishListChange(ctx, "t1", SessionListChange{
+		Kind: ListKindSession, Name: "sess-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, ch := range map[string]<-chan SessionListChange{"first": a, "second": c} {
+		select {
+		case got := <-ch:
+			if got.Kind != ListKindSession || got.Name != "sess-1" {
+				t.Errorf("%s subscriber got %+v", name, got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Errorf("%s subscriber received nothing", name)
+		}
+	}
+}
+
+// A CHANGE FOR ANOTHER TENANT DOES NOT ARRIVE.
+func TestListChangeIsTenantScoped(t *testing.T) {
+	b := startBus(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, stop, err := b.SubscribeListChanges(ctx, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	if err := b.PublishListChange(ctx, "t2", SessionListChange{Kind: ListKindGroup, Name: "g"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-ch:
+		t.Fatalf("a change for another tenant arrived: %+v", got)
+	case <-time.After(300 * time.Millisecond):
+		// expected
+	}
+}

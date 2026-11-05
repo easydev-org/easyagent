@@ -358,6 +358,9 @@ func run(cfgPath string) error {
 		// THE GROUP ROUTE, in the same nilable shape as the rest: without a broker a group has no
 		// channel, and the group RPCs say so instead of accepting a message nobody receives.
 		ChannelPublisher: channelPublisher,
+		// THE LIST CHANGES, ACROSS REPLICAS. A watcher on one replica must learn about a row written on another;
+		// without this the console's list is only live for whatever that single process wrote.
+		ListChanges: runtimeBus,
 	})
 	server.SetDefaultTenant(cfg.Tenant.Default)
 	// Mailbox consumer: each replica joins the durable consumer and processes

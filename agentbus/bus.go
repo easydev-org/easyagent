@@ -1194,3 +1194,86 @@ func manifestNamespaces(m *easybus.ExtensionManifest) []bundled.Namespace {
 	}
 	return out
 }
+
+/**
+ * THE LIST-CHANGE CHANNEL, ACROSS REPLICAS.
+ *
+ * Every replica holds its own in-process subscriber map, so a nudge published to `hub.Publish` reaches only the
+ * clients that happen to be connected to the SAME process. With one replica that is invisible; with two it means
+ * a message written on replica A never updates a list open on replica B — the preview, the unread count and the
+ * ordering all stay stale until something else forces a refresh.
+ *
+ * THE NUDGE CARRIES A NAME, NOT A ROW. A watcher that receives it re-reads the row from the database and pushes
+ * that. Sending the row itself would make the cheap notification as large as the thing it announces, and would let
+ * two replicas' views diverge when they disagree about a value neither of them owns — the database is the only
+ * writer, so it is the only thing worth trusting.
+ */
+
+// SessionListChange is what a list row needs to know happened.
+type SessionListChange struct {
+	// Kind is "session" or "group" — the two kinds of row a client lists.
+	Kind string `json:"kind"`
+	// Name is the row's identity: a session id, or a group name. Ids are used for sessions because a display
+	// name is not unique and renaming must not be confused with a different row changing.
+	Name    string `json:"name"`
+	Tenant  string `json:"tenant"`
+	Deleted bool   `json:"deleted,omitempty"`
+}
+
+const (
+	ListKindSession = "session"
+	ListKindGroup   = "group"
+)
+
+/**
+ * PublishListChange announces that a list row changed, on every replica.
+ *
+ * BEST-EFFORT, LIKE THE EVENT STREAM IT MIRRORS: a lost nudge means a list that refreshes a moment later (or on
+ * the next poll / reconnect), not a lost message. Nothing is acknowledged here because there is nothing to
+ * acknowledge — the row is already in the database, which is what the watcher will read.
+ */
+func (b *Bus) PublishListChange(ctx context.Context, tenant string, c SessionListChange) error {
+	c.Tenant = tenant
+	return b.transport.Publish(ctx, protocol.ChSessionChanged(tenant), c, bus.PublishOpts{})
+}
+
+// SubscribeListChanges streams every list change for a tenant, from any replica.
+//
+// NO REPLAY AND NO DEDUPE, deliberately. A subscriber that starts here has already loaded a snapshot from the
+// database, so what it needs is FUTURE changes; replaying the retained window would re-deliver rows it has just
+// read. The channel is unbuffered beyond a small queue because a slow consumer is a slow list refresh, not a lost
+// message.
+func (b *Bus) SubscribeListChanges(ctx context.Context, tenant string) (<-chan SessionListChange, func(), error) {
+	sub, err := b.transport.Subscribe(ctx, protocol.ChSessionChanged(tenant), bus.SubscribeOpts{})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make(chan SessionListChange, 64)
+	go func() {
+		defer close(out)
+		for {
+			env, ok := sub.Next(ctx)
+			if !ok {
+				return
+			}
+			// The payload crosses JSON, so it arrives as a map rather than as the struct that was sent.
+			raw, err := json.Marshal(env.Payload)
+			if err != nil {
+				continue
+			}
+			var c SessionListChange
+			if err := json.Unmarshal(raw, &c); err != nil {
+				continue
+			}
+			if c.Name == "" {
+				continue
+			}
+			select {
+			case out <- c:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, func() { _ = sub.Close() }, nil
+}

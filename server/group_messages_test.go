@@ -6,10 +6,12 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"sync"
 	"testing"
 
 	"connectrpc.com/connect/v2"
 
+	"github.com/easydev-org/easyagent/agentbus"
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/store"
 )
@@ -700,4 +702,100 @@ func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
 	if got := list.Groups[0].LastMessagePreview; got != "please check main" {
 		t.Errorf("preview = %q after an attachment-only post, want the words before it", got)
 	}
+}
+
+/**
+ * A LIST CHANGE CROSSES REPLICAS.
+ *
+ * A nudge used to be published straight into one process's subscriber map, so a row written on replica A never
+ * reached a client connected to replica B. The symptom is not an error: the preview, the unread count and the
+ * ordering simply stay stale for as long as the page is open.
+ *
+ * THE NUDGE NAMES THE ROW AND NOTHING ELSE. The watcher re-reads it from the database, so a duplicated or
+ * out-of-order notification is harmless — applying it twice sends the same row twice, and the database always
+ * has the last word.
+ */
+func TestListChangeIsPublishedForEveryReplica(t *testing.T) {
+	ts, db, srv := newTestServerWithSrv(t)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	fake := &recordingListChanges{}
+	srv.SetListChanges(fake)
+
+	coord := newSession(t, c, "coord")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new group is a new row.
+	if !fake.saw("group", "g", false) {
+		t.Errorf("creating a group published %+v, want a group change", fake.all())
+	}
+
+	// A message changes the row's preview and timestamp.
+	fake.reset()
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group: "g", Text: "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.saw("group", "g", false) {
+		t.Errorf("a message published %+v, want a group change", fake.all())
+	}
+
+	// Deleting it removes the row.
+	fake.reset()
+	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Name: "g"}); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.saw("group", "g", true) {
+		t.Errorf("deleting a group published %+v, want a removal", fake.all())
+	}
+}
+
+// recordingListChanges is a ListChangeBus that keeps what it was told.
+type recordingListChanges struct {
+	mu   sync.Mutex
+	seen []agentbus.SessionListChange
+}
+
+func (r *recordingListChanges) PublishListChange(_ context.Context, tenant string, c agentbus.SessionListChange) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c.Tenant = tenant
+	r.seen = append(r.seen, c)
+	return nil
+}
+
+func (r *recordingListChanges) SubscribeListChanges(context.Context, string) (<-chan agentbus.SessionListChange, func(), error) {
+	// The test only checks what this replica PUBLISHES; a subscription would need a second replica.
+	ch := make(chan agentbus.SessionListChange)
+	return ch, func() { close(ch) }, nil
+}
+
+func (r *recordingListChanges) saw(kind, name string, deleted bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.seen {
+		if c.Kind == kind && c.Name == name && c.Deleted == deleted {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *recordingListChanges) all() []agentbus.SessionListChange {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]agentbus.SessionListChange(nil), r.seen...)
+}
+
+func (r *recordingListChanges) reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = nil
 }
