@@ -5486,8 +5486,14 @@ type GroupMessage struct {
 	SenderName string `protobuf:"bytes,4,opt,name=sender_name,json=senderName,proto3" json:"sender_name,omitempty"`
 	Body       string `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
 	// Position within this group, starting at 1, strictly increasing. The resume cursor for WatchGroup.
-	Seq           int64  `protobuf:"varint,6,opt,name=seq,proto3" json:"seq,omitempty"`
-	CreatedAt     string `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Seq       int64  `protobuf:"varint,6,opt,name=seq,proto3" json:"seq,omitempty"`
+	CreatedAt string `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	//*
+	// Files posted with the message — a picture, a voice note, a document.
+	//
+	// THE BYTES ARE NOT HERE. `code` names a blob the tenant already stores, the same reference a session
+	// message uses, so one upload is readable by every member instead of being copied per message.
+	Attachments   []*FileRef `protobuf:"bytes,8,rep,name=attachments,proto3" json:"attachments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5571,16 +5577,30 @@ func (x *GroupMessage) GetCreatedAt() string {
 	return ""
 }
 
+func (x *GroupMessage) GetAttachments() []*FileRef {
+	if x != nil {
+		return x.Attachments
+	}
+	return nil
+}
+
 type SendGroupMessageRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Group string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
-	Text  string                 `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
+	//*
+	// The message body. MAY BE EMPTY WHEN `attachments` IS NOT: a photo with no caption is a message, and
+	// requiring text for it would make the user invent words to send a picture.
+	Text string `protobuf:"bytes,2,opt,name=text,proto3" json:"text,omitempty"`
 	//*
 	// The sending session's ID, or empty for a user.
 	//
 	// IT IS CHECKED AGAINST MEMBERSHIP. A session that is not in the group cannot post to it, which keeps the
 	// transcript from accepting messages from anyone who guesses the name.
-	Sender        string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
+	Sender string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
+	//*
+	// Files to attach, already uploaded by the console. A code names a tenant blob, so posting it grants no
+	// access the uploader did not already have.
+	Attachments   []*FileRef `protobuf:"bytes,6,rep,name=attachments,proto3" json:"attachments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5634,6 +5654,13 @@ func (x *SendGroupMessageRequest) GetSender() string {
 		return x.Sender
 	}
 	return ""
+}
+
+func (x *SendGroupMessageRequest) GetAttachments() []*FileRef {
+	if x != nil {
+		return x.Attachments
+	}
+	return nil
 }
 
 type SendGroupMessageResponse struct {
@@ -11520,7 +11547,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06member\x18\x02 \x01(\tR\x06member\"s\n" +
 	"\x19RemoveGroupMemberResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\xb2\x01\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\xe7\x01\n" +
 	"\fGroupMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05group\x18\x02 \x01(\tR\x05group\x12\x16\n" +
@@ -11530,11 +11557,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04body\x18\x05 \x01(\tR\x04body\x12\x10\n" +
 	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\a \x01(\tR\tcreatedAt\"e\n" +
+	"created_at\x18\a \x01(\tR\tcreatedAt\x123\n" +
+	"\vattachments\x18\b \x03(\v2\x11.agent.v1.FileRefR\vattachments\"\x9a\x01\n" +
 	"\x17SendGroupMessageRequest\x12\x14\n" +
 	"\x05group\x18\x01 \x01(\tR\x05group\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x16\n" +
-	"\x06sender\x18\x03 \x01(\tR\x06senderJ\x04\b\x04\x10\x05R\x02to\"o\n" +
+	"\x06sender\x18\x03 \x01(\tR\x06sender\x123\n" +
+	"\vattachments\x18\x06 \x03(\v2\x11.agent.v1.FileRefR\vattachmentsJ\x04\b\x04\x10\x05R\x02to\"o\n" +
 	"\x18SendGroupMessageResponse\x120\n" +
 	"\amessage\x18\x01 \x01(\v2\x16.agent.v1.GroupMessageR\amessage\x12!\n" +
 	"\fdelivered_to\x18\x02 \x03(\tR\vdeliveredTo\"}\n" +
@@ -12248,205 +12277,207 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	67,  // 47: agent.v1.AddGroupMemberResponse.members:type_name -> agent.v1.GroupMember
 	66,  // 48: agent.v1.RemoveGroupMemberResponse.group:type_name -> agent.v1.Group
 	67,  // 49: agent.v1.RemoveGroupMemberResponse.members:type_name -> agent.v1.GroupMember
-	84,  // 50: agent.v1.SendGroupMessageResponse.message:type_name -> agent.v1.GroupMessage
-	84,  // 51: agent.v1.ListGroupMessagesResponse.messages:type_name -> agent.v1.GroupMessage
-	84,  // 52: agent.v1.WatchGroupResponse.message:type_name -> agent.v1.GroupMessage
-	198, // 53: agent.v1.StateResponse.state:type_name -> google.protobuf.Struct
-	4,   // 54: agent.v1.MailboxResponse.mailbox:type_name -> agent.v1.MailboxEntry
-	1,   // 55: agent.v1.UpdateSettingsResponse.session:type_name -> agent.v1.Session
-	6,   // 56: agent.v1.ListProvidersResponse.providers:type_name -> agent.v1.Provider
-	195, // 57: agent.v1.ListProvidersCatalogResponse.api_types:type_name -> agent.v1.ListProvidersCatalogResponse.ApiTypesEntry
-	6,   // 58: agent.v1.RegisterProviderRequest.provider:type_name -> agent.v1.Provider
-	112, // 59: agent.v1.TestProviderResponse.files:type_name -> agent.v1.GeneratedFile
-	115, // 60: agent.v1.ListModelsResponse.models:type_name -> agent.v1.ModelInfo
-	116, // 61: agent.v1.ModelInfo.variants:type_name -> agent.v1.ModelVariant
-	5,   // 62: agent.v1.ListPresetsResponse.presets:type_name -> agent.v1.Preset
-	5,   // 63: agent.v1.UpsertPresetRequest.preset:type_name -> agent.v1.Preset
-	8,   // 64: agent.v1.ListToolsResponse.tools:type_name -> agent.v1.ToolInfo
-	11,  // 65: agent.v1.GetToolConfigResponse.config:type_name -> agent.v1.ToolConfig
-	198, // 66: agent.v1.SetToolConfigRequest.config:type_name -> google.protobuf.Struct
-	199, // 67: agent.v1.SetExtensionConfigRequest.value:type_name -> google.protobuf.Value
-	9,   // 68: agent.v1.ExtensionInfo.config_fields:type_name -> agent.v1.ToolConfigField
-	138, // 69: agent.v1.ExtensionInfo.namespaces:type_name -> agent.v1.ExtensionNamespace
-	139, // 70: agent.v1.ExtensionInfo.tools_detailed:type_name -> agent.v1.ExtensionToolInfo
-	196, // 71: agent.v1.ExtensionNamespace.descriptions:type_name -> agent.v1.ExtensionNamespace.DescriptionsEntry
-	137, // 72: agent.v1.ListExtensionsResponse.extensions:type_name -> agent.v1.ExtensionInfo
-	197, // 73: agent.v1.GetExtensionConfigResponse.values:type_name -> agent.v1.GetExtensionConfigResponse.ValuesEntry
-	17,  // 74: agent.v1.UploadFileRequest.file:type_name -> agent.v1.FileRef
-	198, // 75: agent.v1.GetAgentConfigResponse.config:type_name -> google.protobuf.Struct
-	159, // 76: agent.v1.ListTenantsResponse.tenants:type_name -> agent.v1.Tenant
-	159, // 77: agent.v1.CreateTenantResponse.tenant:type_name -> agent.v1.Tenant
-	159, // 78: agent.v1.UpdateTenantResponse.tenant:type_name -> agent.v1.Tenant
-	161, // 79: agent.v1.IssueTenantTokenResponse.token:type_name -> agent.v1.TenantToken
-	161, // 80: agent.v1.ListTenantTokensResponse.tokens:type_name -> agent.v1.TenantToken
-	161, // 81: agent.v1.SetTenantTokenLabelResponse.token:type_name -> agent.v1.TenantToken
-	161, // 82: agent.v1.RotateTenantTokenResponse.token:type_name -> agent.v1.TenantToken
-	160, // 83: agent.v1.CreateAdminTokenResponse.token:type_name -> agent.v1.AdminToken
-	160, // 84: agent.v1.ListAdminTokensResponse.tokens:type_name -> agent.v1.AdminToken
-	199, // 85: agent.v1.ToolConfig.ValuesEntry.value:type_name -> google.protobuf.Value
-	105, // 86: agent.v1.ListProvidersCatalogResponse.ApiTypesEntry.value:type_name -> agent.v1.ApiTypeCatalog
-	199, // 87: agent.v1.GetExtensionConfigResponse.ValuesEntry.value:type_name -> google.protobuf.Value
-	155, // 88: agent.v1.AgentService.Health:input_type -> agent.v1.HealthRequest
-	157, // 89: agent.v1.AgentService.GetIdentity:input_type -> agent.v1.GetIdentityRequest
-	18,  // 90: agent.v1.AgentService.ListSessions:input_type -> agent.v1.ListSessionsRequest
-	20,  // 91: agent.v1.AgentService.CreateSession:input_type -> agent.v1.CreateSessionRequest
-	22,  // 92: agent.v1.AgentService.GetSession:input_type -> agent.v1.GetSessionRequest
-	24,  // 93: agent.v1.AgentService.DeleteSession:input_type -> agent.v1.DeleteSessionRequest
-	26,  // 94: agent.v1.AgentService.ListMessages:input_type -> agent.v1.ListMessagesRequest
-	28,  // 95: agent.v1.AgentService.Prompt:input_type -> agent.v1.PromptRequest
-	13,  // 96: agent.v1.AgentService.WatchSession:input_type -> agent.v1.WatchSessionRequest
-	15,  // 97: agent.v1.AgentService.WatchSessions:input_type -> agent.v1.WatchSessionsRequest
-	29,  // 98: agent.v1.AgentService.Fork:input_type -> agent.v1.ForkRequest
-	31,  // 99: agent.v1.AgentService.Rename:input_type -> agent.v1.RenameRequest
-	33,  // 100: agent.v1.AgentService.SetModel:input_type -> agent.v1.SetModelRequest
-	35,  // 101: agent.v1.AgentService.Undo:input_type -> agent.v1.UndoRequest
-	37,  // 102: agent.v1.AgentService.MarkRead:input_type -> agent.v1.MarkReadRequest
-	40,  // 103: agent.v1.AgentService.ListGrants:input_type -> agent.v1.ListGrantsRequest
-	43,  // 104: agent.v1.AgentService.ListPermissionStates:input_type -> agent.v1.ListPermissionStatesRequest
-	45,  // 105: agent.v1.AgentService.ListDenials:input_type -> agent.v1.ListDenialsRequest
-	48,  // 106: agent.v1.AgentService.CreateGrant:input_type -> agent.v1.CreateGrantRequest
-	50,  // 107: agent.v1.AgentService.RevokeGrant:input_type -> agent.v1.RevokeGrantRequest
-	53,  // 108: agent.v1.AgentService.ListPermissionDecls:input_type -> agent.v1.ListPermissionDeclsRequest
-	56,  // 109: agent.v1.AgentService.ListSubscriptions:input_type -> agent.v1.ListSubscriptionsRequest
-	58,  // 110: agent.v1.AgentService.SubscribeChannel:input_type -> agent.v1.SubscribeChannelRequest
-	60,  // 111: agent.v1.AgentService.UnsubscribeChannel:input_type -> agent.v1.UnsubscribeChannelRequest
-	64,  // 112: agent.v1.AgentService.ListChannels:input_type -> agent.v1.ListChannelsRequest
-	68,  // 113: agent.v1.AgentService.CreateGroup:input_type -> agent.v1.CreateGroupRequest
-	70,  // 114: agent.v1.AgentService.ListGroups:input_type -> agent.v1.ListGroupsRequest
-	72,  // 115: agent.v1.AgentService.GetGroup:input_type -> agent.v1.GetGroupRequest
-	74,  // 116: agent.v1.AgentService.UpdateGroup:input_type -> agent.v1.UpdateGroupRequest
-	76,  // 117: agent.v1.AgentService.DeleteGroup:input_type -> agent.v1.DeleteGroupRequest
-	78,  // 118: agent.v1.AgentService.AddGroupMember:input_type -> agent.v1.AddGroupMemberRequest
-	82,  // 119: agent.v1.AgentService.RemoveGroupMember:input_type -> agent.v1.RemoveGroupMemberRequest
-	79,  // 120: agent.v1.AgentService.SetGroupCoordinator:input_type -> agent.v1.SetGroupCoordinatorRequest
-	85,  // 121: agent.v1.AgentService.SendGroupMessage:input_type -> agent.v1.SendGroupMessageRequest
-	87,  // 122: agent.v1.AgentService.ListGroupMessages:input_type -> agent.v1.ListGroupMessagesRequest
-	89,  // 123: agent.v1.AgentService.WatchGroup:input_type -> agent.v1.WatchGroupRequest
-	91,  // 124: agent.v1.AgentService.State:input_type -> agent.v1.StateRequest
-	93,  // 125: agent.v1.AgentService.Mailbox:input_type -> agent.v1.MailboxRequest
-	95,  // 126: agent.v1.AgentService.UpdateSettings:input_type -> agent.v1.UpdateSettingsRequest
-	97,  // 127: agent.v1.AgentService.Interrupt:input_type -> agent.v1.InterruptRequest
-	99,  // 128: agent.v1.AgentService.Compact:input_type -> agent.v1.CompactRequest
-	101, // 129: agent.v1.AgentService.ListProviders:input_type -> agent.v1.ListProvidersRequest
-	103, // 130: agent.v1.AgentService.ListProvidersCatalog:input_type -> agent.v1.ListProvidersCatalogRequest
-	106, // 131: agent.v1.AgentService.RegisterProvider:input_type -> agent.v1.RegisterProviderRequest
-	108, // 132: agent.v1.AgentService.DeleteProvider:input_type -> agent.v1.DeleteProviderRequest
-	110, // 133: agent.v1.AgentService.TestProvider:input_type -> agent.v1.TestProviderRequest
-	113, // 134: agent.v1.AgentService.ListModels:input_type -> agent.v1.ListModelsRequest
-	117, // 135: agent.v1.AgentService.ListPresets:input_type -> agent.v1.ListPresetsRequest
-	119, // 136: agent.v1.AgentService.UpsertPreset:input_type -> agent.v1.UpsertPresetRequest
-	121, // 137: agent.v1.AgentService.DeletePreset:input_type -> agent.v1.DeletePresetRequest
-	123, // 138: agent.v1.AgentService.PreviewPreset:input_type -> agent.v1.PreviewPresetRequest
-	125, // 139: agent.v1.AgentService.GetConfig:input_type -> agent.v1.GetConfigRequest
-	127, // 140: agent.v1.AgentService.SetConfig:input_type -> agent.v1.SetConfigRequest
-	129, // 141: agent.v1.AgentService.ListTools:input_type -> agent.v1.ListToolsRequest
-	131, // 142: agent.v1.AgentService.GetToolConfig:input_type -> agent.v1.GetToolConfigRequest
-	133, // 143: agent.v1.AgentService.SetToolConfig:input_type -> agent.v1.SetToolConfigRequest
-	135, // 144: agent.v1.AgentService.SetExtensionConfig:input_type -> agent.v1.SetExtensionConfigRequest
-	140, // 145: agent.v1.AgentService.ListExtensions:input_type -> agent.v1.ListExtensionsRequest
-	142, // 146: agent.v1.AgentService.GetExtensionConfig:input_type -> agent.v1.GetExtensionConfigRequest
-	144, // 147: agent.v1.AgentService.UploadFile:input_type -> agent.v1.UploadFileRequest
-	146, // 148: agent.v1.AgentService.IngestFile:input_type -> agent.v1.IngestFileRequest
-	148, // 149: agent.v1.AgentService.GetFile:input_type -> agent.v1.GetFileRequest
-	150, // 150: agent.v1.AgentService.GetFileMeta:input_type -> agent.v1.GetFileMetaRequest
-	148, // 151: agent.v1.AgentService.GetFileStream:input_type -> agent.v1.GetFileRequest
-	153, // 152: agent.v1.AgentService.GetAgentConfig:input_type -> agent.v1.GetAgentConfigRequest
-	162, // 153: agent.v1.AdminService.ListTenants:input_type -> agent.v1.ListTenantsRequest
-	164, // 154: agent.v1.AdminService.CreateTenant:input_type -> agent.v1.CreateTenantRequest
-	166, // 155: agent.v1.AdminService.UpdateTenant:input_type -> agent.v1.UpdateTenantRequest
-	168, // 156: agent.v1.AdminService.DeleteTenant:input_type -> agent.v1.DeleteTenantRequest
-	170, // 157: agent.v1.AdminService.IssueTenantToken:input_type -> agent.v1.IssueTenantTokenRequest
-	172, // 158: agent.v1.AdminService.ListTenantTokens:input_type -> agent.v1.ListTenantTokensRequest
-	174, // 159: agent.v1.AdminService.RevokeTenantToken:input_type -> agent.v1.RevokeTenantTokenRequest
-	178, // 160: agent.v1.AdminService.RotateTenantToken:input_type -> agent.v1.RotateTenantTokenRequest
-	176, // 161: agent.v1.AdminService.SetTenantTokenLabel:input_type -> agent.v1.SetTenantTokenLabelRequest
-	180, // 162: agent.v1.AdminService.Login:input_type -> agent.v1.LoginRequest
-	182, // 163: agent.v1.AdminService.CreateAdminToken:input_type -> agent.v1.CreateAdminTokenRequest
-	184, // 164: agent.v1.AdminService.ListAdminTokens:input_type -> agent.v1.ListAdminTokensRequest
-	186, // 165: agent.v1.AdminService.RevokeAdminToken:input_type -> agent.v1.RevokeAdminTokenRequest
-	156, // 166: agent.v1.AgentService.Health:output_type -> agent.v1.HealthResponse
-	158, // 167: agent.v1.AgentService.GetIdentity:output_type -> agent.v1.GetIdentityResponse
-	19,  // 168: agent.v1.AgentService.ListSessions:output_type -> agent.v1.ListSessionsResponse
-	21,  // 169: agent.v1.AgentService.CreateSession:output_type -> agent.v1.CreateSessionResponse
-	23,  // 170: agent.v1.AgentService.GetSession:output_type -> agent.v1.GetSessionResponse
-	25,  // 171: agent.v1.AgentService.DeleteSession:output_type -> agent.v1.DeleteSessionResponse
-	27,  // 172: agent.v1.AgentService.ListMessages:output_type -> agent.v1.ListMessagesResponse
-	12,  // 173: agent.v1.AgentService.Prompt:output_type -> agent.v1.PromptResponse
-	14,  // 174: agent.v1.AgentService.WatchSession:output_type -> agent.v1.WatchSessionResponse
-	16,  // 175: agent.v1.AgentService.WatchSessions:output_type -> agent.v1.WatchSessionsResponse
-	30,  // 176: agent.v1.AgentService.Fork:output_type -> agent.v1.ForkResponse
-	32,  // 177: agent.v1.AgentService.Rename:output_type -> agent.v1.RenameResponse
-	34,  // 178: agent.v1.AgentService.SetModel:output_type -> agent.v1.SetModelResponse
-	36,  // 179: agent.v1.AgentService.Undo:output_type -> agent.v1.UndoResponse
-	38,  // 180: agent.v1.AgentService.MarkRead:output_type -> agent.v1.MarkReadResponse
-	41,  // 181: agent.v1.AgentService.ListGrants:output_type -> agent.v1.ListGrantsResponse
-	44,  // 182: agent.v1.AgentService.ListPermissionStates:output_type -> agent.v1.ListPermissionStatesResponse
-	46,  // 183: agent.v1.AgentService.ListDenials:output_type -> agent.v1.ListDenialsResponse
-	49,  // 184: agent.v1.AgentService.CreateGrant:output_type -> agent.v1.CreateGrantResponse
-	51,  // 185: agent.v1.AgentService.RevokeGrant:output_type -> agent.v1.RevokeGrantResponse
-	54,  // 186: agent.v1.AgentService.ListPermissionDecls:output_type -> agent.v1.ListPermissionDeclsResponse
-	57,  // 187: agent.v1.AgentService.ListSubscriptions:output_type -> agent.v1.ListSubscriptionsResponse
-	59,  // 188: agent.v1.AgentService.SubscribeChannel:output_type -> agent.v1.SubscribeChannelResponse
-	61,  // 189: agent.v1.AgentService.UnsubscribeChannel:output_type -> agent.v1.UnsubscribeChannelResponse
-	65,  // 190: agent.v1.AgentService.ListChannels:output_type -> agent.v1.ListChannelsResponse
-	69,  // 191: agent.v1.AgentService.CreateGroup:output_type -> agent.v1.CreateGroupResponse
-	71,  // 192: agent.v1.AgentService.ListGroups:output_type -> agent.v1.ListGroupsResponse
-	73,  // 193: agent.v1.AgentService.GetGroup:output_type -> agent.v1.GetGroupResponse
-	75,  // 194: agent.v1.AgentService.UpdateGroup:output_type -> agent.v1.UpdateGroupResponse
-	77,  // 195: agent.v1.AgentService.DeleteGroup:output_type -> agent.v1.DeleteGroupResponse
-	81,  // 196: agent.v1.AgentService.AddGroupMember:output_type -> agent.v1.AddGroupMemberResponse
-	83,  // 197: agent.v1.AgentService.RemoveGroupMember:output_type -> agent.v1.RemoveGroupMemberResponse
-	80,  // 198: agent.v1.AgentService.SetGroupCoordinator:output_type -> agent.v1.SetGroupCoordinatorResponse
-	86,  // 199: agent.v1.AgentService.SendGroupMessage:output_type -> agent.v1.SendGroupMessageResponse
-	88,  // 200: agent.v1.AgentService.ListGroupMessages:output_type -> agent.v1.ListGroupMessagesResponse
-	90,  // 201: agent.v1.AgentService.WatchGroup:output_type -> agent.v1.WatchGroupResponse
-	92,  // 202: agent.v1.AgentService.State:output_type -> agent.v1.StateResponse
-	94,  // 203: agent.v1.AgentService.Mailbox:output_type -> agent.v1.MailboxResponse
-	96,  // 204: agent.v1.AgentService.UpdateSettings:output_type -> agent.v1.UpdateSettingsResponse
-	98,  // 205: agent.v1.AgentService.Interrupt:output_type -> agent.v1.InterruptResponse
-	100, // 206: agent.v1.AgentService.Compact:output_type -> agent.v1.CompactResponse
-	102, // 207: agent.v1.AgentService.ListProviders:output_type -> agent.v1.ListProvidersResponse
-	104, // 208: agent.v1.AgentService.ListProvidersCatalog:output_type -> agent.v1.ListProvidersCatalogResponse
-	107, // 209: agent.v1.AgentService.RegisterProvider:output_type -> agent.v1.RegisterProviderResponse
-	109, // 210: agent.v1.AgentService.DeleteProvider:output_type -> agent.v1.DeleteProviderResponse
-	111, // 211: agent.v1.AgentService.TestProvider:output_type -> agent.v1.TestProviderResponse
-	114, // 212: agent.v1.AgentService.ListModels:output_type -> agent.v1.ListModelsResponse
-	118, // 213: agent.v1.AgentService.ListPresets:output_type -> agent.v1.ListPresetsResponse
-	120, // 214: agent.v1.AgentService.UpsertPreset:output_type -> agent.v1.UpsertPresetResponse
-	122, // 215: agent.v1.AgentService.DeletePreset:output_type -> agent.v1.DeletePresetResponse
-	124, // 216: agent.v1.AgentService.PreviewPreset:output_type -> agent.v1.PreviewPresetResponse
-	126, // 217: agent.v1.AgentService.GetConfig:output_type -> agent.v1.GetConfigResponse
-	128, // 218: agent.v1.AgentService.SetConfig:output_type -> agent.v1.SetConfigResponse
-	130, // 219: agent.v1.AgentService.ListTools:output_type -> agent.v1.ListToolsResponse
-	132, // 220: agent.v1.AgentService.GetToolConfig:output_type -> agent.v1.GetToolConfigResponse
-	134, // 221: agent.v1.AgentService.SetToolConfig:output_type -> agent.v1.SetToolConfigResponse
-	136, // 222: agent.v1.AgentService.SetExtensionConfig:output_type -> agent.v1.SetExtensionConfigResponse
-	141, // 223: agent.v1.AgentService.ListExtensions:output_type -> agent.v1.ListExtensionsResponse
-	143, // 224: agent.v1.AgentService.GetExtensionConfig:output_type -> agent.v1.GetExtensionConfigResponse
-	145, // 225: agent.v1.AgentService.UploadFile:output_type -> agent.v1.UploadFileResponse
-	147, // 226: agent.v1.AgentService.IngestFile:output_type -> agent.v1.IngestFileResponse
-	149, // 227: agent.v1.AgentService.GetFile:output_type -> agent.v1.GetFileResponse
-	151, // 228: agent.v1.AgentService.GetFileMeta:output_type -> agent.v1.GetFileMetaResponse
-	152, // 229: agent.v1.AgentService.GetFileStream:output_type -> agent.v1.FileChunk
-	154, // 230: agent.v1.AgentService.GetAgentConfig:output_type -> agent.v1.GetAgentConfigResponse
-	163, // 231: agent.v1.AdminService.ListTenants:output_type -> agent.v1.ListTenantsResponse
-	165, // 232: agent.v1.AdminService.CreateTenant:output_type -> agent.v1.CreateTenantResponse
-	167, // 233: agent.v1.AdminService.UpdateTenant:output_type -> agent.v1.UpdateTenantResponse
-	169, // 234: agent.v1.AdminService.DeleteTenant:output_type -> agent.v1.DeleteTenantResponse
-	171, // 235: agent.v1.AdminService.IssueTenantToken:output_type -> agent.v1.IssueTenantTokenResponse
-	173, // 236: agent.v1.AdminService.ListTenantTokens:output_type -> agent.v1.ListTenantTokensResponse
-	175, // 237: agent.v1.AdminService.RevokeTenantToken:output_type -> agent.v1.RevokeTenantTokenResponse
-	179, // 238: agent.v1.AdminService.RotateTenantToken:output_type -> agent.v1.RotateTenantTokenResponse
-	177, // 239: agent.v1.AdminService.SetTenantTokenLabel:output_type -> agent.v1.SetTenantTokenLabelResponse
-	181, // 240: agent.v1.AdminService.Login:output_type -> agent.v1.LoginResponse
-	183, // 241: agent.v1.AdminService.CreateAdminToken:output_type -> agent.v1.CreateAdminTokenResponse
-	185, // 242: agent.v1.AdminService.ListAdminTokens:output_type -> agent.v1.ListAdminTokensResponse
-	187, // 243: agent.v1.AdminService.RevokeAdminToken:output_type -> agent.v1.RevokeAdminTokenResponse
-	166, // [166:244] is the sub-list for method output_type
-	88,  // [88:166] is the sub-list for method input_type
-	88,  // [88:88] is the sub-list for extension type_name
-	88,  // [88:88] is the sub-list for extension extendee
-	0,   // [0:88] is the sub-list for field type_name
+	17,  // 50: agent.v1.GroupMessage.attachments:type_name -> agent.v1.FileRef
+	17,  // 51: agent.v1.SendGroupMessageRequest.attachments:type_name -> agent.v1.FileRef
+	84,  // 52: agent.v1.SendGroupMessageResponse.message:type_name -> agent.v1.GroupMessage
+	84,  // 53: agent.v1.ListGroupMessagesResponse.messages:type_name -> agent.v1.GroupMessage
+	84,  // 54: agent.v1.WatchGroupResponse.message:type_name -> agent.v1.GroupMessage
+	198, // 55: agent.v1.StateResponse.state:type_name -> google.protobuf.Struct
+	4,   // 56: agent.v1.MailboxResponse.mailbox:type_name -> agent.v1.MailboxEntry
+	1,   // 57: agent.v1.UpdateSettingsResponse.session:type_name -> agent.v1.Session
+	6,   // 58: agent.v1.ListProvidersResponse.providers:type_name -> agent.v1.Provider
+	195, // 59: agent.v1.ListProvidersCatalogResponse.api_types:type_name -> agent.v1.ListProvidersCatalogResponse.ApiTypesEntry
+	6,   // 60: agent.v1.RegisterProviderRequest.provider:type_name -> agent.v1.Provider
+	112, // 61: agent.v1.TestProviderResponse.files:type_name -> agent.v1.GeneratedFile
+	115, // 62: agent.v1.ListModelsResponse.models:type_name -> agent.v1.ModelInfo
+	116, // 63: agent.v1.ModelInfo.variants:type_name -> agent.v1.ModelVariant
+	5,   // 64: agent.v1.ListPresetsResponse.presets:type_name -> agent.v1.Preset
+	5,   // 65: agent.v1.UpsertPresetRequest.preset:type_name -> agent.v1.Preset
+	8,   // 66: agent.v1.ListToolsResponse.tools:type_name -> agent.v1.ToolInfo
+	11,  // 67: agent.v1.GetToolConfigResponse.config:type_name -> agent.v1.ToolConfig
+	198, // 68: agent.v1.SetToolConfigRequest.config:type_name -> google.protobuf.Struct
+	199, // 69: agent.v1.SetExtensionConfigRequest.value:type_name -> google.protobuf.Value
+	9,   // 70: agent.v1.ExtensionInfo.config_fields:type_name -> agent.v1.ToolConfigField
+	138, // 71: agent.v1.ExtensionInfo.namespaces:type_name -> agent.v1.ExtensionNamespace
+	139, // 72: agent.v1.ExtensionInfo.tools_detailed:type_name -> agent.v1.ExtensionToolInfo
+	196, // 73: agent.v1.ExtensionNamespace.descriptions:type_name -> agent.v1.ExtensionNamespace.DescriptionsEntry
+	137, // 74: agent.v1.ListExtensionsResponse.extensions:type_name -> agent.v1.ExtensionInfo
+	197, // 75: agent.v1.GetExtensionConfigResponse.values:type_name -> agent.v1.GetExtensionConfigResponse.ValuesEntry
+	17,  // 76: agent.v1.UploadFileRequest.file:type_name -> agent.v1.FileRef
+	198, // 77: agent.v1.GetAgentConfigResponse.config:type_name -> google.protobuf.Struct
+	159, // 78: agent.v1.ListTenantsResponse.tenants:type_name -> agent.v1.Tenant
+	159, // 79: agent.v1.CreateTenantResponse.tenant:type_name -> agent.v1.Tenant
+	159, // 80: agent.v1.UpdateTenantResponse.tenant:type_name -> agent.v1.Tenant
+	161, // 81: agent.v1.IssueTenantTokenResponse.token:type_name -> agent.v1.TenantToken
+	161, // 82: agent.v1.ListTenantTokensResponse.tokens:type_name -> agent.v1.TenantToken
+	161, // 83: agent.v1.SetTenantTokenLabelResponse.token:type_name -> agent.v1.TenantToken
+	161, // 84: agent.v1.RotateTenantTokenResponse.token:type_name -> agent.v1.TenantToken
+	160, // 85: agent.v1.CreateAdminTokenResponse.token:type_name -> agent.v1.AdminToken
+	160, // 86: agent.v1.ListAdminTokensResponse.tokens:type_name -> agent.v1.AdminToken
+	199, // 87: agent.v1.ToolConfig.ValuesEntry.value:type_name -> google.protobuf.Value
+	105, // 88: agent.v1.ListProvidersCatalogResponse.ApiTypesEntry.value:type_name -> agent.v1.ApiTypeCatalog
+	199, // 89: agent.v1.GetExtensionConfigResponse.ValuesEntry.value:type_name -> google.protobuf.Value
+	155, // 90: agent.v1.AgentService.Health:input_type -> agent.v1.HealthRequest
+	157, // 91: agent.v1.AgentService.GetIdentity:input_type -> agent.v1.GetIdentityRequest
+	18,  // 92: agent.v1.AgentService.ListSessions:input_type -> agent.v1.ListSessionsRequest
+	20,  // 93: agent.v1.AgentService.CreateSession:input_type -> agent.v1.CreateSessionRequest
+	22,  // 94: agent.v1.AgentService.GetSession:input_type -> agent.v1.GetSessionRequest
+	24,  // 95: agent.v1.AgentService.DeleteSession:input_type -> agent.v1.DeleteSessionRequest
+	26,  // 96: agent.v1.AgentService.ListMessages:input_type -> agent.v1.ListMessagesRequest
+	28,  // 97: agent.v1.AgentService.Prompt:input_type -> agent.v1.PromptRequest
+	13,  // 98: agent.v1.AgentService.WatchSession:input_type -> agent.v1.WatchSessionRequest
+	15,  // 99: agent.v1.AgentService.WatchSessions:input_type -> agent.v1.WatchSessionsRequest
+	29,  // 100: agent.v1.AgentService.Fork:input_type -> agent.v1.ForkRequest
+	31,  // 101: agent.v1.AgentService.Rename:input_type -> agent.v1.RenameRequest
+	33,  // 102: agent.v1.AgentService.SetModel:input_type -> agent.v1.SetModelRequest
+	35,  // 103: agent.v1.AgentService.Undo:input_type -> agent.v1.UndoRequest
+	37,  // 104: agent.v1.AgentService.MarkRead:input_type -> agent.v1.MarkReadRequest
+	40,  // 105: agent.v1.AgentService.ListGrants:input_type -> agent.v1.ListGrantsRequest
+	43,  // 106: agent.v1.AgentService.ListPermissionStates:input_type -> agent.v1.ListPermissionStatesRequest
+	45,  // 107: agent.v1.AgentService.ListDenials:input_type -> agent.v1.ListDenialsRequest
+	48,  // 108: agent.v1.AgentService.CreateGrant:input_type -> agent.v1.CreateGrantRequest
+	50,  // 109: agent.v1.AgentService.RevokeGrant:input_type -> agent.v1.RevokeGrantRequest
+	53,  // 110: agent.v1.AgentService.ListPermissionDecls:input_type -> agent.v1.ListPermissionDeclsRequest
+	56,  // 111: agent.v1.AgentService.ListSubscriptions:input_type -> agent.v1.ListSubscriptionsRequest
+	58,  // 112: agent.v1.AgentService.SubscribeChannel:input_type -> agent.v1.SubscribeChannelRequest
+	60,  // 113: agent.v1.AgentService.UnsubscribeChannel:input_type -> agent.v1.UnsubscribeChannelRequest
+	64,  // 114: agent.v1.AgentService.ListChannels:input_type -> agent.v1.ListChannelsRequest
+	68,  // 115: agent.v1.AgentService.CreateGroup:input_type -> agent.v1.CreateGroupRequest
+	70,  // 116: agent.v1.AgentService.ListGroups:input_type -> agent.v1.ListGroupsRequest
+	72,  // 117: agent.v1.AgentService.GetGroup:input_type -> agent.v1.GetGroupRequest
+	74,  // 118: agent.v1.AgentService.UpdateGroup:input_type -> agent.v1.UpdateGroupRequest
+	76,  // 119: agent.v1.AgentService.DeleteGroup:input_type -> agent.v1.DeleteGroupRequest
+	78,  // 120: agent.v1.AgentService.AddGroupMember:input_type -> agent.v1.AddGroupMemberRequest
+	82,  // 121: agent.v1.AgentService.RemoveGroupMember:input_type -> agent.v1.RemoveGroupMemberRequest
+	79,  // 122: agent.v1.AgentService.SetGroupCoordinator:input_type -> agent.v1.SetGroupCoordinatorRequest
+	85,  // 123: agent.v1.AgentService.SendGroupMessage:input_type -> agent.v1.SendGroupMessageRequest
+	87,  // 124: agent.v1.AgentService.ListGroupMessages:input_type -> agent.v1.ListGroupMessagesRequest
+	89,  // 125: agent.v1.AgentService.WatchGroup:input_type -> agent.v1.WatchGroupRequest
+	91,  // 126: agent.v1.AgentService.State:input_type -> agent.v1.StateRequest
+	93,  // 127: agent.v1.AgentService.Mailbox:input_type -> agent.v1.MailboxRequest
+	95,  // 128: agent.v1.AgentService.UpdateSettings:input_type -> agent.v1.UpdateSettingsRequest
+	97,  // 129: agent.v1.AgentService.Interrupt:input_type -> agent.v1.InterruptRequest
+	99,  // 130: agent.v1.AgentService.Compact:input_type -> agent.v1.CompactRequest
+	101, // 131: agent.v1.AgentService.ListProviders:input_type -> agent.v1.ListProvidersRequest
+	103, // 132: agent.v1.AgentService.ListProvidersCatalog:input_type -> agent.v1.ListProvidersCatalogRequest
+	106, // 133: agent.v1.AgentService.RegisterProvider:input_type -> agent.v1.RegisterProviderRequest
+	108, // 134: agent.v1.AgentService.DeleteProvider:input_type -> agent.v1.DeleteProviderRequest
+	110, // 135: agent.v1.AgentService.TestProvider:input_type -> agent.v1.TestProviderRequest
+	113, // 136: agent.v1.AgentService.ListModels:input_type -> agent.v1.ListModelsRequest
+	117, // 137: agent.v1.AgentService.ListPresets:input_type -> agent.v1.ListPresetsRequest
+	119, // 138: agent.v1.AgentService.UpsertPreset:input_type -> agent.v1.UpsertPresetRequest
+	121, // 139: agent.v1.AgentService.DeletePreset:input_type -> agent.v1.DeletePresetRequest
+	123, // 140: agent.v1.AgentService.PreviewPreset:input_type -> agent.v1.PreviewPresetRequest
+	125, // 141: agent.v1.AgentService.GetConfig:input_type -> agent.v1.GetConfigRequest
+	127, // 142: agent.v1.AgentService.SetConfig:input_type -> agent.v1.SetConfigRequest
+	129, // 143: agent.v1.AgentService.ListTools:input_type -> agent.v1.ListToolsRequest
+	131, // 144: agent.v1.AgentService.GetToolConfig:input_type -> agent.v1.GetToolConfigRequest
+	133, // 145: agent.v1.AgentService.SetToolConfig:input_type -> agent.v1.SetToolConfigRequest
+	135, // 146: agent.v1.AgentService.SetExtensionConfig:input_type -> agent.v1.SetExtensionConfigRequest
+	140, // 147: agent.v1.AgentService.ListExtensions:input_type -> agent.v1.ListExtensionsRequest
+	142, // 148: agent.v1.AgentService.GetExtensionConfig:input_type -> agent.v1.GetExtensionConfigRequest
+	144, // 149: agent.v1.AgentService.UploadFile:input_type -> agent.v1.UploadFileRequest
+	146, // 150: agent.v1.AgentService.IngestFile:input_type -> agent.v1.IngestFileRequest
+	148, // 151: agent.v1.AgentService.GetFile:input_type -> agent.v1.GetFileRequest
+	150, // 152: agent.v1.AgentService.GetFileMeta:input_type -> agent.v1.GetFileMetaRequest
+	148, // 153: agent.v1.AgentService.GetFileStream:input_type -> agent.v1.GetFileRequest
+	153, // 154: agent.v1.AgentService.GetAgentConfig:input_type -> agent.v1.GetAgentConfigRequest
+	162, // 155: agent.v1.AdminService.ListTenants:input_type -> agent.v1.ListTenantsRequest
+	164, // 156: agent.v1.AdminService.CreateTenant:input_type -> agent.v1.CreateTenantRequest
+	166, // 157: agent.v1.AdminService.UpdateTenant:input_type -> agent.v1.UpdateTenantRequest
+	168, // 158: agent.v1.AdminService.DeleteTenant:input_type -> agent.v1.DeleteTenantRequest
+	170, // 159: agent.v1.AdminService.IssueTenantToken:input_type -> agent.v1.IssueTenantTokenRequest
+	172, // 160: agent.v1.AdminService.ListTenantTokens:input_type -> agent.v1.ListTenantTokensRequest
+	174, // 161: agent.v1.AdminService.RevokeTenantToken:input_type -> agent.v1.RevokeTenantTokenRequest
+	178, // 162: agent.v1.AdminService.RotateTenantToken:input_type -> agent.v1.RotateTenantTokenRequest
+	176, // 163: agent.v1.AdminService.SetTenantTokenLabel:input_type -> agent.v1.SetTenantTokenLabelRequest
+	180, // 164: agent.v1.AdminService.Login:input_type -> agent.v1.LoginRequest
+	182, // 165: agent.v1.AdminService.CreateAdminToken:input_type -> agent.v1.CreateAdminTokenRequest
+	184, // 166: agent.v1.AdminService.ListAdminTokens:input_type -> agent.v1.ListAdminTokensRequest
+	186, // 167: agent.v1.AdminService.RevokeAdminToken:input_type -> agent.v1.RevokeAdminTokenRequest
+	156, // 168: agent.v1.AgentService.Health:output_type -> agent.v1.HealthResponse
+	158, // 169: agent.v1.AgentService.GetIdentity:output_type -> agent.v1.GetIdentityResponse
+	19,  // 170: agent.v1.AgentService.ListSessions:output_type -> agent.v1.ListSessionsResponse
+	21,  // 171: agent.v1.AgentService.CreateSession:output_type -> agent.v1.CreateSessionResponse
+	23,  // 172: agent.v1.AgentService.GetSession:output_type -> agent.v1.GetSessionResponse
+	25,  // 173: agent.v1.AgentService.DeleteSession:output_type -> agent.v1.DeleteSessionResponse
+	27,  // 174: agent.v1.AgentService.ListMessages:output_type -> agent.v1.ListMessagesResponse
+	12,  // 175: agent.v1.AgentService.Prompt:output_type -> agent.v1.PromptResponse
+	14,  // 176: agent.v1.AgentService.WatchSession:output_type -> agent.v1.WatchSessionResponse
+	16,  // 177: agent.v1.AgentService.WatchSessions:output_type -> agent.v1.WatchSessionsResponse
+	30,  // 178: agent.v1.AgentService.Fork:output_type -> agent.v1.ForkResponse
+	32,  // 179: agent.v1.AgentService.Rename:output_type -> agent.v1.RenameResponse
+	34,  // 180: agent.v1.AgentService.SetModel:output_type -> agent.v1.SetModelResponse
+	36,  // 181: agent.v1.AgentService.Undo:output_type -> agent.v1.UndoResponse
+	38,  // 182: agent.v1.AgentService.MarkRead:output_type -> agent.v1.MarkReadResponse
+	41,  // 183: agent.v1.AgentService.ListGrants:output_type -> agent.v1.ListGrantsResponse
+	44,  // 184: agent.v1.AgentService.ListPermissionStates:output_type -> agent.v1.ListPermissionStatesResponse
+	46,  // 185: agent.v1.AgentService.ListDenials:output_type -> agent.v1.ListDenialsResponse
+	49,  // 186: agent.v1.AgentService.CreateGrant:output_type -> agent.v1.CreateGrantResponse
+	51,  // 187: agent.v1.AgentService.RevokeGrant:output_type -> agent.v1.RevokeGrantResponse
+	54,  // 188: agent.v1.AgentService.ListPermissionDecls:output_type -> agent.v1.ListPermissionDeclsResponse
+	57,  // 189: agent.v1.AgentService.ListSubscriptions:output_type -> agent.v1.ListSubscriptionsResponse
+	59,  // 190: agent.v1.AgentService.SubscribeChannel:output_type -> agent.v1.SubscribeChannelResponse
+	61,  // 191: agent.v1.AgentService.UnsubscribeChannel:output_type -> agent.v1.UnsubscribeChannelResponse
+	65,  // 192: agent.v1.AgentService.ListChannels:output_type -> agent.v1.ListChannelsResponse
+	69,  // 193: agent.v1.AgentService.CreateGroup:output_type -> agent.v1.CreateGroupResponse
+	71,  // 194: agent.v1.AgentService.ListGroups:output_type -> agent.v1.ListGroupsResponse
+	73,  // 195: agent.v1.AgentService.GetGroup:output_type -> agent.v1.GetGroupResponse
+	75,  // 196: agent.v1.AgentService.UpdateGroup:output_type -> agent.v1.UpdateGroupResponse
+	77,  // 197: agent.v1.AgentService.DeleteGroup:output_type -> agent.v1.DeleteGroupResponse
+	81,  // 198: agent.v1.AgentService.AddGroupMember:output_type -> agent.v1.AddGroupMemberResponse
+	83,  // 199: agent.v1.AgentService.RemoveGroupMember:output_type -> agent.v1.RemoveGroupMemberResponse
+	80,  // 200: agent.v1.AgentService.SetGroupCoordinator:output_type -> agent.v1.SetGroupCoordinatorResponse
+	86,  // 201: agent.v1.AgentService.SendGroupMessage:output_type -> agent.v1.SendGroupMessageResponse
+	88,  // 202: agent.v1.AgentService.ListGroupMessages:output_type -> agent.v1.ListGroupMessagesResponse
+	90,  // 203: agent.v1.AgentService.WatchGroup:output_type -> agent.v1.WatchGroupResponse
+	92,  // 204: agent.v1.AgentService.State:output_type -> agent.v1.StateResponse
+	94,  // 205: agent.v1.AgentService.Mailbox:output_type -> agent.v1.MailboxResponse
+	96,  // 206: agent.v1.AgentService.UpdateSettings:output_type -> agent.v1.UpdateSettingsResponse
+	98,  // 207: agent.v1.AgentService.Interrupt:output_type -> agent.v1.InterruptResponse
+	100, // 208: agent.v1.AgentService.Compact:output_type -> agent.v1.CompactResponse
+	102, // 209: agent.v1.AgentService.ListProviders:output_type -> agent.v1.ListProvidersResponse
+	104, // 210: agent.v1.AgentService.ListProvidersCatalog:output_type -> agent.v1.ListProvidersCatalogResponse
+	107, // 211: agent.v1.AgentService.RegisterProvider:output_type -> agent.v1.RegisterProviderResponse
+	109, // 212: agent.v1.AgentService.DeleteProvider:output_type -> agent.v1.DeleteProviderResponse
+	111, // 213: agent.v1.AgentService.TestProvider:output_type -> agent.v1.TestProviderResponse
+	114, // 214: agent.v1.AgentService.ListModels:output_type -> agent.v1.ListModelsResponse
+	118, // 215: agent.v1.AgentService.ListPresets:output_type -> agent.v1.ListPresetsResponse
+	120, // 216: agent.v1.AgentService.UpsertPreset:output_type -> agent.v1.UpsertPresetResponse
+	122, // 217: agent.v1.AgentService.DeletePreset:output_type -> agent.v1.DeletePresetResponse
+	124, // 218: agent.v1.AgentService.PreviewPreset:output_type -> agent.v1.PreviewPresetResponse
+	126, // 219: agent.v1.AgentService.GetConfig:output_type -> agent.v1.GetConfigResponse
+	128, // 220: agent.v1.AgentService.SetConfig:output_type -> agent.v1.SetConfigResponse
+	130, // 221: agent.v1.AgentService.ListTools:output_type -> agent.v1.ListToolsResponse
+	132, // 222: agent.v1.AgentService.GetToolConfig:output_type -> agent.v1.GetToolConfigResponse
+	134, // 223: agent.v1.AgentService.SetToolConfig:output_type -> agent.v1.SetToolConfigResponse
+	136, // 224: agent.v1.AgentService.SetExtensionConfig:output_type -> agent.v1.SetExtensionConfigResponse
+	141, // 225: agent.v1.AgentService.ListExtensions:output_type -> agent.v1.ListExtensionsResponse
+	143, // 226: agent.v1.AgentService.GetExtensionConfig:output_type -> agent.v1.GetExtensionConfigResponse
+	145, // 227: agent.v1.AgentService.UploadFile:output_type -> agent.v1.UploadFileResponse
+	147, // 228: agent.v1.AgentService.IngestFile:output_type -> agent.v1.IngestFileResponse
+	149, // 229: agent.v1.AgentService.GetFile:output_type -> agent.v1.GetFileResponse
+	151, // 230: agent.v1.AgentService.GetFileMeta:output_type -> agent.v1.GetFileMetaResponse
+	152, // 231: agent.v1.AgentService.GetFileStream:output_type -> agent.v1.FileChunk
+	154, // 232: agent.v1.AgentService.GetAgentConfig:output_type -> agent.v1.GetAgentConfigResponse
+	163, // 233: agent.v1.AdminService.ListTenants:output_type -> agent.v1.ListTenantsResponse
+	165, // 234: agent.v1.AdminService.CreateTenant:output_type -> agent.v1.CreateTenantResponse
+	167, // 235: agent.v1.AdminService.UpdateTenant:output_type -> agent.v1.UpdateTenantResponse
+	169, // 236: agent.v1.AdminService.DeleteTenant:output_type -> agent.v1.DeleteTenantResponse
+	171, // 237: agent.v1.AdminService.IssueTenantToken:output_type -> agent.v1.IssueTenantTokenResponse
+	173, // 238: agent.v1.AdminService.ListTenantTokens:output_type -> agent.v1.ListTenantTokensResponse
+	175, // 239: agent.v1.AdminService.RevokeTenantToken:output_type -> agent.v1.RevokeTenantTokenResponse
+	179, // 240: agent.v1.AdminService.RotateTenantToken:output_type -> agent.v1.RotateTenantTokenResponse
+	177, // 241: agent.v1.AdminService.SetTenantTokenLabel:output_type -> agent.v1.SetTenantTokenLabelResponse
+	181, // 242: agent.v1.AdminService.Login:output_type -> agent.v1.LoginResponse
+	183, // 243: agent.v1.AdminService.CreateAdminToken:output_type -> agent.v1.CreateAdminTokenResponse
+	185, // 244: agent.v1.AdminService.ListAdminTokens:output_type -> agent.v1.ListAdminTokensResponse
+	187, // 245: agent.v1.AdminService.RevokeAdminToken:output_type -> agent.v1.RevokeAdminTokenResponse
+	168, // [168:246] is the sub-list for method output_type
+	90,  // [90:168] is the sub-list for method input_type
+	90,  // [90:90] is the sub-list for extension type_name
+	90,  // [90:90] is the sub-list for extension extendee
+	0,   // [0:90] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }

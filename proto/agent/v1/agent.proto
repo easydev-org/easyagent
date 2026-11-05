@@ -799,10 +799,21 @@ message GroupMessage {
   // Position within this group, starting at 1, strictly increasing. The resume cursor for WatchGroup.
   int64 seq = 6;
   string created_at = 7;
+  /**
+   * Files posted with the message — a picture, a voice note, a document.
+   *
+   * THE BYTES ARE NOT HERE. `code` names a blob the tenant already stores, the same reference a session
+   * message uses, so one upload is readable by every member instead of being copied per message.
+   */
+  repeated FileRef attachments = 8;
 }
 
 message SendGroupMessageRequest {
   string group = 1;
+  /**
+   * The message body. MAY BE EMPTY WHEN `attachments` IS NOT: a photo with no caption is a message, and
+   * requiring text for it would make the user invent words to send a picture.
+   */
   string text = 2;
   /**
    * The sending session's ID, or empty for a user.
@@ -817,6 +828,11 @@ message SendGroupMessageRequest {
   // future field cannot silently inherit the meaning.
   reserved 4;
   reserved "to";
+  /**
+   * Files to attach, already uploaded by the console. A code names a tenant blob, so posting it grants no
+   * access the uploader did not already have.
+   */
+  repeated FileRef attachments = 6;
 }
 message SendGroupMessageResponse {
   // The message as stored, including the sequence it was assigned.

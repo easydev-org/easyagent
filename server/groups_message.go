@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -29,14 +30,75 @@ import (
 
 func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
 	return &agentv1.GroupMessage{
-		Id:         m.ID,
-		Group:      m.Group,
-		Sender:     m.Sender,
-		SenderName: m.SenderName,
-		Body:       m.Body,
-		Seq:        m.Seq,
-		CreatedAt:  m.CreatedAt,
+		Id:          m.ID,
+		Group:       m.Group,
+		Sender:      m.Sender,
+		SenderName:  m.SenderName,
+		Body:        m.Body,
+		Seq:         m.Seq,
+		CreatedAt:   m.CreatedAt,
+		Attachments: groupAttachmentsToRefs(m.Attachments),
 	}
+}
+
+/**
+ * groupAttachment is one attachment as it is stored: a `file:<code>` reference and the label to show.
+ *
+ * THE SIZE IS NOT STORED HERE. It is a property of the blob, which the blob store already knows; a copy on the
+ * reference would go stale the moment the blob changed, and every reader would then believe a number no one
+ * can check. The API fills it from the blob when it can, and a missing size renders as "unknown" rather than
+ * as zero.
+ */
+type groupAttachment struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+	Size int32  `json:"size"`
+}
+
+// groupAttachmentsToRefs decodes the stored JSON into wire refs.
+//
+// AN UNPARSEABLE COLUMN YIELDS NO ATTACHMENTS rather than an error: the message text and its place in the
+// transcript are still correct and worth showing, and failing the whole page for one bad row would hide the
+// conversation around it.
+func groupAttachmentsToRefs(raw string) []*agentv1.FileRef {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var stored []groupAttachment
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		slog.Warn("group message attachments are unreadable", "err", err)
+		return nil
+	}
+	out := make([]*agentv1.FileRef, 0, len(stored))
+	for _, a := range stored {
+		out = append(out, &agentv1.FileRef{Code: a.Code, Name: a.Name, Size: a.Size})
+	}
+	return out
+}
+
+// groupAttachmentsFromRefs encodes wire refs for storage, dropping entries with no code.
+//
+// A REF WITH NO CODE NAMES NOTHING, so storing it would put a broken tile in a transcript that every member
+// reads. Dropping it is the only honest option: the alternative is a picture that never loads and no way to
+// tell whether the sender or the reader is at fault.
+func groupAttachmentsFromRefs(refs []*agentv1.FileRef) string {
+	stored := make([]groupAttachment, 0, len(refs))
+	for _, r := range refs {
+		if r.GetCode() == "" {
+			continue
+		}
+		stored = append(stored, groupAttachment{Code: r.GetCode(), Name: r.GetName(), Size: r.GetSize()})
+	}
+	if len(stored) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(stored)
+	if err != nil {
+		// Marshal of this shape cannot fail; if it ever does, the message still posts, just without files.
+		slog.Warn("could not encode group attachments", "err", err)
+		return ""
+	}
+	return string(b)
 }
 
 /**
@@ -55,14 +117,22 @@ func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
  * That rule lives here rather than in the channel layer because it needs the membership table, and the
  * channel layer deliberately knows nothing about groups.
  */
-func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, text string) (*agentv1.GroupMessage, []string, error) {
+func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, text string, attachments []*agentv1.FileRef) (*agentv1.GroupMessage, []string, error) {
 	name := strings.TrimSpace(group)
 	if name == "" {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
 	}
 	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "message text is required")
+	attachmentsJSON := groupAttachmentsFromRefs(attachments)
+	/**
+	 * A MESSAGE NEEDS SOMETHING IN IT, not necessarily words.
+	 *
+	 * A photo with no caption is a message; requiring text would make the sender invent words to attach a
+	 * picture or a voice note. Emptiness is refused only when BOTH are empty, because a message with neither
+	 * is not a message.
+	 */
+	if text == "" && attachmentsJSON == "" {
+		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "a message needs text or an attachment")
 	}
 	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
 		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -98,12 +168,13 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 	delivered := groupRecipient(sender, coordinator)
 
 	msg, err := s.db.AppendGroupMessage(store.GroupMessage{
-		ID:         newUUID(),
-		Tenant:     tenant,
-		Group:      name,
-		Sender:     sender,
-		SenderName: senderName,
-		Body:       text,
+		ID:          newUUID(),
+		Tenant:      tenant,
+		Group:       name,
+		Sender:      sender,
+		SenderName:  senderName,
+		Body:        text,
+		Attachments: attachmentsJSON,
 	}, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
@@ -156,6 +227,23 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 		"group": group, "from": sender, "from_name": msg.SenderName, "text": msg.Body,
 		"message_id": msg.ID, "seq": msg.Seq,
 	}
+	/**
+	 * THE ATTACHMENT REFERENCES RIDE WITH THE DELIVERY, not only in the transcript.
+	 *
+	 * A member woken by a message reads the prompt the distributor builds from this payload; leaving the files
+	 * out would tell it "the user posted: <caption>" and nothing about the picture, so it would answer the
+	 * caption and never look at what was sent. The references are only `file:<code>`, so this adds no bytes to
+	 * the channel.
+	 */
+	if refs := groupAttachmentsToRefs(msg.Attachments); len(refs) > 0 {
+		files := make([]map[string]any, 0, len(refs))
+		for _, r := range refs {
+			files = append(files, map[string]any{
+				"code": r.GetCode(), "name": r.GetName(), "size": r.GetSize(),
+			})
+		}
+		payload["attachments"] = files
+	}
 	for _, rcpt := range to {
 		if err := s.chanPub.PublishChannel(ctx, tenant, agentbus.GroupChannel,
 			agentbus.GroupMemberTopic(group, rcpt), payload, origin); err != nil {
@@ -168,7 +256,7 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 // SendGroupMessage posts a message into a group.
 func (s *Server) SendGroupMessage(ctx context.Context, req *agentv1.SendGroupMessageRequest) (*agentv1.SendGroupMessageResponse, error) {
 	msg, delivered, err := s.sendGroupMessage(ctx, tenantOf(ctx),
-		req.GetGroup(), req.GetSender(), req.GetText())
+		req.GetGroup(), req.GetSender(), req.GetText(), req.GetAttachments())
 	if err != nil {
 		return nil, err
 	}

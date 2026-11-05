@@ -306,3 +306,90 @@ func TestGroupPostRefusesANonMemberSender(t *testing.T) {
 		t.Errorf("a refused message was still stored: %+v", list.Messages)
 	}
 }
+
+/**
+ * A PICTURE WITH NO CAPTION IS A MESSAGE.
+ *
+ * An attachment is a `file:<code>` reference — the same shape a session message uses — so the text may be
+ * empty. Requiring words would make the sender invent a caption to send a photo, and the natural workaround
+ * ("here is a picture") adds nothing a reader needs.
+ *
+ * EMPTINESS IS REFUSED ONLY WHEN BOTH ARE EMPTY: a message with neither is not a message.
+ */
+func TestGroupMessageNeedsTextOrAnAttachment(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Neither: refused.
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g"}); err == nil {
+		t.Fatal("a message with no text and no attachment was accepted")
+	}
+
+	// Attachment only: accepted, and the reference survives the round trip.
+	sent, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group:       "g",
+		Attachments: []*agentv1.FileRef{{Code: "file-1", Name: "shot.png", Size: 1234}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.Message.Body != "" {
+		t.Errorf("body = %q, want empty", sent.Message.Body)
+	}
+	if len(sent.Message.Attachments) != 1 || sent.Message.Attachments[0].Code != "file-1" {
+		t.Fatalf("attachments = %+v", sent.Message.Attachments)
+	}
+	if sent.Message.Attachments[0].Name != "shot.png" || sent.Message.Attachments[0].Size != 1234 {
+		t.Errorf("the label or size was lost: %+v", sent.Message.Attachments[0])
+	}
+
+	// And it is readable later — the reference is part of the transcript, not just the acknowledgement.
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Messages) != 1 || len(list.Messages[0].Attachments) != 1 {
+		t.Fatalf("transcript = %+v", list.Messages)
+	}
+}
+
+/**
+ * A REFERENCE WITH NO CODE NAMES NOTHING, SO IT IS DROPPED.
+ *
+ * Storing it would put a tile in the transcript that every member sees and nothing can load — and the reader
+ * would have no way to tell whether the sender or the reader was at fault.
+ */
+func TestGroupMessageDropsAnEmptyAttachmentRef(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An empty ref alongside a real one: the real one survives, the empty one is gone.
+	sent, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group: "g", Text: "look",
+		Attachments: []*agentv1.FileRef{{Code: "", Name: "broken"}, {Code: "file-2", Name: "ok"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sent.Message.Attachments) != 1 || sent.Message.Attachments[0].Code != "file-2" {
+		t.Fatalf("attachments = %+v, want only file-2", sent.Message.Attachments)
+	}
+}

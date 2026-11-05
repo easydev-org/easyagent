@@ -211,6 +211,66 @@ func (d *Distributor) Distribute(ctx context.Context, msg bus.ChannelMessage) (i
 }
 
 /**
+ * payloadAttachment is one file reference carried by a group message.
+ *
+ * `Mime` IS NOT CARRIED BY THE WIRE, and it is not invented here either: it is left empty so a reader that
+ * needs it asks the blob store, which is the only place that knows. A guessed type is worse than a missing
+ * one — a voice note rendered as an unknown file is honest; one rendered as an image is broken.
+ */
+type payloadAttachment struct {
+	code string
+	name string
+	mime string
+}
+
+/**
+ * payloadAttachments reads the `attachments` array from a channel payload.
+ *
+ * A MISSHAPEN ENTRY IS SKIPPED, not reported: the message and its words are still worth delivering, and a
+ * single malformed reference must not cost the reader the whole prompt.
+ */
+func payloadAttachments(payload any) []payloadAttachment {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := m["attachments"].([]map[string]any)
+	if !ok {
+		// The payload may have crossed a JSON boundary, where every array element is `any`.
+		list, okAny := m["attachments"].([]any)
+		if !okAny {
+			return nil
+		}
+		out := make([]payloadAttachment, 0, len(list))
+		for _, item := range list {
+			if a, ok := item.(map[string]any); ok {
+				if att, ok := payloadAttachmentOf(a); ok {
+					out = append(out, att)
+				}
+			}
+		}
+		return out
+	}
+	out := make([]payloadAttachment, 0, len(raw))
+	for _, a := range raw {
+		if att, ok := payloadAttachmentOf(a); ok {
+			out = append(out, att)
+		}
+	}
+	return out
+}
+
+func payloadAttachmentOf(a map[string]any) (payloadAttachment, bool) {
+	code, _ := a["code"].(string)
+	if code == "" {
+		return payloadAttachment{}, false
+	}
+	name, _ := a["name"].(string)
+	mime, _ := a["mime"].(string)
+	return payloadAttachment{code: code, name: name, mime: mime}, true
+}
+
+/**
  * payloadString reads one string field from a channel payload, or "" when it is absent.
  *
  * A channel payload is `any` on the wire; a group message carries `from`, `from_name` and `group` as strings,
@@ -254,6 +314,7 @@ func channelEventText(msg bus.ChannelMessage) string {
 		from, _ := msg.Payload.(map[string]any)["from"].(string)
 		fromName, _ := msg.Payload.(map[string]any)["from_name"].(string)
 		text, _ := msg.Payload.(map[string]any)["text"].(string)
+		attachments := payloadAttachments(msg.Payload)
 
 		/**
 		 * NAME THE SENDER, BY THE NAME A READER RECOGNISES.
@@ -275,7 +336,30 @@ func channelEventText(msg bus.ChannelMessage) string {
 			fmt.Fprintf(&b, "Session %s posted to group %q:", from, group)
 		}
 		b.WriteString("\n\n")
-		b.WriteString(text)
+		if strings.TrimSpace(text) != "" {
+			b.WriteString(text)
+		} else {
+			// A PHOTO WITH NO CAPTION IS STILL A MESSAGE. Saying so is better than an empty body followed by a
+			// list of files, which reads as "the text is missing" rather than "there was no text".
+			b.WriteString("(no text — see the attachments)")
+		}
+		/**
+		 * THE FILES ARE NAMED, WITH THEIR CODES.
+		 *
+		 * A member woken by a picture needs to know one was sent and which blob to read; the code is the only
+		 * thing that names it. A caption-only prompt would have it answer the words and never look at what
+		 * came with them.
+		 */
+		if len(attachments) > 0 {
+			b.WriteString("\n\nAttachments:")
+			for _, a := range attachments {
+				label := a.name
+				if label == "" {
+					label = "(unnamed)"
+				}
+				fmt.Fprintf(&b, "\n- %s [file:%s] %s", label, a.code, a.mime)
+			}
+		}
 
 		/**
 		 * THE REPLY INSTRUCTION RIDES WITH THE MESSAGE, NOT IN THE TOOL DESCRIPTION.

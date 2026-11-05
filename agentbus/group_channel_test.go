@@ -234,3 +234,67 @@ func TestEveryGroupEventSaysHowToAnswer(t *testing.T) {
 		}
 	}
 }
+
+/**
+ * A MEMBER WOKEN BY A PICTURE IS TOLD THERE IS ONE.
+ *
+ * The prompt is built from the channel payload, so a caption-only rendering would have the model answer the
+ * words and never look at what came with them. The `file:<code>` reference is the only thing that names the
+ * blob, so it travels with the name.
+ *
+ * A CAPTION IS OPTIONAL: a picture with no words is a message, and the prompt says so rather than leaving an
+ * empty body that reads as "the text is missing".
+ */
+func TestGroupEventTextNamesAttachments(t *testing.T) {
+	got := channelEventText(bus.ChannelMessage{
+		Channel: GroupChannel,
+		Topic:   GroupUserTopic("release"),
+		Payload: map[string]any{
+			"group": "release",
+			"text":  "",
+			"attachments": []map[string]any{
+				{"code": "abc123", "name": "screenshot.png", "size": 4096},
+			},
+		},
+	})
+
+	if !strings.Contains(got, "screenshot.png") {
+		t.Errorf("the attachment's name is missing:\n%s", got)
+	}
+	if !strings.Contains(got, "file:abc123") {
+		t.Errorf("the blob reference is missing, so nothing can read it:\n%s", got)
+	}
+	if strings.Contains(got, "no text — see the attachments") == false {
+		t.Errorf("an empty caption should be stated rather than left blank:\n%s", got)
+	}
+}
+
+/**
+ * A MALFORMED REFERENCE MUST NOT COST THE READER THE WHOLE PROMPT.
+ *
+ * The words are still worth delivering; dropping the entire event because one entry has no `code` would turn a
+ * bad attachment into a lost message.
+ */
+func TestGroupEventTextSkipsABadAttachment(t *testing.T) {
+	got := channelEventText(bus.ChannelMessage{
+		Channel: GroupChannel,
+		Topic:   GroupUserTopic("release"),
+		Payload: map[string]any{
+			"group": "release",
+			"text":  "look at this",
+			"attachments": []any{
+				map[string]any{"name": "no-code.png"}, // unusable: names no blob
+				map[string]any{"code": "good1", "name": "real.png"},
+			},
+		},
+	})
+	if !strings.Contains(got, "look at this") {
+		t.Errorf("the body was lost:\n%s", got)
+	}
+	if !strings.Contains(got, "file:good1") {
+		t.Errorf("the usable reference was lost:\n%s", got)
+	}
+	if strings.Contains(got, "no-code.png") {
+		t.Errorf("a reference with no code was rendered:\n%s", got)
+	}
+}

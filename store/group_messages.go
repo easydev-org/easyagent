@@ -41,6 +41,22 @@ type GroupMessage struct {
 	Body string `gorm:"column:body;type:text"`
 
 	/**
+	 * Attachments is the message's files, as a JSON array of `{code,name,size}`.
+	 *
+	 * AN ATTACHMENT IS A `file:<code>` REFERENCE, nothing more: the bytes live once in the tenant's blob
+	 * store and the message carries the reference, exactly as a session message's `file` part does. Copying
+	 * bytes per message would duplicate a recording for every member who reads it.
+	 *
+	 * A JSON COLUMN RATHER THAN A SECOND TABLE, because a reference belongs to exactly one message and is
+	 * never queried on its own — a join table would add a migration, a foreign key and a load step to answer
+	 * a question no caller asks ("which messages mention this blob").
+	 *
+	 * EMPTY STRING MEANS NO ATTACHMENTS, which is also what every row written before this column existed
+	 * holds — so no backfill is needed and an old message reads exactly as it did.
+	 */
+	Attachments string `gorm:"column:attachments;type:text"`
+
+	/**
 	 * Seq orders messages within one group, starting at 1.
 	 *
 	 * ASSIGNED INSIDE THE APPEND TRANSACTION, so two concurrent posts cannot share a number. It is the
