@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -65,15 +66,45 @@ func (d *DB) G() *gorm.DB { return d.g }
 // Backend reports the dialect.
 func (d *DB) Backend() Backend { return d.backend }
 
-// Migrate creates the INITIAL schema (create-if-absent). It is not a migration
-// path: there is no legacy schema to upgrade.
+/**
+ * Migrate creates the INITIAL schema (create-if-absent). It is not a migration
+ * path: there is no legacy schema to upgrade.
+ *
+ * IT IS SAFE TO RUN ON SEVERAL REPLICAS AT ONCE, which is not what it used to be. `AutoMigrate` is
+ * check-then-create: two processes starting together both see "table does not exist" and both issue CREATE
+ * TABLE, so the loser gets `table sessions already exists` and EXITS. A two-replica deployment therefore came
+ * up as one replica, and the failure looked like a configuration problem rather than a race.
+ *
+ * THE RETRY IS THE FIX, and it is honest about why: the error says another replica created exactly the object
+ * this one was about to create. Waiting for it to finish and trying again converges — the second attempt sees
+ * the object and moves on — while a lock would need a different mechanism per backend (advisory locks on
+ * Postgres, GET_LOCK on MySQL, flock on the SQLite file) and would fail in new ways when one of them is
+ * unavailable.
+ *
+ * THE ATTEMPTS ARE BOUNDED AND SPACED. A schema that genuinely cannot be created (a permissions problem, a
+ * conflicting definition) still fails, and it fails with the last real error rather than with a timeout.
+ */
 func (d *DB) Migrate() error {
-	if err := d.g.AutoMigrate(
-		&Session{}, &Message{}, &Part{},
-		&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
-		&BundledTodo{}, &AdminToken{}, &SessionToken{},
-		&SessionGrant{}, &Group{}, &GroupMember{}, &GroupMessage{},
-	); err != nil {
+	const attempts = 10
+	var err error
+	for i := 0; i < attempts; i++ {
+		err = d.g.AutoMigrate(
+			&Session{}, &Message{}, &Part{},
+			&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
+			&BundledTodo{}, &AdminToken{}, &SessionToken{},
+			&SessionGrant{}, &Group{}, &GroupMember{}, &GroupMessage{},
+		)
+		if err == nil {
+			break
+		}
+		if !isConcurrentSchemaChange(err) {
+			return err
+		}
+		// A LOST RACE, NOT A BROKEN SCHEMA. Space the retries so the winner has time to commit; the delay grows
+		// because the loser is waiting on a DDL statement it cannot see.
+		time.Sleep(time.Duration(50*(i+1)) * time.Millisecond)
+	}
+	if err != nil {
 		return err
 	}
 	// Backfill: every pre-existing tenant becomes its own subtree root
@@ -83,6 +114,34 @@ func (d *DB) Migrate() error {
 		return err
 	}
 	return d.backfillMessageSeq()
+}
+
+/**
+ * isConcurrentSchemaChange reports whether an AutoMigrate error means "another replica got there first".
+ *
+ * THE THREE PHRASINGS ARE THE THREE BACKENDS, and they are matched rather than parsed because the drivers do not
+ * expose typed errors for DDL races: SQLite says "already exists", Postgres says "already exists" with a
+ * different prefix, and MySQL says "Duplicate column name" or "already exists". Matching the common tail keeps
+ * this from depending on which database a deployment happens to use.
+ *
+ * EVERYTHING ELSE IS A REAL FAILURE and is returned immediately: a malformed definition or a missing privilege
+ * must not be retried, because ten attempts will not change the answer.
+ */
+func isConcurrentSchemaChange(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"already exists",
+		"duplicate column name",
+		"duplicate key name",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 /**

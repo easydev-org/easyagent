@@ -112,3 +112,89 @@ jobs:
           done
           echo "agent never became healthy; its output:"; cat agent.log
           kill $pid 2>/dev/null || true; exit 1
+
+  # TWO REPLICAS, ONE BROKER, ONE DATABASE.
+  #
+  # THE UNIT TESTS CANNOT SEE THIS CLASS OF BUG. Every replica keeps its own in-process subscriber map, so a
+  # list change announced on replica A used to reach only clients connected to A — the preview and the unread
+  # count simply stayed stale on B, with no error anywhere. That defect shipped and survived several releases
+  # because a single-process test suite is, by construction, blind to it.
+  #
+  # This job runs the real binary twice against one broker and one store, then asserts the properties a
+  # deployment depends on: a row written on one replica is visible on the other, a change announced on one
+  # reaches a watcher connected to the other, and a group message posted on one is readable on the other.
+  multireplica:
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: start nats
+        run: |
+          go install github.com/nats-io/nats-server/v2@latest
+          "$(go env GOPATH)/bin/nats-server" -js -p 4222 &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/4222) 2>/dev/null; then echo "nats up"; exit 0; fi
+            sleep 1
+          done
+          echo "nats did not start"; exit 1
+
+      # THE STORE IS SHARED, so it must be a FILE — and SQLite serializes writers to one connection, which is
+      # what makes two processes on one file safe here. This is deliberately the weakest shared store that can
+      # work: the point is the agent's own cross-replica behaviour, not the database's.
+      #
+      # THE REPLICA ID MUST DIFFER, because it names this instance in the lease and heartbeat keys. Two pods
+      # answering to the same id would both believe they own a session, and the turn would run twice.
+      - name: boot two replicas against one broker and one store
+        run: |
+          go build -o /tmp/easyagent ./cmd/easyagent
+          for i in 1 2; do
+            port=$((18080 + (i-1)*10))
+            hport=$((18081 + (i-1)*10))
+            cat >agent-$i.yaml <<YAML
+          server:
+            addr: "127.0.0.1:$port"
+            health_addr: "127.0.0.1:$hport"
+          database:
+            backend: sqlite
+            dsn: "./agent-multi.db"
+          nats:
+            url: "nats://127.0.0.1:4222"
+            replica_id: "replica-$i"
+          auth:
+            mode: "none"
+          YAML
+            /tmp/easyagent -config agent-$i.yaml >agent-$i.log 2>&1 &
+          done
+          for i in 1 2; do
+            hport=$((18081 + (i-1)*10))
+            for n in $(seq 1 60); do
+              if curl -fsS "http://127.0.0.1:$hport/healthz" >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            if ! curl -fsS "http://127.0.0.1:$hport/healthz" >/dev/null 2>&1; then
+              echo "::error::replica $i never became healthy"
+              cat "agent-$i.log"
+              exit 1
+            fi
+          done
+          echo "both replicas healthy"
+
+      # THE ASSERTIONS LIVE IN A PROGRAM, NOT IN SHELL. Each one is a property with a name, and a failure has
+      # to say WHICH property broke — "curl returned 500" does not tell the next reader that the list stopped
+      # crossing replicas.
+      - name: assert cross-replica behaviour
+        env:
+          REPLICA_A_ADDR: "http://127.0.0.1:18080"
+          REPLICA_B_ADDR: "http://127.0.0.1:18090"
+        run: go run ./cmd/e2e-multireplica
+
+      - name: replica logs on failure
+        if: failure()
+        run: |
+          echo "--- replica 1 ---"; cat agent-1.log || true
+          echo "--- replica 2 ---"; cat agent-2.log || true
