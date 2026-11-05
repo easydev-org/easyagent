@@ -890,8 +890,12 @@ message UpdateSettingsRequest {
   string model = 2;
   string preset = 3;
   string locale = 4;
-  // Selected reasoning variant id (empty clears it).
-  string variant = 5;
+  /**
+   * Selected reasoning variant id. `optional` so "clear it" is expressible: absent = leave it alone,
+   * present-but-empty = go back to the default. Without that, choosing "default" after choosing "high" was a
+   * change the server could not receive — the field simply did not travel.
+   */
+  optional string variant = 5;
   // `optional` IS THE POINT: proto3 cannot tell an absent string from an empty one, and these two
   // need both meanings. Absent = leave the value alone; present-but-empty = CLEAR it, which is how a
   // session goes back to the derived identicon or to saying nothing about itself.

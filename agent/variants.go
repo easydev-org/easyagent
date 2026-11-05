@@ -1,14 +1,16 @@
 package agent
 
-// Reasoning variants: a selectable reasoning configuration for a model (the
-// effort levels the AI SDK v4 call options accept). A session carries the
-// selected variant id; at turn time it is merged into the request body as the
-// `reasoning` field. No variant selected ⇒ nothing is sent (provider defaults).
+// Reasoning variants: a selectable reasoning configuration for a model.
 //
-// The v4 call options define exactly these levels, and the ai-multimodal-gateway
-// config uses the same field (`defaults: { reasoning: medium }`), so the mapping
-// is direct.
-var ReasoningLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+// A session carries the selected variant id; at turn time it is merged into the request body as the
+// `reasoning` field. No variant selected ⇒ nothing is sent, and that IS "default": it is the absence of a
+// choice, not a fourth level, which is why it is not in this list.
+//
+// THREE LEVELS, NOT SEVEN. The wire format accepts more (none/minimal/xhigh/max), but a picker offering them
+// asks the user to choose between settings whose difference no one can predict and whose effect they cannot
+// check — and every extra row makes the four that matter harder to find. The three below span the range a
+// person actually reasons about: cheap, balanced, thorough.
+var ReasoningLevels = []string{"low", "medium", "high"}
 
 // ModelVariant is a selectable variant as surfaced over the API.
 type ModelVariant struct {

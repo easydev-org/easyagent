@@ -6167,8 +6167,11 @@ type UpdateSettingsRequest struct {
 	Model  string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
 	Preset string                 `protobuf:"bytes,3,opt,name=preset,proto3" json:"preset,omitempty"`
 	Locale string                 `protobuf:"bytes,4,opt,name=locale,proto3" json:"locale,omitempty"`
-	// Selected reasoning variant id (empty clears it).
-	Variant string `protobuf:"bytes,5,opt,name=variant,proto3" json:"variant,omitempty"`
+	//*
+	// Selected reasoning variant id. `optional` so "clear it" is expressible: absent = leave it alone,
+	// present-but-empty = go back to the default. Without that, choosing "default" after choosing "high" was a
+	// change the server could not receive — the field simply did not travel.
+	Variant *string `protobuf:"bytes,5,opt,name=variant,proto3,oneof" json:"variant,omitempty"`
 	// `optional` IS THE POINT: proto3 cannot tell an absent string from an empty one, and these two
 	// need both meanings. Absent = leave the value alone; present-but-empty = CLEAR it, which is how a
 	// session goes back to the derived identicon or to saying nothing about itself.
@@ -6245,8 +6248,8 @@ func (x *UpdateSettingsRequest) GetLocale() string {
 }
 
 func (x *UpdateSettingsRequest) GetVariant() string {
-	if x != nil {
-		return x.Variant
+	if x != nil && x.Variant != nil {
+		return *x.Variant
 	}
 	return ""
 }
@@ -11564,17 +11567,19 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x0fMailboxResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x120\n" +
 	"\amailbox\x18\x02 \x03(\v2\x16.agent.v1.MailboxEntryR\amailbox\x12\x19\n" +
-	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\x84\x02\n" +
+	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\x95\x02\n" +
 	"\x15UpdateSettingsRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x16\n" +
 	"\x06preset\x18\x03 \x01(\tR\x06preset\x12\x16\n" +
-	"\x06locale\x18\x04 \x01(\tR\x06locale\x12\x18\n" +
-	"\avariant\x18\x05 \x01(\tR\avariant\x12$\n" +
-	"\vavatar_file\x18\x06 \x01(\tH\x00R\n" +
+	"\x06locale\x18\x04 \x01(\tR\x06locale\x12\x1d\n" +
+	"\avariant\x18\x05 \x01(\tH\x00R\avariant\x88\x01\x01\x12$\n" +
+	"\vavatar_file\x18\x06 \x01(\tH\x01R\n" +
 	"avatarFile\x88\x01\x01\x12\x19\n" +
-	"\x05intro\x18\a \x01(\tH\x01R\x05intro\x88\x01\x01\x12\x17\n" +
-	"\x04name\x18\b \x01(\tH\x02R\x04name\x88\x01\x01B\x0e\n" +
+	"\x05intro\x18\a \x01(\tH\x02R\x05intro\x88\x01\x01\x12\x17\n" +
+	"\x04name\x18\b \x01(\tH\x03R\x04name\x88\x01\x01B\n" +
+	"\n" +
+	"\b_variantB\x0e\n" +
 	"\f_avatar_fileB\b\n" +
 	"\x06_introB\a\n" +
 	"\x05_name\"E\n" +

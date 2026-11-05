@@ -211,8 +211,10 @@ func (s *Server) UpdateSettings(ctx context.Context, req *agentv1.UpdateSettings
 	if req.Locale != "" {
 		patch["locale"] = agent.NormalizeLocale(req.Locale)
 	}
-	if req.Variant != "" {
-		patch["variant"] = req.Variant
+	// THE SAME ABSENT/EMPTY RULE AS THE FIELDS BELOW: `variant` is optional because '' is "use the model's
+	// default", which is the only way back from "high" — and a non-optional field could never say it.
+	if req.Variant != nil {
+		patch["variant"] = req.GetVariant()
 	}
 	// ABSENT MEANS "LEAVE IT", PRESENT-BUT-EMPTY MEANS "CLEAR IT". The request fields are `optional`
 	// precisely so both are expressible: clearing is how a session goes back to the derived identicon,
