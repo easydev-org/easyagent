@@ -495,7 +495,31 @@ func (r *Runtime) foldUserMessage(tenant, session string, it mailbox.Message) er
 	if err := r.deps.DB.InsertPart(tenant, id, "text", 0, map[string]any{"text": p.Text}); err != nil {
 		return err
 	}
-	seq := 0
+	/**
+	 * A CHANNEL EVENT KEEPS ITS STRUCTURE BESIDE THE SENTENCE WRITTEN FOR THE MODEL.
+	 *
+	 * `p.Text` for a group message is a PROMPT RENDERING — "The user posted to group "release": … [Posted in
+	 * group …]" — written so the model knows who spoke and what is expected of it. Storing only that made the
+	 * console render it as the reader's own words: the envelope, the routing notice and all, in a bubble that
+	 * looked like something they had typed.
+	 *
+	 * The event itself is an object, and it is stored as one. The console draws the message from this part; the
+	 * model keeps reading the rendered text, because that is the form it was written for. Two readers, two
+	 * shapes, one record.
+	 */
+	if p.Channel != "" {
+		if err := r.deps.DB.InsertPart(tenant, id, "channel", 1, map[string]any{
+			"channel": p.Channel,
+			"topic":   p.Topic,
+			"origin":  p.Origin,
+			"data":    p.Data,
+		}); err != nil {
+			return err
+		}
+	}
+	// FILES FOLLOW THE CHANNEL PART, so a reader that only understands `text` and `file` still sees them in
+	// order and the event part never lands between a message and its attachments.
+	seq := 1
 	for _, a := range p.FileRefs {
 		seq++
 		_ = r.deps.DB.InsertPart(tenant, id, "file", seq, map[string]any{
