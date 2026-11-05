@@ -694,6 +694,16 @@ message Group {
    * before reaching the member list, not a document that has to be kept current.
    */
   string intro = 6;
+  /**
+   * The newest message, for the list row — the same preview a session row shows.
+   *
+   * EMPTY MEANS "NOTHING WAS SAID, or the last few messages carried only files". A LIST ROW WITHOUT A PREVIEW
+   * was the one way a group looked less informative than a session: it said how many people were in it and
+   * never what they were talking about.
+   */
+  string last_message_preview = 7;
+  // When that message was sent (RFC 3339). Empty when the group is empty.
+  string last_message_at = 8;
 }
 
 // GroupMember is one session's membership.

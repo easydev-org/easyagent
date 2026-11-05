@@ -4512,7 +4512,16 @@ type Group struct {
 	//
 	// EMPTY MEANS "SAY NOTHING". It is one line on purpose: a group's purpose is something a member reads
 	// before reaching the member list, not a document that has to be kept current.
-	Intro         string `protobuf:"bytes,6,opt,name=intro,proto3" json:"intro,omitempty"`
+	Intro string `protobuf:"bytes,6,opt,name=intro,proto3" json:"intro,omitempty"`
+	//*
+	// The newest message, for the list row — the same preview a session row shows.
+	//
+	// EMPTY MEANS "NOTHING WAS SAID, or the last few messages carried only files". A LIST ROW WITHOUT A PREVIEW
+	// was the one way a group looked less informative than a session: it said how many people were in it and
+	// never what they were talking about.
+	LastMessagePreview string `protobuf:"bytes,7,opt,name=last_message_preview,json=lastMessagePreview,proto3" json:"last_message_preview,omitempty"`
+	// When that message was sent (RFC 3339). Empty when the group is empty.
+	LastMessageAt string `protobuf:"bytes,8,opt,name=last_message_at,json=lastMessageAt,proto3" json:"last_message_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4585,6 +4594,20 @@ func (x *Group) GetMemberCount() int32 {
 func (x *Group) GetIntro() string {
 	if x != nil {
 		return x.Intro
+	}
+	return ""
+}
+
+func (x *Group) GetLastMessagePreview() string {
+	if x != nil {
+		return x.LastMessagePreview
+	}
+	return ""
+}
+
+func (x *Group) GetLastMessageAt() string {
+	if x != nil {
+		return x.LastMessageAt
 	}
 	return ""
 }
@@ -11535,7 +11558,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x15\n" +
 	"\x13ListChannelsRequest\"I\n" +
 	"\x14ListChannelsResponse\x121\n" +
-	"\bchannels\x18\x01 \x03(\v2\x15.agent.v1.ChannelDeclR\bchannels\"\xb3\x01\n" +
+	"\bchannels\x18\x01 \x03(\v2\x15.agent.v1.ChannelDeclR\bchannels\"\x8d\x02\n" +
 	"\x05Group\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vavatar_file\x18\x02 \x01(\tR\n" +
@@ -11545,7 +11568,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x04 \x01(\tR\tcreatedAt\x12!\n" +
 	"\fmember_count\x18\x05 \x01(\x05R\vmemberCount\x12\x14\n" +
-	"\x05intro\x18\x06 \x01(\tR\x05intro\"u\n" +
+	"\x05intro\x18\x06 \x01(\tR\x05intro\x120\n" +
+	"\x14last_message_preview\x18\a \x01(\tR\x12lastMessagePreview\x12&\n" +
+	"\x0flast_message_at\x18\b \x01(\tR\rlastMessageAt\"u\n" +
 	"\vGroupMember\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\x12\x1b\n" +

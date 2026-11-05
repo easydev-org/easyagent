@@ -639,3 +639,65 @@ func TestGroupIntroRoundTrips(t *testing.T) {
 		t.Errorf("an intro-only save changed the picture to %q", got.Group.AvatarFile)
 	}
 }
+
+/**
+ * A GROUP ROW SAYS WHAT WAS LAST SAID.
+ *
+ * A session row has always shown the newest message's words and when; a group row showed a member count and
+ * nothing else, so scanning the list told a reader how many people were in a group but never what they were
+ * talking about — the one piece of information a list is for.
+ *
+ * THE NEWEST MESSAGE THAT HAS WORDS WINS. A group whose most recent post is a picture would otherwise render an
+ * empty preview, which reads as "nothing was said" rather than "something was sent".
+ */
+func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, CreatedBy: "user",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An empty group has no preview, and that must not be an error.
+	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Groups) != 1 || list.Groups[0].LastMessagePreview != "" {
+		t.Fatalf("empty group = %+v", list.Groups)
+	}
+
+	// A message with words becomes the preview, with its timestamp.
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group: "g", Text: "please check main",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list, err = c.ListGroups(ctx, &agentv1.ListGroupsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := list.Groups[0]
+	if g.LastMessagePreview != "please check main" {
+		t.Errorf("preview = %q, want the newest message", g.LastMessagePreview)
+	}
+	if g.LastMessageAt == "" {
+		t.Error("the preview has no timestamp")
+	}
+
+	// AN ATTACHMENT-ONLY MESSAGE DOES NOT BLANK THE PREVIEW: the words before it still say what is going on.
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		Group: "g", Attachments: []*agentv1.FileRef{{Code: "x"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = c.ListGroups(ctx, &agentv1.ListGroupsRequest{})
+	if got := list.Groups[0].LastMessagePreview; got != "please check main" {
+		t.Errorf("preview = %q after an attachment-only post, want the words before it", got)
+	}
+}

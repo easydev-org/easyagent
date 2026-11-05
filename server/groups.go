@@ -68,6 +68,25 @@ func groupToMsg(g store.Group, memberCount int) *agentv1.Group {
 	}
 }
 
+/**
+ * groupToRow is groupToMsg plus the list-row preview.
+ *
+ * SEPARATE FROM groupToMsg because a preview costs a query per group, and only a LIST needs one: the group's own
+ * page (GetGroup, CreateGroup, UpdateGroup) shows the card, not a row, and paying for the preview there would be
+ * a query nobody reads.
+ */
+func (s *Server) groupToRow(tenant string, g store.Group, memberCount int) *agentv1.Group {
+	out := groupToMsg(g, memberCount)
+	preview, at, err := s.db.GroupTranscriptPreview(tenant, g.Name)
+	if err == nil {
+		out.LastMessagePreview = preview
+		out.LastMessageAt = at
+	}
+	// A FAILED PREVIEW IS DECORATION, like a failed member count: the row still names the group and says how many
+	// people are in it, which is worth more than an error instead of a list.
+	return out
+}
+
 func memberToMsg(m store.GroupMember) *agentv1.GroupMember {
 	role := m.Role
 	if role == "" {
@@ -221,7 +240,7 @@ func (s *Server) ListGroups(ctx context.Context, req *agentv1.ListGroupsRequest)
 
 	out := make([]*agentv1.Group, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, groupToMsg(g, counts[g.Name]))
+		out = append(out, s.groupToRow(tenant, g, counts[g.Name]))
 	}
 	return &agentv1.ListGroupsResponse{Groups: out}, nil
 }

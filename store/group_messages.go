@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -110,6 +111,38 @@ func (d *DB) ListGroupMessages(tenant, group string, afterSeq int64, limit int) 
 	err := d.g.Where("tenant = ? AND \"group\" = ? AND seq > ?", tenant, group, afterSeq).
 		Order("seq").Limit(limit).Find(&out).Error
 	return out, err
+}
+
+/**
+ * GroupTranscriptPreview answers the two things a list row shows: the newest message's words and when.
+ *
+ * A GROUP ROW HAD NO PREVIEW because a group's messages are not a session's chain, so the projection a session row
+ * uses (`last_message_preview`) never applied. The row showed a member count and nothing else, while a session
+ * row beside it showed what was last said — the one piece of information a reader scans a list for.
+ *
+ * ONE ROW, not a page: the list is rendered for every group at once, and reading a hundred messages to show the
+ * last one would cost a hundred times what it answers.
+ *
+ * PREFERS A MESSAGE WITH WORDS. A group whose last message is a picture would otherwise render an empty
+ * preview, which reads as "nothing was said" rather than "something was sent that has no words".
+ */
+func (d *DB) GroupTranscriptPreview(tenant, group string) (text string, at string, err error) {
+	var rows []GroupMessage
+	if e := d.g.Where("tenant = ? AND \"group\" = ?", tenant, group).
+		Order("seq DESC").Limit(5).Find(&rows).Error; e != nil {
+		return "", "", e
+	}
+	for _, m := range rows {
+		if strings.TrimSpace(m.Body) != "" {
+			return m.Body, m.CreatedAt, nil
+		}
+	}
+	if len(rows) > 0 {
+		// Every recent message is attachment-only: report the newest anyway, with an empty body. The caller
+		// decides how to word "something was sent" — that is a presentation question, not a storage one.
+		return "", rows[0].CreatedAt, nil
+	}
+	return "", "", nil
 }
 
 // LatestGroupSeq returns the highest sequence in a group (0 when empty).
