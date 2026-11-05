@@ -20,8 +20,9 @@ import (
  */
 type groupStub struct {
 	*stubDeps
-	groups  map[string][]GroupRow
-	members map[string][]string
+	groups      map[string][]GroupRow
+	members     map[string][]string
+	coordinator map[string]string
 }
 
 func (g *groupStub) GroupsOfSession(_, session string) ([]GroupRow, error) {
@@ -36,6 +37,9 @@ func (g *groupStub) IsGroupMember(_, group, session string) bool {
 	return false
 }
 func (g *groupStub) GroupMembers(_, group string) []string { return g.members[group] }
+func (g *groupStub) GroupCoordinator(_, group string) (string, error) {
+	return g.coordinator[group], nil
+}
 
 func newGroupExt(t *testing.T, g *groupStub) *Extension {
 	t.Helper()
@@ -155,5 +159,49 @@ func TestOnlyGroupCreateMutatesGroups(t *testing.T) {
 			"group-update", "group-delete", "group-rename":
 			t.Errorf("handler %q exists; a session may create its own group but never edit one", name)
 		}
+	}
+}
+
+/**
+ * THE MEMBER LIST SAYS WHO COORDINATES.
+ *
+ * A bare list of ids answers "who is here" but not "who is answerable for this group", and a member needs
+ * both. A live coordinator reported exactly this gap: it could see the members, could not tell which one it
+ * was, and put that uncertainty in its answer to the group. The role is a routing fact — the coordinator is
+ * where members' reports arrive — so the routing tool states it.
+ *
+ * THE ROLE AND "THIS SESSION" ARE SEPARATE FACTS: the reader may be the coordinator, or an ordinary member
+ * reading its own row, and a list that conflated them would answer only one of the two questions.
+ */
+func TestGroupMembersNamesTheCoordinator(t *testing.T) {
+	stub := &groupStub{
+		stubDeps:    &stubDeps{},
+		members:     map[string][]string{"incident": {"alice", "bob", "carol"}},
+		coordinator: map[string]string{"incident": "alice"},
+	}
+	e := newGroupExt(t, stub)
+
+	// A plain member reads the list: alice is named as the coordinator, bob as this session.
+	out, err := e.groupMembers(context.Background(), "t", "bob", map[string]any{"group": "incident"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "alice (coordinator)") {
+		t.Errorf("the coordinator is not marked:\n%s", out.Content)
+	}
+	if !strings.Contains(out.Content, "bob (this session)") {
+		t.Errorf("the asker is not marked:\n%s", out.Content)
+	}
+	if strings.Contains(out.Content, "carol (") {
+		t.Errorf("an ordinary member was given a note:\n%s", out.Content)
+	}
+
+	// The coordinator reads the same list: both facts land on one row, and neither is dropped.
+	out, err = e.groupMembers(context.Background(), "t", "alice", map[string]any{"group": "incident"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "alice (coordinator, this session)") {
+		t.Errorf("a coordinator should see both notes on its own row:\n%s", out.Content)
 	}
 }

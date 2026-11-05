@@ -81,6 +81,22 @@ func (e *Extension) groupMembers(_ context.Context, tenant, session string, args
 		return agent.ToolOutcome{Content: fmt.Sprintf("Group %s has no members.", name)}, nil
 	}
 
+	/**
+	 * THE LIST SAYS WHO COORDINATES.
+	 *
+	 * A bare list of ids answers "who is here" but not "who is answerable for this group", and those are the two
+	 * questions a member actually has. A live coordinator reported exactly this gap: it could see the members,
+	 * could not tell which one it was, and said so in its reply. The role is a routing fact, and it belongs in
+	 * the routing tool.
+	 *
+	 * The coordinator is read from the store rather than inferred from the list, because membership order is
+	 * not a ranking and nothing else in the row says who it is.
+	 */
+	coordinator, err := e.deps.GroupCoordinator(tenant, name)
+	if err != nil {
+		return agent.ToolOutcome{}, err
+	}
+
 	var b strings.Builder
 	if zh {
 		b.WriteString(fmt.Sprintf("群 %s 的 %d 个成员：\n", name, len(members)))
@@ -88,18 +104,34 @@ func (e *Extension) groupMembers(_ context.Context, tenant, session string, args
 		b.WriteString(fmt.Sprintf("%d member(s) of group %s:\n", len(members), name))
 	}
 	for _, m := range members {
-		if m == session {
-			// MARKED, NOT OMITTED: "who else is here" includes knowing where YOU are, and a list that
-			// silently drops the reader makes it hard to tell this session's own membership at a
-			// glance.
-			if zh {
-				b.WriteString(fmt.Sprintf("- %s（本会话）\n", m))
+		// THE ROLE AND "THIS SESSION" ARE SEPARATE FACTS: this session may be the coordinator, or it may be
+		// an ordinary member reading its own row, and collapsing them would lose one of the two.
+		var notes []string
+		if zh {
+			if m == coordinator {
+				notes = append(notes, "协调者")
+			}
+			if m == session {
+				notes = append(notes, "本会话")
+			}
+			if len(notes) > 0 {
+				b.WriteString(fmt.Sprintf("- %s（%s）\n", m, strings.Join(notes, "、")))
 			} else {
-				b.WriteString(fmt.Sprintf("- %s (this session)\n", m))
+				b.WriteString("- " + m + "\n")
 			}
 			continue
 		}
-		b.WriteString("- " + m + "\n")
+		if m == coordinator {
+			notes = append(notes, "coordinator")
+		}
+		if m == session {
+			notes = append(notes, "this session")
+		}
+		if len(notes) > 0 {
+			b.WriteString(fmt.Sprintf("- %s (%s)\n", m, strings.Join(notes, ", ")))
+		} else {
+			b.WriteString("- " + m + "\n")
+		}
 	}
 	return agent.ToolOutcome{Content: strings.TrimRight(b.String(), "\n")}, nil
 }

@@ -731,11 +731,13 @@ tools:
     # reads membership
     effect: none
     description: >-
-      List the sessions in a group this session belongs to, including itself. This is how a session
-      learns who else is working on the same thing. Returns nothing for a group it is not in.
+      List the sessions in a group this session belongs to, including itself, and say which one is the
+      COORDINATOR. This is how a session learns who else is working on the same thing and who is
+      answerable for the group. Returns nothing for a group it is not in.
     descriptions:
       zh: >-
-        列出本会话所在某个群的成员会话（含自己）。会话借此知道还有谁在一起做同一件事。不属于该群时返回空。
+        列出本会话所在某个群的成员会话（含自己），并标出谁是这个群的**协调者**。会话借此知道还有谁在一起做
+        同一件事、以及群里的事由谁负责。不属于该群时返回空。
     input_schema:
       type: object
       properties:
