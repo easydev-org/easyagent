@@ -5580,7 +5580,20 @@ type SendGroupMessageRequest struct {
 	//
 	// IT IS CHECKED AGAINST MEMBERSHIP. A session that is not in the group cannot post to it, which keeps the
 	// transcript from accepting messages from anyone who guesses the name.
-	Sender        string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
+	Sender string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
+	//*
+	// MEMBERS TO ADDRESS — the "@" in the UI.
+	//
+	// EMPTY MEANS "THE DEFAULT RECIPIENT FOR THIS SENDER", which is not the same as "nobody":
+	//
+	//	from a user          → the coordinator
+	//	from a member        → the coordinator (a report)
+	//	from the coordinator → nobody, unless names are given here
+	//
+	// NAMES ARE VALIDATED BEFORE ANYTHING IS STORED OR SENT. A message that reached half its recipients would
+	// leave some sessions working on an instruction the others never saw, and nothing in the transcript says
+	// which.
+	To            []string `protobuf:"bytes,4,rep,name=to,proto3" json:"to,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5634,6 +5647,13 @@ func (x *SendGroupMessageRequest) GetSender() string {
 		return x.Sender
 	}
 	return ""
+}
+
+func (x *SendGroupMessageRequest) GetTo() []string {
+	if x != nil {
+		return x.To
+	}
+	return nil
 }
 
 type SendGroupMessageResponse struct {
@@ -11527,11 +11547,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04body\x18\x05 \x01(\tR\x04body\x12\x10\n" +
 	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\a \x01(\tR\tcreatedAt\"[\n" +
+	"created_at\x18\a \x01(\tR\tcreatedAt\"k\n" +
 	"\x17SendGroupMessageRequest\x12\x14\n" +
 	"\x05group\x18\x01 \x01(\tR\x05group\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x16\n" +
-	"\x06sender\x18\x03 \x01(\tR\x06sender\"o\n" +
+	"\x06sender\x18\x03 \x01(\tR\x06sender\x12\x0e\n" +
+	"\x02to\x18\x04 \x03(\tR\x02to\"o\n" +
 	"\x18SendGroupMessageResponse\x120\n" +
 	"\amessage\x18\x01 \x01(\v2\x16.agent.v1.GroupMessageR\amessage\x12!\n" +
 	"\fdelivered_to\x18\x02 \x03(\tR\vdeliveredTo\"}\n" +
