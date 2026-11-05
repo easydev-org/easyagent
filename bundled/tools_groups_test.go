@@ -20,8 +20,12 @@ import (
  */
 type groupStub struct {
 	*stubDeps
-	groups      map[string][]GroupRow
-	members     map[string][]string
+	groups map[string][]GroupRow
+	/**
+	 * members is the membership ROW: id, display name, intro, role. A map of ids alone was what the tool
+	 * rendered, and the coordinator could not tell which row was itself or what anyone did.
+	 */
+	members     map[string][]GroupMemberRow
 	coordinator map[string]string
 }
 
@@ -30,13 +34,15 @@ func (g *groupStub) GroupsOfSession(_, session string) ([]GroupRow, error) {
 }
 func (g *groupStub) IsGroupMember(_, group, session string) bool {
 	for _, m := range g.members[group] {
-		if m == session {
+		if m.Session == session {
 			return true
 		}
 	}
 	return false
 }
-func (g *groupStub) GroupMembers(_, group string) []string { return g.members[group] }
+func (g *groupStub) GroupMemberProfiles(_, group string) ([]GroupMemberRow, error) {
+	return g.members[group], nil
+}
 func (g *groupStub) GroupCoordinator(_, group string) (string, error) {
 	return g.coordinator[group], nil
 }
@@ -85,7 +91,11 @@ func TestGroupListShowsOnlyOwnGroups(t *testing.T) {
 func TestGroupMembersListsAndMarksTheAsker(t *testing.T) {
 	stub := &groupStub{
 		stubDeps: &stubDeps{},
-		members:  map[string][]string{"incident": {"alice", "bob", "carol"}},
+		members: map[string][]GroupMemberRow{"incident": {
+			{Session: "alice", Name: "CI 巡检", Intro: "看着 main 的构建", Role: "coordinator"},
+			{Session: "bob", Name: "仓库维护", Intro: "负责 PR 与发布", Role: "member"},
+			{Session: "carol", Name: "文档整理", Role: "member"},
+		}},
 	}
 	e := newGroupExt(t, stub)
 	ctx := context.Background()
@@ -94,10 +104,44 @@ func TestGroupMembersListsAndMarksTheAsker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"alice", "bob", "carol", "this session"} {
+	for _, want := range []string{
+		"alice", "bob", "carol", "this session",
+		// THE PROFILE, NOT JUST THE ID: the display name and the one-line intro are how a peer decides
+		// whom to address and with what.
+		"CI 巡检", "看着 main 的构建", "仓库维护", "负责 PR 与发布",
+	} {
 		if !strings.Contains(out.Content, want) {
 			t.Errorf("missing %q in:\n%s", want, out.Content)
 		}
+	}
+	// A member with no intro is still listed, by name.
+	if !strings.Contains(out.Content, "文档整理 (carol)") {
+		t.Errorf("a member without an intro was mangled:\n%s", out.Content)
+	}
+}
+
+/**
+ * AN EMPTY NAME OR INTRO MUST NOT DROP THE MEMBER.
+ *
+ * A session is not required to have either, and a row silently omitted here would hide a session the group's
+ * members are told exists — which is exactly the list other sessions use to decide whom to address.
+ */
+func TestGroupMembersKeepsAMemberWithNoProfile(t *testing.T) {
+	stub := &groupStub{
+		stubDeps: &stubDeps{},
+		members:  map[string][]GroupMemberRow{"incident": {{Session: "carol", Role: "member"}}},
+	}
+	e := newGroupExt(t, stub)
+
+	out, err := e.groupMembers(context.Background(), "t", "carol", map[string]any{"group": "incident"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "- carol") {
+		t.Errorf("a member with no name is not listed:\n%s", out.Content)
+	}
+	if strings.Contains(out.Content, "()") {
+		t.Errorf("an empty name rendered as empty parentheses:\n%s", out.Content)
 	}
 }
 
@@ -111,7 +155,7 @@ func TestGroupMembersListsAndMarksTheAsker(t *testing.T) {
 func TestGroupMembersRefusesANonMember(t *testing.T) {
 	stub := &groupStub{
 		stubDeps: &stubDeps{},
-		members:  map[string][]string{"incident": {"alice"}},
+		members:  map[string][]GroupMemberRow{"incident": {{Session: "alice", Role: "coordinator"}}},
 	}
 	e := newGroupExt(t, stub)
 	ctx := context.Background()
@@ -175,8 +219,12 @@ func TestOnlyGroupCreateMutatesGroups(t *testing.T) {
  */
 func TestGroupMembersNamesTheCoordinator(t *testing.T) {
 	stub := &groupStub{
-		stubDeps:    &stubDeps{},
-		members:     map[string][]string{"incident": {"alice", "bob", "carol"}},
+		stubDeps: &stubDeps{},
+		members: map[string][]GroupMemberRow{"incident": {
+			{Session: "alice", Name: "CI 巡检", Role: "coordinator"},
+			{Session: "bob", Name: "仓库维护", Role: "member"},
+			{Session: "carol", Name: "文档整理", Role: "member"},
+		}},
 		coordinator: map[string]string{"incident": "alice"},
 	}
 	e := newGroupExt(t, stub)
@@ -186,14 +234,14 @@ func TestGroupMembersNamesTheCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.Content, "alice (coordinator)") {
+	if !strings.Contains(out.Content, "CI 巡检 (alice) — coordinator") {
 		t.Errorf("the coordinator is not marked:\n%s", out.Content)
 	}
-	if !strings.Contains(out.Content, "bob (this session)") {
+	if !strings.Contains(out.Content, "仓库维护 (bob) — this session") {
 		t.Errorf("the asker is not marked:\n%s", out.Content)
 	}
-	if strings.Contains(out.Content, "carol (") {
-		t.Errorf("an ordinary member was given a note:\n%s", out.Content)
+	if strings.Contains(out.Content, "文档整理 (carol) — ") {
+		t.Errorf("an ordinary member was given a role note:\n%s", out.Content)
 	}
 
 	// The coordinator reads the same list: both facts land on one row, and neither is dropped.
@@ -201,7 +249,7 @@ func TestGroupMembersNamesTheCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.Content, "alice (coordinator, this session)") {
+	if !strings.Contains(out.Content, "CI 巡检 (alice) — coordinator, this session") {
 		t.Errorf("a coordinator should see both notes on its own row:\n%s", out.Content)
 	}
 }

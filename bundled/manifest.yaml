@@ -731,13 +731,26 @@ tools:
     # reads membership
     effect: none
     description: >-
-      List the sessions in a group this session belongs to, including itself, and say which one is the
-      COORDINATOR. This is how a session learns who else is working on the same thing and who is
-      answerable for the group. Returns nothing for a group it is not in.
+      List the sessions in a group this session belongs to, with each one's profile: DISPLAY NAME, the
+      one-line INTRO it wrote about itself, its ID, and its ROLE (coordinator or member). The coordinator
+      is marked.
+
+      This is how a session learns who else is working on the same thing, what each of them does, and who
+      is answerable for the group — the three things needed to decide whom to address and with what.
+
+      ADDRESS PEOPLE BY ID, NOT BY NAME: `group-send` takes ids, because a display name is a label two
+      sessions may share. The id is shown in parentheses after each name. Returns nothing for a group it
+      is not in.
     descriptions:
       zh: >-
-        列出本会话所在某个群的成员会话（含自己），并标出谁是这个群的**协调者**。会话借此知道还有谁在一起做
-        同一件事、以及群里的事由谁负责。不属于该群时返回空。
+        列出本会话所在某个群的成员，并给出每个人的资料：**显示名**、自我介绍（简介）、**id**、以及**角色**
+        （协调者或成员）。协调者会被标出。
+
+        会话借此知道还有谁在一起做同一件事、各自负责什么、以及群里的事由谁负责——也就是决定「该找谁、该交代
+        什么」所需要的全部信息。
+
+        **点名时用 id，不要用显示名**：`group-send` 收的是 id，因为显示名是不唯一的标签。每个名字后面的括号
+        里就是 id。不属于该群时返回空。
     input_schema:
       type: object
       properties:

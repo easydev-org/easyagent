@@ -245,13 +245,19 @@ func (d *StoreDeps) IsGroupMember(tenant, group, session string) bool {
 	return err == nil && ok
 }
 
-// GroupMembers implements Deps: the sessions in a group.
-func (d *StoreDeps) GroupMembers(tenant, group string) []string {
-	out, err := d.DB.SessionsInGroupIDs(tenant, group, "")
+// GroupMemberProfiles implements Deps: the sessions in a group, with the profile a peer reads.
+func (d *StoreDeps) GroupMemberProfiles(tenant, group string) ([]GroupMemberRow, error) {
+	profiles, err := d.DB.GroupMemberProfiles(tenant, group)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return out
+	out := make([]GroupMemberRow, 0, len(profiles))
+	for _, p := range profiles {
+		out = append(out, GroupMemberRow{
+			Session: p.Session, Name: p.Name, Intro: p.Intro, Role: p.Role,
+		})
+	}
+	return out, nil
 }
 
 // CoordinatedGroup implements Deps.

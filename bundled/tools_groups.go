@@ -73,7 +73,10 @@ func (e *Extension) groupMembers(_ context.Context, tenant, session string, args
 		}, nil
 	}
 
-	members := e.deps.GroupMembers(tenant, name)
+	members, err := e.deps.GroupMemberProfiles(tenant, name)
+	if err != nil {
+		return agent.ToolOutcome{}, err
+	}
 	if len(members) == 0 {
 		if zh {
 			return agent.ToolOutcome{Content: fmt.Sprintf("群 %s 没有成员。", name)}, nil
@@ -82,21 +85,20 @@ func (e *Extension) groupMembers(_ context.Context, tenant, session string, args
 	}
 
 	/**
-	 * THE LIST SAYS WHO COORDINATES.
+	 * A MEMBER LIST IS A LIST OF SESSIONS, NOT OF IDS.
 	 *
-	 * A bare list of ids answers "who is here" but not "who is answerable for this group", and those are the two
-	 * questions a member actually has. A live coordinator reported exactly this gap: it could see the members,
-	 * could not tell which one it was, and said so in its reply. The role is a routing fact, and it belongs in
-	 * the routing tool.
+	 * The ids alone answered "who is here" and nothing else: a coordinator could see three members but not
+	 * which one it was, not what any of them does, and not who was answerable for the group — and it said so
+	 * in its answer to a live group. The display name is what a person calls this session; the intro is the
+	 * one line it wrote about itself. Those two are how a peer decides whom to address and with what, which is
+	 * the entire use of this tool.
 	 *
-	 * The coordinator is read from the store rather than inferred from the list, because membership order is
-	 * not a ranking and nothing else in the row says who it is.
+	 * THE ID STAYS: `group-send` addresses by id, because a display name is a label two sessions may share.
+	 * It is written in parentheses after the name, where it is available without being the only thing shown.
+	 *
+	 * ROLE AND "THIS SESSION" ARE SEPARATE NOTES: the reader may be the coordinator, or an ordinary member
+	 * reading its own row, and collapsing them would answer only one of the two questions.
 	 */
-	coordinator, err := e.deps.GroupCoordinator(tenant, name)
-	if err != nil {
-		return agent.ToolOutcome{}, err
-	}
-
 	var b strings.Builder
 	if zh {
 		b.WriteString(fmt.Sprintf("群 %s 的 %d 个成员：\n", name, len(members)))
@@ -104,33 +106,41 @@ func (e *Extension) groupMembers(_ context.Context, tenant, session string, args
 		b.WriteString(fmt.Sprintf("%d member(s) of group %s:\n", len(members), name))
 	}
 	for _, m := range members {
-		// THE ROLE AND "THIS SESSION" ARE SEPARATE FACTS: this session may be the coordinator, or it may be
-		// an ordinary member reading its own row, and collapsing them would lose one of the two.
 		var notes []string
-		if zh {
-			if m == coordinator {
+		if m.Role == GroupRoleCoordinator {
+			if zh {
 				notes = append(notes, "协调者")
-			}
-			if m == session {
-				notes = append(notes, "本会话")
-			}
-			if len(notes) > 0 {
-				b.WriteString(fmt.Sprintf("- %s（%s）\n", m, strings.Join(notes, "、")))
 			} else {
-				b.WriteString("- " + m + "\n")
+				notes = append(notes, "coordinator")
 			}
-			continue
 		}
-		if m == coordinator {
-			notes = append(notes, "coordinator")
+		if m.Session == session {
+			if zh {
+				notes = append(notes, "本会话")
+			} else {
+				notes = append(notes, "this session")
+			}
 		}
-		if m == session {
-			notes = append(notes, "this session")
+
+		// NAME (ID) — ROLE
+		label := m.Session
+		if m.Name != "" {
+			label = fmt.Sprintf("%s (%s)", m.Name, m.Session)
 		}
 		if len(notes) > 0 {
-			b.WriteString(fmt.Sprintf("- %s (%s)\n", m, strings.Join(notes, ", ")))
+			if zh {
+				b.WriteString(fmt.Sprintf("- %s —— %s\n", label, strings.Join(notes, "、")))
+			} else {
+				b.WriteString(fmt.Sprintf("- %s — %s\n", label, strings.Join(notes, ", ")))
+			}
 		} else {
-			b.WriteString("- " + m + "\n")
+			b.WriteString("- " + label + "\n")
+		}
+
+		// THE INTRO IS INDENTED UNDER ITS OWNER: it describes that session, and a flat list of paragraphs
+		// between the bullet points would read as if it belonged to whichever name happened to precede it.
+		if m.Intro != "" {
+			b.WriteString("  " + m.Intro + "\n")
 		}
 	}
 	return agent.ToolOutcome{Content: strings.TrimRight(b.String(), "\n")}, nil

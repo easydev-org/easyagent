@@ -443,6 +443,64 @@ func (d *DB) GroupMemberCounts(tenant string, groups []string) (map[string]int, 
 	return out, nil
 }
 
+/**
+ * GroupMemberProfile is one member as a READER sees it: who it is, what it is, and what role it holds.
+ *
+ * THE ID ALONE IS NOT ENOUGH, and this is not a presentation nicety. A coordinator reading a bare list of ids
+ * could see the members but not which one it was, not what each of them does, and not who was answerable for
+ * the group — and it said so, in its answer to a live group. The display name and the one-line intro exist
+ * precisely so a peer can decide whom to address and with what.
+ *
+ * ROLE IS INCLUDED because it is a ROUTING fact: reports go to the coordinator, and a member that cannot tell
+ * which row that is has to guess.
+ */
+type GroupMemberProfile struct {
+	Session  string
+	Name     string
+	Intro    string
+	Role     string
+	JoinedAt string
+}
+
+/**
+ * GroupMemberProfiles returns a group's members with their profiles, coordinator first then oldest join.
+ *
+ * A MEMBER WHOSE SESSION ROW IS GONE KEEPS ITS PLACE. The membership row is removed when a session is deleted,
+ * so in practice this does not arise; when it does — a partially applied delete — the member still appears,
+ * by id, rather than silently vanishing from a list that other sessions rely on to know who is present.
+ */
+func (d *DB) GroupMemberProfiles(tenant, group string) ([]GroupMemberProfile, error) {
+	rows, err := d.ListGroupMembers(tenant, group)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.Session)
+	}
+	var sessions []Session
+	if err := d.g.Where("tenant = ? AND id IN ?", tenant, ids).Find(&sessions).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Session, len(sessions))
+	for _, s := range sessions {
+		byID[s.ID] = s
+	}
+	out := make([]GroupMemberProfile, 0, len(rows))
+	for _, r := range rows {
+		p := GroupMemberProfile{Session: r.Session, Role: r.Role, JoinedAt: r.JoinedAt}
+		if s, ok := byID[r.Session]; ok {
+			p.Name = s.Name
+			p.Intro = s.Intro
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 // SessionsInGroupIDs returns the session ids in a group, sorted, optionally excluding one.
 //
 // IT IS ListGroupMembers REDUCED TO THE ID, not a second query: the two read the same table with the

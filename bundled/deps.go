@@ -67,7 +67,15 @@ type Deps interface {
 	// when the second happened tells the model its group does not exist.
 	GroupsOfSession(tenant, session string) ([]GroupRow, error)
 	IsGroupMember(tenant, group, session string) bool
-	GroupMembers(tenant, group string) []string
+	/**
+	 * GroupMemberProfiles returns a group's members as READERS see them: id, display name, one-line intro and
+	 * role.
+	 *
+	 * IT REPLACED A BARE []string OF IDS. A coordinator could see the members but not tell which one it was,
+	 * what each of them does, or who was answerable for the group — and it said so, in its answer to a live
+	 * group. The name and the intro exist so a peer can decide whom to address and with what.
+	 */
+	GroupMemberProfiles(tenant, group string) ([]GroupMemberRow, error)
 	GroupCoordinator(tenant, group string) (string, error)
 	// CoordinatedGroup returns the group this session coordinates ("" when none). At most one, by the
 	// store's constraint.
@@ -96,6 +104,30 @@ type Deps interface {
 
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error
+}
+
+/**
+ * GroupRoleCoordinator is the role value the store records for a group's coordinator.
+ *
+ * THE TOOL AND THE STORE MUST AGREE ON THE SPELLING, and a bare string literal in the renderer would be a
+ * second copy that drifts the moment the store renames one. `GroupMemberRow.Role` carries the store's value
+ * verbatim, so the comparison is against this one constant.
+ */
+const GroupRoleCoordinator = "coordinator"
+
+/**
+ * GroupMemberRow is one member as the tools see it.
+ *
+ * NAME AND INTRO MAY BE EMPTY: a session is not required to have either, and a renderer that dropped the row
+ * for lack of a label would hide a member other sessions are told exists. The ID is always present, and it is
+ * what an addressed message must use.
+ */
+type GroupMemberRow struct {
+	Session string
+	Name    string
+	Intro   string
+	// Role is "coordinator" or "member" — a routing fact, not a permission tier.
+	Role string
 }
 
 // GroupRow is one group as the tools see it: a name and how many sessions are in it.
