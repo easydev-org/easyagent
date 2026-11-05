@@ -34,6 +34,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
@@ -115,6 +116,19 @@ func run(a, b replica) error {
 		return err
 	}
 
+	// ---- 5. a turn runs once, not once per replica ----
+	//
+	// THE PROPERTY THAT MAKES TWO REPLICAS A SERVICE rather than two services. It needs a model, so it runs only
+	// where one is configured (E2E_TURN=true); the CI job sets it because a deployment without this check can
+	// answer every prompt twice and still pass everything above.
+	if os.Getenv("E2E_TURN") != "" {
+		if err := assertTurnRunsOnce(ctx, a, b); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("skip: the once-per-turn check needs a model (set E2E_TURN=1)")
+	}
+
 	return nil
 }
 
@@ -124,11 +138,19 @@ func run(a, b replica) error {
 // row is derived from that shared store rather than from a per-replica cache.
 func crossReplicaGroup(ctx context.Context, a, b replica, coord string) error {
 	const name = "cross-replica-group"
-	if err := a.createGroup(ctx, name, coord, "shared transcript check"); err != nil {
+	if err := a.createGroup(ctx, name, coord, "shared transcript check"); err != nil && !isAlreadyExists(err) {
 		return fmt.Errorf("create group on A: %w", err)
 	}
 
-	const body = "posted on A, must be visible on B"
+	/**
+	 * THE BODY CARRIES A NONCE, because the group may already exist.
+	 *
+	 * A previous run leaves its group and transcript behind — this binary does not delete what it creates, and
+	 * deleting a group also drops its transcript and its subscriptions, which is more cleanup than a check
+	 * needs. A unique body makes "the message posted on A is readable on B" mean THIS message, rather than a
+	 * row from an earlier run that would pass the assertion no matter what.
+	 */
+	body := fmt.Sprintf("posted on A at %d, must be visible on B", time.Now().UnixNano())
 	if err := a.sendGroupMessage(ctx, name, body); err != nil {
 		return fmt.Errorf("post to the group on A: %w", err)
 	}
@@ -300,6 +322,13 @@ func (r replica) waitHealthy(ctx context.Context) error {
 		time.Sleep(300 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out")
+}
+
+// isAlreadyExists reports a create that lost to an earlier run.
+//
+// MATCHED ON THE CONNECT CODE, not on the message: the code is part of the contract and the wording is not.
+func isAlreadyExists(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "already_exists")
 }
 
 func mustEnv(k string) string {
