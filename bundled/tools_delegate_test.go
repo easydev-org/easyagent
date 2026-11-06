@@ -42,8 +42,11 @@ func newChainStub() *chainStub {
 	}
 }
 
-func (c *chainStub) CoordinatedGroup(_, session string) (string, error) {
-	return c.coordinated[session], nil
+func (c *chainStub) CoordinatedGroups(_, session string) ([]string, error) {
+	if g := c.coordinated[session]; g != "" {
+		return []string{g}, nil
+	}
+	return nil, nil
 }
 
 func (c *chainStub) CoordinatedGroupOrMembership(_, session string) string {
@@ -132,13 +135,13 @@ func newChainExt(t *testing.T, c *chainStub) *Extension {
 }
 
 /**
- * A SECOND CALL IS AN ANSWER, NOT A FAILURE.
+ * A GROUP NEEDS A NAME, because a session may own several.
  *
- * A model that lost track of whether it had created a group asks again; replying "you already
- * coordinate X" gives it the name it needs to keep working. An error would leave it with nothing to
- * act on and invite it to try a different name — which is exactly the second group the rule forbids.
+ * The name used to default to the session's own, which was unique by construction only while one session could
+ * coordinate one group. With several, that default collides on the second call — and "the group named after me"
+ * stops meaning anything past the first.
  */
-func TestGroupCreateIsIdempotentAndAnswers(t *testing.T) {
+func TestGroupCreateRequiresAName(t *testing.T) {
 	c := newChainStub()
 	e := newChainExt(t, c)
 	ctx := context.Background()
@@ -148,38 +151,56 @@ func TestGroupCreateIsIdempotentAndAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.creates) != 1 || c.creates[0] != "alice" {
-		t.Fatalf("creates = %v, want one group named after the session", c.creates)
+	if len(c.creates) != 0 {
+		t.Errorf("a nameless call created %v; nothing should have been created", c.creates)
 	}
-	if !strings.Contains(out.Content, "alice") {
-		t.Errorf("created message should name the group:\n%s", out.Content)
+	if !strings.Contains(out.Content, "name") {
+		t.Errorf("the refusal should name the missing field:\n%s", out.Content)
 	}
 
-	// Second call: no new group, and the name comes back.
-	out, err = e.groupCreate(ctx, "t", "alice", map[string]any{})
+	// WITH A NAME it creates exactly that group.
+	out, err = e.groupCreate(ctx, "t", "alice", map[string]any{"name": "release"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.creates) != 1 {
-		t.Errorf("a second call created another group: %v", c.creates)
+	if len(c.creates) != 1 || c.creates[0] != "release" {
+		t.Fatalf("creates = %v, want one group named release", c.creates)
 	}
-	if !strings.Contains(out.Content, "already") {
-		t.Errorf("second call should say the group already exists:\n%s", out.Content)
-	}
-	meta, _ := out.Metadata.(map[string]any)
-	if got := meta["group"]; got != "alice" {
-		t.Errorf("metadata group = %v, want alice", got)
+	if !strings.Contains(out.Content, "release") {
+		t.Errorf("the created message should name the group:\n%s", out.Content)
 	}
 }
 
-// A group name that is already taken is reported with a hint to choose another, because the derived
-// name (the session name) can collide with a group a person made.
+/**
+ * A SESSION MAY CREATE SEVERAL GROUPS, and each is its own group.
+ *
+ * The old rule answered a second call with "you already coordinate X" and created nothing. That was correct while
+ * one coordinator could own one group; now it would make the second group impossible to create at all.
+ */
+func TestGroupCreateAllowsSeveralGroups(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	for _, name := range []string{"release", "incident"} {
+		if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(c.creates) != 2 {
+		t.Fatalf("creates = %v, want both groups", c.creates)
+	}
+}
+
+// A group name that is already taken is reported with a hint to choose another — a session creating its
+// second group can now collide with one a person made, which the derived name could not do.
 func TestGroupCreateReportsATakenName(t *testing.T) {
 	c := newChainStub()
 	c.failed = true
 	e := newChainExt(t, c)
 
-	out, err := e.groupCreate(context.Background(), "t", "alice", map[string]any{})
+	out, err := e.groupCreate(context.Background(), "t", "alice", map[string]any{"name": "release"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +223,7 @@ func TestSpawnMasksGroupCreateOnTheWorker(t *testing.T) {
 
 	// alice coordinates a group.
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,7 +296,7 @@ func TestSpawnLeavesNothingBehindWhenTheForkFails(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"task": "x"}); err == nil {
@@ -318,7 +339,7 @@ func TestGroupSendAllowsBothDirections(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"task": "work"}); err != nil {
@@ -353,7 +374,7 @@ func TestGroupSendRefusesMemberToMember(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1", "w2"}
@@ -379,7 +400,7 @@ func TestGroupSendRefusesOutsiders(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := e.groupSend(ctx, "t", "mallory", map[string]any{
@@ -400,7 +421,7 @@ func TestGroupSendRefusesSelfAddress(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
@@ -470,7 +491,7 @@ func TestGroupSendToSeveralMembers(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1", "w2", "w3"}
@@ -522,7 +543,7 @@ func TestGroupSendRejectsTheWholeListOnOneBadName(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1"}
@@ -549,7 +570,7 @@ func TestGroupSendRequiresAnArray(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1"}
@@ -576,7 +597,7 @@ func TestGroupSendCollapsesDuplicates(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1"}
@@ -603,7 +624,7 @@ func TestGroupSendMemberCanOnlyAddressTheCoordinator(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1", "w2"}
@@ -650,7 +671,7 @@ func TestGroupSendWithoutToIsAReply(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1", "w2"}
@@ -685,7 +706,7 @@ func TestGroupSendWithToIsAnInstruction(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1", "w2"}
@@ -726,7 +747,7 @@ func TestGroupSendCarriesAttachments(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1"}
@@ -760,7 +781,7 @@ func TestGroupSendAllowsAnAttachmentWithoutText(t *testing.T) {
 	ctx := context.Background()
 
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1"}
@@ -794,7 +815,7 @@ func TestGroupSendRejectsNonArrayAttachments(t *testing.T) {
 	c := newChainStub()
 	e := newChainExt(t, c)
 	c.existing["alice"] = true
-	if _, err := e.groupCreate(context.Background(), "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(context.Background(), "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice"}
@@ -827,7 +848,7 @@ func TestGroupSendRefusesARecipientOutsideTheGroup(t *testing.T) {
 
 	c.existing["alice"] = true
 	c.existing["mallory"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	// The group holds alice and w1; mallory exists as a session but is NOT a member.
@@ -862,7 +883,7 @@ func TestGroupSendWithOneOutsiderDeliversToNobody(t *testing.T) {
 
 	c.existing["alice"] = true
 	c.existing["mallory"] = true
-	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
 	c.membership["alice"] = []string{"alice", "w1"}

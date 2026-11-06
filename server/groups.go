@@ -182,11 +182,6 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 		switch {
 		case errors.Is(err, store.ErrGroupExists):
 			return nil, connect.NewError(connect.CodeAlreadyExists, err.Error())
-		case errors.Is(err, store.ErrAlreadyCoordinating):
-			// A PRECONDITION OF THE SESSION, not of the request: it is well-formed, and it would succeed
-			// once the other group is cleared up. Saying that is more useful than "conflict".
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				"that session already coordinates a group; a session may coordinate only one")
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
@@ -474,10 +469,6 @@ func (s *Server) SetGroupCoordinator(ctx context.Context, req *agentv1.SetGroupC
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
 	if err := s.db.SetGroupCoordinator(tenant, name, session); err != nil {
-		if errors.Is(err, store.ErrAlreadyCoordinating) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				"that session already coordinates a group; a session may coordinate only one")
-		}
 		if errors.Is(err, store.ErrNotGroupMember) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				"the new coordinator must already be a member of the group")

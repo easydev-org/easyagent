@@ -77,9 +77,14 @@ type Deps interface {
 	 */
 	GroupMemberProfiles(tenant, group string) ([]GroupMemberRow, error)
 	GroupCoordinator(tenant, group string) (string, error)
-	// CoordinatedGroup returns the group this session coordinates ("" when none). At most one, by the
-	// store's constraint.
-	CoordinatedGroup(tenant, session string) (string, error)
+	/**
+	 * CoordinatedGroups returns every group this session coordinates.
+	 *
+	 * A LIST, because a session may coordinate any number of groups. Callers that need ONE (a reply, a spawn with no
+	 * group named) must decide which, rather than being handed an arbitrary first entry — see `group-send` and
+	 * `spawn`, where the choice is either named by the caller or derived from the message that woke it.
+	 */
+	CoordinatedGroups(tenant, session string) ([]string, error)
 	// AddGroupMemberOnly enrolls a session as a plain member (never coordinator).
 	AddGroupMemberOnly(tenant, group, session string) error
 	/**

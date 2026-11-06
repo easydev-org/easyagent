@@ -282,43 +282,51 @@ func TestGroupMemberRoleRoundTrip(t *testing.T) {
 }
 
 /**
- * A SESSION COORDINATES AT MOST ONE GROUP.
+ * A SESSION MAY COORDINATE ANY NUMBER OF GROUPS.
  *
- * A coordinator is where a group's work arrives. Two groups would put two unrelated jobs in the same
- * turn with no way to keep them apart — not more work, but a different job competing for the same
- * context. The constraint also makes "which group does this session coordinate" a single answer
- * everywhere, instead of a lookup that can return two rows and a caller that has to pick.
+ * There used to be a one-coordinator-per-session rule, on the argument that two groups' work would compete for
+ * one context. The risk was real; the remedy was not. A session that cannot tell which group a message came from
+ * is a DEFECT IN THE MESSAGE, and the fix is to say so — every group message names its group, and the prompt lists
+ * every group the session coordinates.
+ *
+ * WHAT THE OLD RULE COST: an operator running several groups had to dedicate a session to each, and those
+ * sessions shared nothing — no history, no learned procedure. The work is the same work.
+ *
+ * THE CONSTRAINT A GROUP CANNOT SURVIVE WITHOUT REMAINS: exactly one coordinator PER GROUP.
  */
-func TestSessionCoordinatesAtMostOneGroup(t *testing.T) {
+func TestSessionMayCoordinateManyGroups(t *testing.T) {
 	ts, db, _ := newTestServerWith(t, nil)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
 	coord := newSession(t, c, "coord")
-	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "first", Coordinator: coord, CreatedBy: "user",
-	}); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"first", "second", "third"} {
+		if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+			Name: name, Coordinator: coord, CreatedBy: "user",
+		}); err != nil {
+			t.Fatalf("creating %q: %v", name, err)
+		}
 	}
 
-	_, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
-		Name: "second", Coordinator: coord, CreatedBy: "user",
-	})
-	if err == nil {
-		t.Fatal("a second group with the same coordinator must be refused")
-	}
-	if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
-		t.Errorf("code = %v, want FailedPrecondition (a state to resolve, not a bad request)", got)
-	}
-
-	// The first group is untouched.
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "first"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Members[0].Role != "coordinator" {
-		t.Errorf("role = %q, want coordinator", got.Members[0].Role)
+	// EVERY ONE OF THEM NAMES THE SAME SESSION AS COORDINATOR, and each has exactly one.
+	for _, name := range []string{"first", "second", "third"} {
+		got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinators := 0
+		for _, m := range got.Members {
+			if m.Role == "coordinator" {
+				coordinators++
+				if m.Session != coord {
+					t.Errorf("%s: coordinator = %q, want %q", name, m.Session, coord)
+				}
+			}
+		}
+		if coordinators != 1 {
+			t.Errorf("%s has %d coordinators, want exactly 1", name, coordinators)
+		}
 	}
 }
 

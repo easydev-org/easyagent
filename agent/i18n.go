@@ -77,7 +77,7 @@ type GroupEnv struct {
  * names of the sessions it is writing to, which is exactly the guess that produced a coordinator answering a
  * question meant for the group. `Group.Coordinator` says which session's answer the reader expects.
  */
-func BuildEnvBlockFull(locale string, now time.Time, intro string, group *GroupEnv) string {
+func BuildEnvBlockFull(locale string, now time.Time, intro string, groups []GroupEnv) string {
 	lines := []string{
 		"<env>",
 		"  Today's date: " + now.UTC().Format("2006-01-02"),
@@ -86,16 +86,33 @@ func BuildEnvBlockFull(locale string, now time.Time, intro string, group *GroupE
 	if intro = strings.TrimSpace(intro); intro != "" {
 		lines = append(lines, "  <intro>"+intro+"</intro>")
 	}
-	if group != nil && group.Name != "" {
-		lines = append(lines, "  <group>")
-		lines = append(lines, "    <name>"+group.Name+"</name>")
-		if purpose := strings.TrimSpace(group.Intro); purpose != "" {
-			lines = append(lines, "    <purpose>"+purpose+"</purpose>")
+	if len(groups) > 0 {
+		/**
+		 * EVERY GROUP THE SESSION COORDINATES, not just one.
+		 *
+		 * A session may coordinate any number of groups now, and the one it is answering right now is decided by
+		 * the message that woke it — which names its group. What it cannot derive is the SET: without this list it
+		 * would not know that a second group exists, could not tell which group a task belongs to, and would have
+		 * to guess when a tool asks it to choose.
+		 *
+		 * EACH ENTRY NAMES ITS OWN GROUP, so a model reading a woken message can match the two.
+		 */
+		lines = append(lines, "  <groups>")
+		for _, g := range groups {
+			if g.Name == "" {
+				continue
+			}
+			lines = append(lines, "    <group>")
+			lines = append(lines, "      <name>"+g.Name+"</name>")
+			if purpose := strings.TrimSpace(g.Intro); purpose != "" {
+				lines = append(lines, "      <purpose>"+purpose+"</purpose>")
+			}
+			if g.Coordinator != "" {
+				lines = append(lines, "      <coordinator>"+g.Coordinator+"</coordinator>")
+			}
+			lines = append(lines, "    </group>")
 		}
-		if group.Coordinator != "" {
-			lines = append(lines, "    <coordinator>"+group.Coordinator+"</coordinator>")
-		}
-		lines = append(lines, "  </group>")
+		lines = append(lines, "  </groups>")
 	}
 	lines = append(lines, "</env>")
 	return strings.Join(lines, "\n")
@@ -120,8 +137,8 @@ func BuildEnvBlockAll(locale string, now time.Time, intro string, grants []Grant
 }
 
 // BuildEnvBlockWithGroup is BuildEnvBlockAll plus what the session needs to know about its group.
-func BuildEnvBlockWithGroup(locale string, now time.Time, intro string, group *GroupEnv, grants []GrantLine) string {
-	block := BuildEnvBlockFull(locale, now, intro, group)
+func BuildEnvBlockWithGroup(locale string, now time.Time, intro string, groups []GroupEnv, grants []GrantLine) string {
+	block := BuildEnvBlockFull(locale, now, intro, groups)
 	if len(grants) == 0 {
 		// Nothing granted: say so. Silence reads as "unrestricted" to a model.
 		zh := primaryOf(NormalizeLocale(locale)) == "zh"

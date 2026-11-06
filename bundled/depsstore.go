@@ -260,9 +260,9 @@ func (d *StoreDeps) GroupMemberProfiles(tenant, group string) ([]GroupMemberRow,
 	return out, nil
 }
 
-// CoordinatedGroup implements Deps.
-func (d *StoreDeps) CoordinatedGroup(tenant, session string) (string, error) {
-	return d.DB.CoordinatedGroup(tenant, session)
+// CoordinatedGroups implements Deps.
+func (d *StoreDeps) CoordinatedGroups(tenant, session string) ([]string, error) {
+	return d.DB.CoordinatedGroups(tenant, session)
 }
 
 // AddGroupMemberOnly implements Deps: a plain member, never a coordinator.

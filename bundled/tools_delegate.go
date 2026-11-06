@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,20 +37,19 @@ func (e *Extension) groupCreate(_ context.Context, tenant, session string, args 
 	locale := e.localeOf(tenant, session)
 	s := groupStringsFor(locale)
 
-	if existing, err := e.deps.CoordinatedGroup(tenant, session); err != nil {
-		return agent.ToolOutcome{}, err
-	} else if existing != "" {
-		// ALREADY DONE, AND SAID PLAINLY. A second call is the normal case — a model that lost track of
-		// whether it had created one — so this is an answer, not a failure.
-		return agent.ToolOutcome{
-			Content:  s.alreadyCreated(existing),
-			Metadata: map[string]any{"group": existing, "created": false},
-		}, nil
-	}
-
+	/**
+	 * A SESSION MAY CREATE ANY NUMBER OF GROUPS, so a name is now REQUIRED.
+	 *
+	 * It used to default to the session's own name, which worked only because a session could coordinate exactly
+	 * one group: the name was unique by construction. With several, the default would collide on the second call —
+	 * and "the group called after me" is not a meaningful name once there is more than one.
+	 *
+	 * CREATING A GROUP WITH A NAME THAT ALREADY EXISTS IS STILL REFUSED, so a model that lost track gets a
+	 * definite answer rather than a duplicate.
+	 */
 	name := strings.TrimSpace(strArg(args, "name"))
 	if name == "" {
-		name = session
+		return agent.ToolOutcome{Content: s.errMissingName}, nil
 	}
 	if err := e.deps.CreateGroupForSession(tenant, name, session); err != nil {
 		if isGroupExists(err) {
@@ -100,12 +100,34 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
 	 * created itself. That is not an exception to the rule: the worker joins the group the spawner
 	 * coordinates, and has no relationship at all with the group it merely belongs to.
 	 */
-	group, err := e.deps.CoordinatedGroup(tenant, session)
+	/**
+	 * THE GROUP TO SPAWN INTO IS NAMED BY THE CALLER.
+	 *
+	 * It used to be derived: a session coordinated exactly one group, so there was nothing to choose. With
+	 * several, deriving it would put a worker into whichever group happened to sort first — a silent misfiling
+	 * that nobody would notice until the wrong team was doing the work.
+	 *
+	 * The name is checked against the groups this session actually coordinates, so a model cannot spawn into a
+	 * group it has no authority over even if it guesses the name.
+	 */
+	coordinated, err := e.deps.CoordinatedGroups(tenant, session)
 	if err != nil {
 		return agent.ToolOutcome{}, err
 	}
-	if group == "" {
+	if len(coordinated) == 0 {
 		return agent.ToolOutcome{Content: s.errNoCoordinatedGroup}, nil
+	}
+	group := strings.TrimSpace(strArg(args, "group"))
+	if group == "" {
+		// ONE GROUP IS THE COMMON CASE, so naming it is not required when there is only one to mean.
+		if len(coordinated) == 1 {
+			group = coordinated[0]
+		} else {
+			return agent.ToolOutcome{Content: s.errSpawnNeedsGroup(coordinated)}, nil
+		}
+	}
+	if !slices.Contains(coordinated, group) {
+		return agent.ToolOutcome{Content: s.errNotCoordinatorOf(group)}, nil
 	}
 
 	/**
@@ -293,6 +315,9 @@ type groupStrings struct {
 	errExists             func(sid string) string
 	errGroupTaken         func(group string) string
 	errMissingGroup       string
+	errMissingName        string
+	errSpawnNeedsGroup    func(groups []string) string
+	errNotCoordinatorOf   func(group string) string
 	errMissingAddress     string
 	errBadTo              string
 	errMissingText        string
@@ -339,11 +364,19 @@ func groupStringsFor(locale string) groupStrings {
 			delivered: func(to []string, group string) string {
 				return fmt.Sprintf("已在群 '%s' 中向 %s 发送消息。", group, strings.Join(to, "、"))
 			},
-			errMissingTask:    `spawn: 缺少 "task"。`,
-			errParentMissing:  func(sid string) string { return fmt.Sprintf("找不到会话 '%s'。", sid) },
-			errExists:         func(sid string) string { return fmt.Sprintf("会话 '%s' 已存在。", sid) },
-			errGroupTaken:     func(g string) string { return fmt.Sprintf("群名 '%s' 已被占用，请换一个 name。", g) },
-			errMissingGroup:   `group-send: 缺少 "group"。`,
+			errMissingTask:   `spawn: 缺少 "task"。`,
+			errParentMissing: func(sid string) string { return fmt.Sprintf("找不到会话 '%s'。", sid) },
+			errExists:        func(sid string) string { return fmt.Sprintf("会话 '%s' 已存在。", sid) },
+			errGroupTaken:    func(g string) string { return fmt.Sprintf("群名 '%s' 已被占用，请换一个 name。", g) },
+			errMissingGroup:  `group-send: 缺少 "group"。`,
+			errMissingName:   `group-create: 缺少 "name"。一个会话可以创建多个群，所以必须给群起名字。`,
+			errSpawnNeedsGroup: func(groups []string) string {
+				return fmt.Sprintf("spawn: 你协调多个群（%s），请用 \"group\" 指定要派生到哪个群。",
+					strings.Join(groups, "、"))
+			},
+			errNotCoordinatorOf: func(g string) string {
+				return fmt.Sprintf("spawn: 你不是群 %q 的协调者，不能往那个群派生工作会话。", g)
+			},
 			errBadAttachments: `group-send: "attachments" 必须是文件 code 数组。`,
 			errMissingAddress: `group-send: "to" 必须是会话名数组。`,
 			errBadTo:          `group-send: "to" 必须是会话名数组，例如 ["worker-1","worker-2"]。`,
@@ -364,8 +397,8 @@ func groupStringsFor(locale string) groupStrings {
 				"member with work, and group-members to see who is in it.", g)
 		},
 		alreadyCreated: func(g string) string {
-			return fmt.Sprintf("You already coordinate group %q (a session may coordinate only one). "+
-				"Use group-members to see its members and group-send to address them.", g)
+			return fmt.Sprintf("You already coordinate group %q. Use group-members to see its members and "+
+				"group-send to address them.", g)
 		},
 		spawned: func(name, workerId, group, desc string) string {
 			extra := ""
@@ -392,11 +425,19 @@ func groupStringsFor(locale string) groupStrings {
 		delivered: func(to []string, group string) string {
 			return fmt.Sprintf("Sent to %s in group %q.", strings.Join(to, ", "), group)
 		},
-		errMissingTask:    `spawn: "task" is required.`,
-		errParentMissing:  func(sid string) string { return fmt.Sprintf("session %q not found.", sid) },
-		errExists:         func(sid string) string { return fmt.Sprintf("session %q already exists.", sid) },
-		errGroupTaken:     func(g string) string { return fmt.Sprintf("group name %q is taken; choose another `name`.", g) },
-		errMissingGroup:   `group-send: "group" is required.`,
+		errMissingTask:   `spawn: "task" is required.`,
+		errParentMissing: func(sid string) string { return fmt.Sprintf("session %q not found.", sid) },
+		errExists:        func(sid string) string { return fmt.Sprintf("session %q already exists.", sid) },
+		errGroupTaken:    func(g string) string { return fmt.Sprintf("group name %q is taken; choose another `name`.", g) },
+		errMissingGroup:  `group-send: "group" is required.`,
+		errMissingName:   `group-create: "name" is required. A session may create several groups, so each one needs a name.`,
+		errSpawnNeedsGroup: func(groups []string) string {
+			return fmt.Sprintf("spawn: you coordinate several groups (%s); name the one to spawn into with "+
+				`"group".`, strings.Join(groups, ", "))
+		},
+		errNotCoordinatorOf: func(g string) string {
+			return fmt.Sprintf("spawn: you do not coordinate group %q, so you cannot put a worker in it.", g)
+		},
 		errBadAttachments: `group-send: "attachments" must be an array of file codes.`,
 		errMissingAddress: `group-send: "to" must be an array of session names.`,
 		errBadTo:          `group-send: "to" must be an array of session names, e.g. ["worker-1","worker-2"].`,

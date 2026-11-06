@@ -104,18 +104,21 @@ var ErrGroupExists = errors.New("group already exists")
 var ErrNoCoordinator = errors.New("a group needs exactly one coordinator")
 
 /**
- * ErrAlreadyCoordinating is returned when a session that already coordinates a group tries to create
- * another.
+ * A SESSION MAY COORDINATE ANY NUMBER OF GROUPS.
  *
- * ONE COORDINATORSHIP PER SESSION, and the reason is attention rather than storage: a coordinator is
- * where a group's work arrives. A session coordinating two groups receives instructions for both in the
- * same turn and has no way to keep them apart — the second group's tasks are not "more work", they are
- * a different job competing for the same context. One session, one job.
+ * There used to be a one-coordinator-per-session rule (`ErrAlreadyCoordinating`), on the argument that a
+ * coordinator receiving two groups' work could not keep them apart. The argument was right about the RISK and
+ * wrong about the remedy: a session that cannot tell which group a message came from is a DEFECT IN THE MESSAGE,
+ * not a reason to forbid the arrangement. Every group message already carries its group name, and the prompt now
+ * lists every group the session coordinates, so the separation is stated rather than assumed.
  *
- * The constraint also makes "which group does this session coordinate" a single answer everywhere,
- * instead of a lookup that can return two rows and a caller that has to pick.
+ * WHAT IT COST TO KEEP THE RULE: an operator running several groups had to dedicate a session to each, and those
+ * sessions shared nothing — no context, no history, no learned procedure. The work is the same work; only the
+ * conversation was duplicated.
+ *
+ * THE CONSTRAINT THAT REMAINS is the one a group cannot survive without: exactly ONE COORDINATOR PER GROUP. None
+ * routes its messages nowhere; two would both answer the same message.
  */
-var ErrAlreadyCoordinating = errors.New("this session already coordinates a group")
 
 // ErrNotGroupMember is returned when a session asks about a group it does not belong to.
 //
@@ -136,17 +139,6 @@ func (d *DB) CreateGroup(tenant string, g Group, coordinator string, members []s
 		return ErrNoCoordinator
 	}
 	return d.g.Transaction(func(tx *gorm.DB) error {
-		// ONE COORDINATORSHIP PER SESSION, checked inside the transaction so two concurrent creations
-		// cannot both pass it. See ErrAlreadyCoordinating for why the rule exists.
-		var coordinating int64
-		if err := tx.Model(&GroupMember{}).
-			Where("tenant = ? AND session = ? AND role = ?", tenant, coordinator, GroupRoleCoordinator).
-			Count(&coordinating).Error; err != nil {
-			return err
-		}
-		if coordinating > 0 {
-			return ErrAlreadyCoordinating
-		}
 		var n int64
 		if err := tx.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, g.Name).
 			Count(&n).Error; err != nil {
@@ -266,30 +258,31 @@ func (d *DB) AddGroupMembers(tenant, group string, sessions []string, now, added
 }
 
 /**
- * CoordinatedGroup returns the group this session coordinates, or ("", nil, nil) when it coordinates none.
+ * CoordinatedGroups returns every group this session coordinates, oldest first.
  *
- * AT MOST ONE, by the constraint in CreateGroup. Callers get a name, not a list, because "which group am
- * I the coordinator of" has one answer — and a list would invite callers to handle a second entry that
- * cannot exist.
- */
-/**
- * CoordinatedGroup returns the group this session coordinates, or ("", nil) when it coordinates none.
+ * IT USED TO RETURN ONE, because a session could coordinate only one. A plural answer is what the caller needs
+ * now, and it is deliberately a LIST rather than "the first one":
  *
- * AT MOST ONE, by the constraint in CreateGroup. Callers get a name, not a list, because "which group am
- * I the coordinator of" has one answer — and a list would invite callers to handle a second entry that
- * cannot exist.
+ *   · the prompt has to tell a session about EVERY group it coordinates, or a message from the second one wakes
+ *     it with the wrong context — the defect the old rule was working around;
+ *   · `spawn` has to know which groups it may add a worker to, and picking "the first" would put the worker in a
+ *     group nobody named.
+ *
+ * SORTED BY NAME rather than by row order: the prompt is built from this on every turn, and an unstable order
+ * would rewrite the system prompt for no reason.
  */
-func (d *DB) CoordinatedGroup(tenant, session string) (string, error) {
-	var m GroupMember
-	err := d.g.Where("tenant = ? AND session = ? AND role = ?", tenant, session, GroupRoleCoordinator).
-		First(&m).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
+func (d *DB) CoordinatedGroups(tenant, session string) ([]string, error) {
+	var rows []GroupMember
+	if err := d.g.Where("tenant = ? AND session = ? AND role = ?",
+		tenant, session, GroupRoleCoordinator).Find(&rows).Error; err != nil {
+		return nil, err
 	}
-	if err != nil {
-		return "", err
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Group)
 	}
-	return m.Group, nil
+	sort.Strings(out)
+	return out, nil
 }
 
 /**
@@ -338,18 +331,6 @@ func (d *DB) SetGroupCoordinator(tenant, group, session string) error {
 		}
 		if n == 0 {
 			return ErrNotGroupMember
-		}
-		// THE NEW COORDINATOR MUST NOT ALREADY COORDINATE ANOTHER GROUP. Checked before the demotion so a
-		// refused move leaves the group exactly as it was, rather than briefly having no coordinator.
-		var already int64
-		if err := tx.Model(&GroupMember{}).
-			Where("tenant = ? AND session = ? AND role = ? AND \"group\" <> ?",
-				tenant, session, GroupRoleCoordinator, group).
-			Count(&already).Error; err != nil {
-			return err
-		}
-		if already > 0 {
-			return ErrAlreadyCoordinating
 		}
 		if err := tx.Model(&GroupMember{}).
 			Where("tenant = ? AND \"group\" = ? AND role = ?", tenant, group, GroupRoleCoordinator).

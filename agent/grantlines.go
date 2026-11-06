@@ -86,27 +86,40 @@ func toText(v any) string {
 }
 
 /**
- * groupEnv says which group this session belongs to, and what that group is for.
+ * groupEnv says which groups this session coordinates, and what each of them is for.
  *
- * A SESSION BELONGS TO AT MOST ONE GROUP THAT IT COORDINATES, but it may be a plain member of several. The
- * coordinator's group is the one that matters for the prompt: that is where the messages addressed to this
- * session arrive, and it is the only group whose purpose shapes what it should do. A member's groups are a
- * lookup away (group-list) and change nothing about how it should answer.
+ * ALL OF THEM, because a session may coordinate several. The one it is answering right now is decided by the
+ * message that woke it, which names its group; what the model cannot derive is the SET — without it a session
+ * would not know a second group exists, and would have to guess when a tool asks it to choose one.
  *
- * NIL, NOT AN EMPTY STRUCT, when the session coordinates nothing: the renderer then omits the section entirely,
- * which is the same rule the session's own intro follows.
+ * PLAIN MEMBERSHIPS ARE NOT LISTED. A group this session merely belongs to does not shape what it should do: it
+ * is addressed when someone names it, and `group-list` answers that question on demand. Listing them would put
+ * unrelated purposes in every turn's context.
+ *
+ * NIL, NOT AN EMPTY SLICE, when the session coordinates nothing: the renderer then omits the section, which is the
+ * same rule the session's own intro follows.
+ *
+ * A GROUP THAT CANNOT BE READ IS SKIPPED rather than failing the turn: a membership row pointing at a deleted
+ * group should cost one missing purpose line, not the conversation.
  */
-func (r *Runtime) groupEnv(tenant, session string) *GroupEnv {
+func (r *Runtime) groupEnv(tenant, session string) []GroupEnv {
 	if r.deps.DB == nil {
 		return nil
 	}
-	coordinated, err := r.deps.DB.CoordinatedGroup(tenant, session)
-	if err != nil || coordinated == "" {
+	names, err := r.deps.DB.CoordinatedGroups(tenant, session)
+	if err != nil || len(names) == 0 {
 		return nil
 	}
-	g, ok, err := r.deps.DB.GetGroup(tenant, coordinated)
-	if err != nil || !ok {
+	out := make([]GroupEnv, 0, len(names))
+	for _, name := range names {
+		g, ok, err := r.deps.DB.GetGroup(tenant, name)
+		if err != nil || !ok {
+			continue
+		}
+		out = append(out, GroupEnv{Name: g.Name, Intro: g.Intro, Coordinator: session})
+	}
+	if len(out) == 0 {
 		return nil
 	}
-	return &GroupEnv{Name: g.Name, Intro: g.Intro, Coordinator: session}
+	return out
 }

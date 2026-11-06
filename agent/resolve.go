@@ -78,12 +78,13 @@ type PlanInput struct {
 	// SessionIntro is the session's one-line description of itself, rendered into <env>.
 	SessionIntro string
 	/**
-	 * GroupEnv is the group this session coordinates (or belongs to), rendered into <env>.
+	 * GroupEnv is every group this session coordinates, rendered into <env>.
 	 *
 	 * NIL MEANS "NO GROUP", which is the ordinary case. A group's purpose cannot be recovered from the
-	 * transcript, so a coordinator woken by a group message would have to infer it from the member names.
+	 * transcript, so a coordinator woken by a group message would have to infer it from the member names —
+	 * and with several groups it could not even tell which one the message came from without the list.
 	 */
-	GroupEnv    *GroupEnv
+	GroupEnv    []GroupEnv
 	SessionMax  int
 	DeniedTools []string
 	// Grants summarises what this session may do, for the model's own benefit.

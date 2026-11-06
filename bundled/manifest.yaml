@@ -605,10 +605,11 @@ tools:
     # creates a group of the caller's own; no existing group changes
     effect: low
     description: >-
-      Create a group with THIS session as its coordinator, or report that one already exists.
+      Create a group with THIS session as its coordinator.
 
-      A session may coordinate at most ONE group. If you already coordinate one, this tool tells you
-      which — use it rather than creating a second, and use group-members to see who is in it.
+      A SESSION MAY COORDINATE ANY NUMBER OF GROUPS, so `name` is required — it is how you tell them
+      apart. Each group has its OWN transcript and its own members; work for one is not visible in
+      another.
 
       A group is how sessions talk to each other. There is no direct messaging: to give work to another
       session, put it in your group and address it with group-send.
@@ -616,10 +617,10 @@ tools:
       Requires the `group.create` permission, granted by the user.
     descriptions:
       zh: >-
-        创建一个以本会话为协调者的群；若已存在则直接告知。
+        创建一个以本会话为协调者的群。
 
-        一个会话最多只能是一个群的协调者。若你已经是某个群的协调者，本工具会告诉你它叫什么——请直接使用它，
-        用 group-members 查看成员，而不是再建一个。
+        **一个会话可以协调任意多个群**，所以 `name` 是必填的——它就是区分这些群的依据。每个群有自己的
+        对话记录和成员，一个群里的工作不会出现在另一个群里。
 
         群是会话之间唯一的通信方式。不存在直接私信：要把工作交给另一个会话，就把它放进你的群，然后用
         group-send 点名它。
@@ -631,22 +632,28 @@ tools:
         name:
           type: string
           description: >-
-            Optional group name. Defaults to a name derived from this session. Letters, digits, '_',
-            '-' and '.' only.
+            Required group name, unique in this tenant. Letters, digits, '_', '-' and '.' only.
+            NOT derived from the session: a session may own several groups, and "the one named after
+            me" stops meaning anything past the first.
           descriptions:
-            zh: 可选的群名称。默认由本会话名派生。只允许字母、数字、'_'、'-'、'.'。
-      required: []
+            zh: >-
+              必填的群名称，在本租户内唯一。只允许字母、数字、'_'、'-'、'.'。
+              **不再由会话名派生**：一个会话可以有多个群，第二个开始「以我命名」就失去意义。
+      required: [name]
     requires: [group.create]
 
   - name: spawn
     # creates a worker session; nothing existing changes
     effect: low
     description: >-
-      Fork THIS session into a new worker and put it in the group you coordinate, then hand it a task.
+      Fork THIS session into a new worker and put it in one of your groups, then hand it a task.
 
-      YOU MUST COORDINATE A GROUP. Being merely a member of one is not enough: a member that could add
+      YOU MUST COORDINATE THE GROUP. Being merely a member of one is not enough: a member that could add
       sessions would be a second way in, past the person who owns the group. If you coordinate none,
       create your own with group-create first.
+
+      `group` IS REQUIRED WHEN YOU COORDINATE MORE THAN ONE. With a single group it may be omitted. Naming a
+      group you do not coordinate is refused — guessing would file the worker under someone else's work.
 
       THE WORKER INHERITS YOUR PERMISSIONS MINUS BOTH GROUP GRANTS. `group.create` and `group.spawn`
       are removed, so it cannot assemble a group or put other sessions to work — each level would cost a
@@ -660,7 +667,10 @@ tools:
       do NOT poll, sleep, or duplicate the work. You will be resumed when the worker reports back.
     descriptions:
       zh: >-
-        把本会话 fork 出一个工作会话，放进**你作为协调者**的群，然后给它布置任务。
+        把本会话 fork 出一个工作会话，放进**你作为协调者**的某个群，然后给它布置任务。
+
+        **当你协调多个群时，必须用 `group` 指定这一个。** 只有一个群时可以省略。填写一个你不是协调者的
+        群会被拒绝——靠猜会把工作会话塞进别人负责的工作里。
 
         结果里会给出工作会话的 **id**——之后用 group-send 点名它时请填这个 id，而不是你请求的名称，
         因为显示名称不唯一。
@@ -677,6 +687,14 @@ tools:
     input_schema:
       type: object
       properties:
+        group:
+          type: string
+          description: >-
+            Which of your groups to put the worker in. REQUIRED when you coordinate more than one;
+            optional when you coordinate exactly one. Must be a group you coordinate.
+          descriptions:
+            zh: >-
+              把工作会话放进你的哪个群。**协调多个群时必填**；只有一个群时可省略。必须是你作为协调者的群。
         task:
           type: string
           description: The complete, self-contained task for the worker.
