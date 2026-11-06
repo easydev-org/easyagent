@@ -6,6 +6,7 @@ import (
 
 	"github.com/easydev-org/easyagent/agent"
 	"github.com/easydev-org/easyagent/llm"
+	"github.com/easydev-org/easyagent/store"
 )
 
 // stubDeps is a minimal Deps for tool tests.
@@ -63,6 +64,11 @@ func (d *stubDeps) SessionTip(_ string, sid string) string {
 	return ""
 }
 func (d *stubDeps) GroupsOfSession(string, string) ([]GroupRow, error) { return nil, nil }
+
+// NIL MEANS "NO ENFORCEMENT", which is what a stub that is not about permissions wants: the gate reads nil as
+// "nothing told me", not as "nothing held", so a test about tool behaviour is not silently turned into a test about
+// grants.
+func (d *stubDeps) SessionGrants(string, string) []store.GrantSnapshot { return nil }
 func (d *stubDeps) IsGroupMember(string, string, string) bool          { return false }
 func (d *stubDeps) GroupMemberProfiles(string, string) ([]GroupMemberRow, error) {
 	return nil, nil

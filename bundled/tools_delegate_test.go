@@ -2,8 +2,11 @@ package bundled
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/easydev-org/easyagent/store"
 )
 
 /**
@@ -33,6 +36,10 @@ type chainStub struct {
 	postedAttachments [][]string
 	forkExclude       []string
 	forkErr           error
+	// grants is what the permission gate reads. nil = no enforcement.
+	grants []store.GrantSnapshot
+	// coordinatedGroups overrides the derived single-group list, for tests about "several groups, one granted".
+	coordinatedGroups []string
 }
 
 func newChainStub() *chainStub {
@@ -43,11 +50,19 @@ func newChainStub() *chainStub {
 }
 
 func (c *chainStub) CoordinatedGroups(_, session string) ([]string, error) {
+	// THE LIST FORM IS SET EXPLICITLY BY TESTS ABOUT SEVERAL GROUPS; a single coordinated group is derived from the
+	// map so the older tests keep reading naturally.
+	if c.coordinatedGroups != nil {
+		return c.coordinatedGroups, nil
+	}
 	if g := c.coordinated[session]; g != "" {
 		return []string{g}, nil
 	}
 	return nil, nil
 }
+
+// SessionGrants makes the stub a permission source. NIL MEANS "NO ENFORCEMENT", which is what the older tests want.
+func (c *chainStub) SessionGrants(_, _ string) []store.GrantSnapshot { return c.grants }
 
 func (c *chainStub) CoordinatedGroupOrMembership(_, session string) string {
 	if g := c.coordinated[session]; g != "" {
@@ -959,5 +974,82 @@ func TestSpawnRefusesAGroupItDoesNotCoordinate(t *testing.T) {
 	}
 	if !strings.Contains(out.Content, "someone-elses") {
 		t.Errorf("the refusal should name the group:\n%s", out.Content)
+	}
+}
+
+/**
+ * THE GATE IS THE POINT: a grant for one group is not a grant for every group.
+ *
+ * THIS IS THE BEHAVIOUR PER-GROUP PERMISSIONS EXIST FOR. `spawn` requires `group.spawn` SCOPED TO THE GROUP IT NAMES.
+ * A session whose own room grants that may put workers to work there; a group a PERSON made grants nothing to its
+ * coordinator, so the same call must be refused.
+ *
+ * WITHOUT THE SCOPE both calls would pass, and every coordinator of every group could spawn — which is exactly the
+ * state this replaced.
+ *
+ * THE REFUSAL IS EXERCISED THROUGH Execute, not by calling the handler: the handler is what runs AFTER the gate, so
+ * calling it directly would pass whatever the gate decided and prove nothing.
+ */
+func TestSpawnIsRefusedInAGroupTheSessionWasNotGrantedFor(t *testing.T) {
+	c := newChainStub()
+	// THE STUB GRANTS group.spawn FOR `own` ONLY. `user-room` is a group the session coordinates but holds no
+	// permission for — the shape a person-made group has.
+	c.grants = []store.GrantSnapshot{
+		{ExtID: "bundled", Capability: "group.spawn", Scope: store.GroupScope("own")},
+		{ExtID: "bundled", Capability: "group.create", Scope: store.GroupScope("own")},
+	}
+	c.coordinated["alice"] = "user-room"
+	// BOTH GROUPS EXIST AND ALICE COORDINATES BOTH, so coordination cannot be why the call fails.
+	c.coordinatedGroups = []string{"own", "user-room"}
+	c.existing["alice"] = true
+
+	e := newChainExt(t, c)
+	args := `{"group":"user-room","task":"do it"}`
+
+	_, err := e.Execute(context.Background(), "t", "alice", "call-1", "spawn", args)
+	if err == nil {
+		t.Fatal("spawn was allowed in a group the session holds no permission for")
+	}
+	var denied *PermissionDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("err = %v, want a PermissionDeniedError", err)
+	}
+	if denied.Capability != "group.spawn" {
+		t.Errorf("denied capability = %q, want group.spawn", denied.Capability)
+	}
+
+	// AND THE SAME CALL IN THE GRANTED GROUP REACHES THE HANDLER — otherwise the test above would pass for the wrong
+	// reason (a gate that refuses everything).
+	if _, err := e.Execute(context.Background(), "t", "alice", "call-2", "spawn",
+		`{"group":"own","task":"do it"}`); err != nil {
+		t.Fatalf("spawn was refused inside the group it was granted for: %v", err)
+	}
+}
+
+/**
+ * THE GATE ALSO REFUSES A SESSION THAT HOLDS NOTHING AT ALL, with a different message than a scoped refusal.
+ *
+ * `[]store.GrantSnapshot{}` AND NOT `nil`: nil means "nobody told me what this session may do" — an unwired
+ * deployment or a test not about permissions — and is treated as no enforcement. An EMPTY slice means the source was
+ * asked and the answer was "nothing", which is a refusal.
+ */
+func TestSpawnIsRefusedWithoutAnyGroupSpawnGrant(t *testing.T) {
+	c := newChainStub()
+	c.grants = []store.GrantSnapshot{}
+	c.existing["alice"] = true
+	c.coordinatedGroups = []string{"g"}
+	c.coordinated["alice"] = "g"
+
+	e := newChainExt(t, c)
+	_, err := e.Execute(context.Background(), "t", "alice", "call-1", "spawn", `{"group":"g","task":"do it"}`)
+	if err == nil {
+		t.Fatal("spawn was allowed without the group.spawn permission")
+	}
+	var denied *PermissionDeniedError
+	if !errors.As(err, &denied) || denied.Capability != "group.spawn" {
+		t.Fatalf("err = %v, want a group.spawn refusal", err)
+	}
+	if denied.Scope != "" {
+		t.Errorf("scope = %q, want empty for an unscoped capability refusal", denied.Scope)
 	}
 }

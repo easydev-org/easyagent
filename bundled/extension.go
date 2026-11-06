@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/easydev-org/easyagent/agent"
+	"github.com/easydev-org/easyagent/store"
 )
 
 // Handler runs one tool. args is the parsed argument object.
@@ -241,7 +242,96 @@ func (e *Extension) Execute(ctx context.Context, tenant, session, _ /*callID*/, 
 			return agent.ToolOutcome{}, fmt.Errorf("bundled: %s: bad arguments: %w", name, err)
 		}
 	}
+	/**
+	 * THE PERMISSION GATE, HERE BECAUSE THIS IS THE BOUNDARY.
+	 *
+	 * A discovered extension is refused by the agent before the call crosses the bus, and then checks again against
+	 * the target only it understands. Bundled runs in this process and the composite calls it DIRECTLY — the agent's
+	 * gate is not on its path — so if the check is not here, `requires` in the manifest is a claim nobody verifies.
+	 *
+	 * IT WAS EXACTLY THAT: `spawn` declared `group.spawn`, the console offered the grant, and every session could
+	 * spawn anyway. The declaration looked authoritative, which is worse than not having one.
+	 */
+	if def, ok := e.Lookup(name); ok {
+		if missing, scope, denied := e.checkPermissions(tenant, session, def, parsed); denied {
+			return agent.ToolOutcome{}, &PermissionDeniedError{
+				Tool: name, Capability: missing, Scope: scope,
+			}
+		}
+	}
 	return h(ctx, tenant, session, parsed)
+}
+
+/**
+ * PermissionDeniedError is a refusal to run a bundled tool for lack of a grant.
+ *
+ * IT NAMES THE CAPABILITY, NOT THE TOOL'S TARGET, for the same reason the agent's equivalent does: at this point the
+ * arguments have not been interpreted, and a message naming the wrong group would send the reader looking at the
+ * wrong permission panel.
+ */
+type PermissionDeniedError struct {
+	Tool       string
+	Capability string
+	// Scope names the object the permission was checked for, when the tool's requirement is scoped. Empty for an
+	// unscoped capability.
+	Scope string
+}
+
+func (e *PermissionDeniedError) Error() string {
+	if e.Scope != "" {
+		return fmt.Sprintf(
+			"permission denied: %q requires the %q permission for %s, which this session does not hold. "+
+				"Being the coordinator of that group is not enough: the permission is granted per group.",
+			e.Tool, e.Capability, e.Scope)
+	}
+	return fmt.Sprintf("permission denied: %q requires the %q permission, which this session does not hold "+
+		"(grant it to this session, or for this group)", e.Tool, e.Capability)
+}
+
+/**
+ * checkPermissions answers "may this session run this tool with these arguments".
+ *
+ * TWO QUESTIONS, and the second is why `requires_scope` exists:
+ *
+ *	1. does it hold the capability AT ALL — unscoped, or for any object;
+ *	2. if the tool names the argument that scopes it, does it hold the capability FOR THAT OBJECT.
+ *
+ * THE SECOND IS WHAT MAKES A PER-GROUP GRANT MEAN ANYTHING. `group.spawn` narrowed to one group is a smaller
+ * authorisation than the bare capability, and a check that ignored the scope would quietly widen it back.
+ *
+ * NIL GRANTS MEANS NO ENFORCEMENT — a test or a deployment that has not wired the source. That is the honest
+ * reading of "nobody told me what this session may do": the alternative, refusing everything, would break every
+ * caller that predates the wiring.
+ */
+func (e *Extension) checkPermissions(tenant, session string, def agent.ToolDef, input map[string]any) (capability, scope string, denied bool) {
+	if len(def.Requires) == 0 {
+		return "", "", false
+	}
+	if e.deps == nil {
+		return "", "", false
+	}
+	grants := e.deps.SessionGrants(tenant, session)
+	if grants == nil {
+		return "", "", false
+	}
+	if missing, held := store.HasAnyCapability(grants, def.Requires); !held {
+		return missing, "", true
+	}
+	if def.RequiresScope == "" {
+		return "", "", false
+	}
+	object := strings.TrimSpace(strArg(input, def.RequiresScope))
+	if object == "" {
+		// A CALL WITH NO OBJECT IS LEFT TO THE TOOL, which can refuse a missing argument with a better message than
+		// "permission denied" — the latter would send the reader looking for a grant they already hold.
+		return "", "", false
+	}
+	for _, c := range def.Requires {
+		if !store.HasCapabilityInScope(grants, c, store.GroupScope(object)) {
+			return c, object, true
+		}
+	}
+	return "", "", false
 }
 
 func (e *Extension) qualToBare(name string) (string, bool) {

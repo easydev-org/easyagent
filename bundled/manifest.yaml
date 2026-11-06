@@ -645,6 +645,10 @@ tools:
   - name: spawn
     # creates a worker session; nothing existing changes
     effect: low
+    # THE GRANT IS CHECKED AGAINST THIS ARGUMENT, not just "does the session hold group.spawn at all". A session
+    # that may put workers to work inside its OWN room is not thereby allowed to do that inside a group a person
+    # made for something else — the difference is the group, and the group is named here.
+    requires_scope: group
     description: >-
       Fork THIS session into a new worker and put it in one of your groups, then hand it a task.
 

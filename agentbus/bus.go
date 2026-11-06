@@ -476,6 +476,9 @@ func (e *ToolExecutor) Refresh(ctx context.Context, maxWaitMs int) error {
 			// Permission keys the tool needs. Kept as declared: the agent only tests
 			// presence, and matching against a call's target happens in the extension.
 			def.Requires = t.Requires
+			// RequiresScope IS NOT CARRIED OVER THE WIRE: the discovery message has no such field, so a discovered
+			// extension's requirements stay unscoped. The bundled extension does not come through here — its
+			// definitions are the manifest structs, which carry the field.
 			/**
 			 * A TOOL WITHOUT A VALID EFFECT IS NOT REGISTERED AT ALL.
 			 *
@@ -634,8 +637,8 @@ func (e *ToolExecutor) Execute(ctx context.Context, tenant, session, callID, nam
 	// is the real boundary. Erring towards allowing is deliberate: a false positive costs
 	// one refused call, while a false negative would block work the user authorised.
 	grants := e.sessionGrants(ctx, tenant, session, extID)
-	if needs := e.requiresOf(name); len(needs) > 0 {
-		if missing, ok := store.HasAnyCapability(grants, needs); !ok {
+	if def, known := e.defOf(name); known {
+		if missing, allowed := e.missingCapability(def, grants, input); !allowed {
 			// NOTE IT WHERE SOMEBODY CAN FIND IT. The refusal is correct and the model reads it, but
 			// the person who could grant the permission is not looking at this turn — and by the time
 			// they are, this is several tool calls back in a transcript.

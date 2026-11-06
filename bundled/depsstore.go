@@ -49,10 +49,21 @@ type StoreDeps struct {
 	ExtConfigFn func(tenant, name, session string) (string, bool)
 	// SessionVar reads a projected session variable (e.g. locale).
 	SessionVarFn func(tenant, session, name string) (string, bool)
+	// GrantsFn reads a session's live grants for THIS extension. nil = no enforcement, which is only correct in a
+	// test that is not about permissions.
+	GrantsFn func(tenant, session string) []store.GrantSnapshot
 	// Mail publishes a mailbox message (bus when wired, else the store queue).
 	MailFn func(tenant, session string, typ mailbox.Type, payload any, source string) error
 	// OnIngest is called after a generated blob is stored (e.g. media probe).
 	OnIngestFn func(ctx context.Context, tenant, code, name, mime string, data []byte)
+}
+
+// SessionGrants implements Deps.
+func (d *StoreDeps) SessionGrants(tenant, session string) []store.GrantSnapshot {
+	if d.GrantsFn == nil {
+		return nil
+	}
+	return d.GrantsFn(tenant, session)
 }
 
 // SessionVariable implements Deps.
@@ -286,6 +297,26 @@ func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) (st
 	}
 	if err := d.DB.CreateGroup(tenant, g, coordinator, nil, now); err != nil {
 		return "", err
+	}
+	/**
+	 * THE SESSION GETS ITS GROUP PERMISSIONS FOR THE GROUP IT JUST MADE.
+	 *
+	 * A GROUP A SESSION BUILT FOR ITSELF is the case where it may put workers to work inside it: that is what
+	 * `group-create` then `spawn` MEANS, and refusing the second after allowing the first would make the pair
+	 * pointless.
+	 *
+	 * THE GRANT IS SCOPED TO THIS GROUP, so the permission does not leak to a group a person made — which is the
+	 * distinction the scope exists for. A session coordinating a person's group does not thereby gain the right to
+	 * create sessions inside it.
+	 *
+	 * A FAILED GRANT IS NOT A FAILED CREATION: the group is real and usable, and the next `spawn` reports the
+	 * missing permission with a message that names it.
+	 */
+	for _, capability := range []string{"group.create", "group.spawn", "group.send"} {
+		_, _, _ = d.DB.EnsureGrant(tenant, coordinator, store.SessionGrant{
+			ExtID: "bundled", Capability: capability, Risk: "write",
+			Scope: store.GroupScope(g.ID), GrantedBy: "auto:group-create:" + g.ID,
+		})
 	}
 	// THE ID IS RETURNED because it is what the caller needs for everything after: addressing the group, adding
 	// members, deleting it on failure. The name it passed in is a label, and going back to the database to translate

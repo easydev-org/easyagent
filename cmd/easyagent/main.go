@@ -565,6 +565,22 @@ func bundledDeps(
 	channelPublish *func(string, string, string, any, string) error,
 ) *bundled.StoreDeps {
 	d := &bundled.StoreDeps{DB: db}
+	/**
+	 * THE IN-PROCESS EXTENSION CHECKS ITS OWN PERMISSIONS, because nothing behind it does.
+	 *
+	 * A discovered extension is gated twice: the agent refuses the call before it crosses the bus, and the extension
+	 * re-checks against the target it alone can interpret. Bundled is called directly by the composite — the gate it
+	 * would have gone through is not on its path — so this function IS the boundary for `group.create` and
+	 * `group.spawn`. Without it the manifest's `requires` was a claim nobody verified.
+	 */
+	d.GrantsFn = func(tenant, session string) []store.GrantSnapshot {
+		byExt, err := db.GrantsByExt(tenant, session)
+		if err != nil {
+			// FAIL CLOSED. A store that cannot answer "what may this session do" must not be read as "everything".
+			return nil
+		}
+		return byExt["bundled"]
+	}
 	d.ConfigFn = func(tenant, key string) (string, bool) { return cfg.Get(tenant, key) }
 	// AN EXTENSION-SCOPED READER, because the console writes there and `cfg.Get` does not look: the
 	// bundled tools read "" for every knob a user had set. See StoreDeps.ExtConfigFn.

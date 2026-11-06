@@ -63,22 +63,39 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 		t.Errorf("code = %v, want NotFound (PermissionDenied would confirm the group exists)", got)
 	}
 
-	// AND THE LIST IS FILTERED THE SAME WAY: carol sees nothing, not an empty-looking entry for a
-	// group she cannot open.
+	/**
+	 * AND THE LIST IS FILTERED THE SAME WAY: carol sees ONLY HER OWN ROOM, never the group she is not in.
+	 *
+	 * EVERY SESSION HAS ONE now — the room it was created with — so "sees nothing" is no longer the shape of the
+	 * assertion. What must not appear is `incident-42`: a group she cannot open must not even be named to her.
+	 */
 	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: carol})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Groups) != 0 {
-		t.Errorf("non-member sees %d groups, want 0", len(list.Groups))
+	for _, g := range list.Groups {
+		if g.Name == "incident-42" {
+			t.Errorf("a non-member sees %q, want it filtered out", g.Name)
+		}
+	}
+	if len(list.Groups) != 1 || list.Groups[0].Name != "carol" {
+		t.Errorf("carol's groups = %v, want only her own room", list.Groups)
 	}
 
 	list, err = c.ListGroups(ctx, &agentv1.ListGroupsRequest{Session: bob})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Groups) != 1 || list.Groups[0].Name != "incident-42" {
-		t.Errorf("bob's groups = %v, want [incident-42]", list.Groups)
+	// BOB SEES HIS OWN ROOM AND THE GROUP HE WAS ADDED TO — and nothing else.
+	bobSees := map[string]bool{}
+	for _, g := range list.Groups {
+		bobSees[g.Name] = true
+	}
+	if !bobSees["incident-42"] || !bobSees["bob"] {
+		t.Errorf("bob's groups = %v, want his room and incident-42", list.Groups)
+	}
+	if len(list.Groups) != 2 {
+		t.Errorf("bob sees %d groups, want exactly his room and incident-42: %v", len(list.Groups), list.Groups)
 	}
 }
 
@@ -112,7 +129,14 @@ func TestCreateGroupHasNoSessionCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Groups) != 1 {
+	// THE COORDINATOR SEES THE GROUP IT WAS PUT IN CHARGE OF, alongside the room it owns.
+	var sawSolo bool
+	for _, g := range list.Groups {
+		if g.Name == "solo-group" {
+			sawSolo = true
+		}
+	}
+	if !sawSolo {
 		t.Errorf("the coordinator must see its own group, got %v", list.Groups)
 	}
 }
@@ -385,8 +409,17 @@ func TestRenamingAGroupKeepsItsHistoryAndMembers(t *testing.T) {
 	}
 }
 
-// A RENAME ONTO A TAKEN NAME IS REFUSED: two groups with one label defeats the only reason the label is unique.
-func TestRenamingAGroupRefusesACollision(t *testing.T) {
+/**
+ * TWO GROUPS MAY SHARE A LABEL, because the label is not the identity.
+ *
+ * IT USED TO BE UNIQUE, which was a leftover from when the name WAS the identity — and it made the room created for
+ * a session collision-prone exactly when a tenant had two sessions doing similar work. Nothing routes by the label,
+ * so a repeat changes nothing: both groups stay addressable by id, and renaming one onto the other's label is an
+ * ordinary edit rather than a conflict.
+ *
+ * THE ASSERTION THAT MATTERS IS THAT THEY STAY DISTINCT: same name, different ids, different transcripts.
+ */
+func TestGroupsMayShareALabel(t *testing.T) {
 	ts, db, _ := newTestServerWith(t, nil)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
@@ -397,16 +430,42 @@ func TestRenamingAGroupRefusesACollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "b", Coordinator: coord, CreatedBy: "user"}); err != nil {
+	b, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "b", Coordinator: coord, CreatedBy: "user"})
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	taken := "b"
-	_, err = c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: a.Group.Id, Name: &taken})
-	if err == nil {
-		t.Fatal("a rename onto a taken name was accepted")
+	same := "a"
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: b.Group.Id, Name: &same}); err != nil {
+		t.Fatalf("a rename onto a shared label was refused: %v", err)
 	}
-	if got := connect.CodeOf(err); got != connect.CodeAlreadyExists {
-		t.Errorf("code = %v, want AlreadyExists", got)
+
+	first, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: a.Group.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: b.Group.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Group.Name != "a" || second.Group.Name != "a" {
+		t.Errorf("names = %q and %q, want both to read \"a\"", first.Group.Name, second.Group.Name)
+	}
+	if first.Group.Id == second.Group.Id {
+		t.Error("the two groups collapsed into one")
+	}
+
+	// AND THE ID STILL TELLS THEM APART WHERE IT MATTERS: a message lands in exactly one transcript.
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		GroupId: a.Group.Id, Text: "for the first one",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: b.Group.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs.Messages) != 0 {
+		t.Errorf("the second group received %d messages, want 0", len(msgs.Messages))
 	}
 }

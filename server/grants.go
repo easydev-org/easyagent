@@ -61,6 +61,7 @@ func (s *Server) CreateGrant(ctx context.Context, req *agentv1.CreateGrantReques
 	}
 
 	row, err := s.db.AddGrant(tenant, req.GetId(), store.SessionGrant{
+		Scope:      req.GetScope(),
 		ExtID:      req.GetExtId(),
 		Capability: req.GetCapability(),
 		Params:     params,
@@ -117,6 +118,7 @@ func grantToMsg(r store.SessionGrant) *agentv1.Grant {
 		Capability: r.Capability,
 		Params:     r.Params,
 		Risk:       r.Risk,
+		Scope:      r.Scope,
 		GrantedAt:  r.GrantedAt,
 		GrantedBy:  r.GrantedBy,
 	}

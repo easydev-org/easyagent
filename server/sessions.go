@@ -110,7 +110,15 @@ func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRe
 	s.notifyListChange(tenant, agentbus.SessionListChange{
 		Kind: agentbus.ListKindSession, Name: in.ID,
 	})
-	return &agentv1.CreateSessionResponse{Ok: true, SessionId: in.ID, Name: in.Name}, nil
+	/**
+	 * A SESSION A PERSON MADE GETS ITS OWN ROOM, and it is announced before the response so the console can open
+	 * straight into it. A session created by `spawn` never reaches this handler — it is forked by the tool — so the
+	 * worker exclusion is structural rather than a flag checked here.
+	 */
+	groupID := s.setupSessionGroup(ctx, tenant, in.ID, in.Name, "auto:create:"+in.ID)
+	return &agentv1.CreateSessionResponse{
+		Ok: true, SessionId: in.ID, Name: in.Name, GroupId: groupID,
+	}, nil
 }
 
 // GetSession returns one session.
@@ -141,6 +149,15 @@ func (s *Server) DeleteSession(ctx context.Context, req *agentv1.DeleteSessionRe
 	// Best-effort: the session is already gone, and failing here would report an error for a deletion
 	// that succeeded. A leftover row is repaired by the next group read, which cannot resolve it.
 	_ = s.db.DeleteGroupMemberships(tenant, req.Id)
+	/**
+	 * THE DELETED SESSION TAKES ITS OWN ROOM WITH IT. An auto-created group exists to direct that one session, so
+	 * once the session is gone the room addresses nobody — and it would sit in the list forever as a place a person
+	 * could type into and get no reply.
+	 *
+	 * GROUPS A PERSON MADE ARE NOT TOUCHED, even when this session coordinated them. They belong to the person; the
+	 * membership cleanup above removes the session from them, which is the whole of its involvement.
+	 */
+	s.deleteSessionGroups(ctx, tenant, req.Id)
 	s.lifecycleFire(ctx, tenant, "deleted", req.Id, map[string]any{"kind": "deleted", "tenant": tenant, "session_name": req.Id})
 	// THE ROW IS GONE, so every replica's list must drop it — not just the replica that served the delete.
 	s.notifyListChange(tenant, agentbus.SessionListChange{
@@ -399,8 +416,18 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	}
 	s.publish(tenant, in.ID, "session-changed", map[string]any{"session_id": in.ID})
 	s.lifecycleFire(ctx, tenant, "forked", in.ID, map[string]any{"kind": "forked", "tenant": tenant, "parent": req.Id})
+	/**
+	 * A FORK A PERSON MADE ALSO GETS A ROOM. It is a session they intend to direct — often the point of forking is
+	 * to send the branch somewhere else and watch — so it needs the same first-person screen the original had.
+	 *
+	 * THE FORK DOES NOT INHERIT THE PARENT'S GROUP MEMBERSHIPS, which is unchanged and separate: this mints a new
+	 * group of its own rather than joining the parent's. What it DOES inherit is the parent's grants, including any
+	 * scoped to a group the fork is not in — the scope is a fact about the grant, not about membership, and inheriting
+	 * "may spawn in group X" is exactly as harmless after a fork as it was before.
+	 */
+	groupID := s.setupSessionGroup(ctx, tenant, in.ID, in.Name, "auto:fork:"+req.Id)
 	row, _, _ := s.db.GetSession(tenant, in.ID)
-	return &agentv1.ForkResponse{Session: sessionToMsg(*row, "idle")}, nil
+	return &agentv1.ForkResponse{Session: sessionToMsg(*row, "idle"), GroupId: groupID}, nil
 }
 
 // MarkRead advances the shared read watermark.

@@ -31,6 +31,13 @@ type manifestTool struct {
 	 * layer or it does not exist.
 	 */
 	Requires []string `yaml:"requires"`
+	/**
+	 * RequiresScope names the argument that says WHICH object a requirement is scoped to (see agent.ToolDef).
+	 *
+	 * OMITTED MEANS UNSCOPED, which is the right default: a capability that is not about a particular object should
+	 * not acquire an argument-shaped hole in its check just because the field exists.
+	 */
+	RequiresScope string `yaml:"requires_scope"`
 	// Effect is no | low | mid | high (see agent.Effect). REQUIRED: leaving it out would let a tool
 	// default to something nobody chose, and a `high` tool declared as `no` is a risk the user is never
 	// told about.
@@ -127,6 +134,7 @@ func parseManifestBytes(data []byte) (Manifest, error) {
 			InputSchema:    t.InputSchema,
 			RequiredConfig: t.RequiredConfig,
 			Requires:       t.Requires,
+			RequiresScope:  t.RequiresScope,
 			Effect:         eff,
 		})
 	}

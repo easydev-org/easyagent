@@ -665,13 +665,29 @@ func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// An empty group has no preview, and that must not be an error.
+	/**
+	 * AN EMPTY GROUP HAS NO PREVIEW, and that must not be an error.
+	 *
+	 * THE LIST ALSO CONTAINS THE COORDINATOR'S OWN ROOM now, which is empty for the same reason. The lookup is by
+	 * id, because that is what identifies the group under test — a name would match the room too, since a session and
+	 * its room share a label.
+	 */
+	gid := groupIDByName(t, c, "g")
 	list, err := c.ListGroups(ctx, &agentv1.ListGroupsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Groups) != 1 || list.Groups[0].LastMessagePreview != "" {
-		t.Fatalf("empty group = %+v", list.Groups)
+	var empty *agentv1.Group
+	for _, g := range list.Groups {
+		if g.Id == gid {
+			empty = g
+		}
+	}
+	if empty == nil {
+		t.Fatalf("the group is missing from the list: %+v", list.Groups)
+	}
+	if empty.LastMessagePreview != "" {
+		t.Fatalf("an empty group has preview %q", empty.LastMessagePreview)
 	}
 
 	// A message with words becomes the preview, with its timestamp.
@@ -684,7 +700,15 @@ func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g := list.Groups[0]
+	var g *agentv1.Group
+	for _, row := range list.Groups {
+		if row.Id == gid {
+			g = row
+		}
+	}
+	if g == nil {
+		t.Fatalf("the group disappeared from the list: %+v", list.Groups)
+	}
 	if g.LastMessagePreview != "please check main" {
 		t.Errorf("preview = %q, want the newest message", g.LastMessagePreview)
 	}
@@ -699,8 +723,14 @@ func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, _ = c.ListGroups(ctx, &agentv1.ListGroupsRequest{})
-	if got := list.Groups[0].LastMessagePreview; got != "please check main" {
-		t.Errorf("preview = %q after an attachment-only post, want the words before it", got)
+	for _, row := range list.Groups {
+		if row.Id != gid {
+			continue
+		}
+		if row.LastMessagePreview != "please check main" {
+			t.Errorf("preview = %q after an attachment-only post, want the words before it",
+				row.LastMessagePreview)
+		}
 	}
 }
 

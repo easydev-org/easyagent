@@ -31,6 +31,21 @@ type SessionGrant struct {
 	Capability string `gorm:"column:capability;size:128;index"`
 	// Params is opaque JSON text. Empty for a boolean permission.
 	Params string `gorm:"column:params;type:text"`
+	/**
+	 * Scope NARROWS a grant to one object, when the capability is about a particular one.
+	 *
+	 * EMPTY MEANS "EVERYWHERE", which is what almost every grant is: "may merge in this repository" is already
+	 * narrowed by Params, and "may read files" is not about an object at all.
+	 *
+	 * THE GROUP CAPABILITIES ARE THE CASE THIS EXISTS FOR. `group.spawn` means "may put sessions to work" — and the
+	 * question a gate actually has to answer is "may it do that IN THIS GROUP". A session that may spawn inside the
+	 * group a person created for it is not thereby allowed to spawn inside a group it created for itself, and the
+	 * only way to say that is to record which group the permission was given for.
+	 *
+	 * `group:<id>` is the shape. It is OPAQUE here, like Params: this field records a string the caller chose, and
+	 * the caller that reads it is the one that knows the prefix.
+	 */
+	Scope string `gorm:"column:scope;size:128;index"`
 	// Risk is copied from the declaration so a client can render a list without
 	// fetching every manifest: read | write | destructive.
 	Risk string `gorm:"column:risk;size:32"`
@@ -68,7 +83,7 @@ func (d *DB) AddGrant(tenant, session string, g SessionGrant) (SessionGrant, err
 	row := SessionGrant{
 		Tenant: tenant, Session: session, ID: newGrantID(),
 		ExtID: g.ExtID, Capability: g.Capability, Params: g.Params, Risk: g.Risk,
-		GrantedAt: now, GrantedBy: g.GrantedBy,
+		Scope: g.Scope, GrantedAt: now, GrantedBy: g.GrantedBy,
 	}
 	if row.GrantedBy == "" {
 		row.GrantedBy = "user"
@@ -77,6 +92,37 @@ func (d *DB) AddGrant(tenant, session string, g SessionGrant) (SessionGrant, err
 		return SessionGrant{}, err
 	}
 	return row, nil
+}
+
+/**
+ * EnsureGrant records one authorisation unless an identical live one already exists.
+ *
+ * DIFFERENT FROM AddGrant, WHICH ALWAYS INSERTS. Two grants for the same (capability, scope) are not two
+ * permissions — unlike Params, where the same capability on two repositories is genuinely two authorisations. A
+ * duplicate row here would show the user the same permission twice and make a revoke look half-done.
+ *
+ * IT MATTERS BECAUSE THE CALLERS ARE RETRIED PATHS: session creation, group creation and fork all re-run on a
+ * client retry, and the grant they write is derived from something that has not changed.
+ *
+ * Returns (grant, created, error); `created` is false when an identical live grant was already there.
+ */
+func (d *DB) EnsureGrant(tenant, session string, g SessionGrant) (SessionGrant, bool, error) {
+	var existing SessionGrant
+	err := d.g.Where(
+		"tenant = ? AND session = ? AND ext_id = ? AND capability = ? AND scope = ? AND revoked_at IS NULL",
+		tenant, session, g.ExtID, g.Capability, g.Scope,
+	).First(&existing).Error
+	if err == nil {
+		return existing, false, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return SessionGrant{}, false, err
+	}
+	row, err := d.AddGrant(tenant, session, g)
+	if err != nil {
+		return SessionGrant{}, false, err
+	}
+	return row, true, nil
 }
 
 // ListGrants returns a session's live grants, ordered for display.
@@ -149,6 +195,10 @@ func (d *DB) CopyGrantsFromExcept(tenant, from, to string, except map[string]boo
 		out = append(out, SessionGrant{
 			Tenant: tenant, Session: to, ID: newGrantID(),
 			ExtID: r.ExtID, Capability: r.Capability, Params: r.Params, Risk: r.Risk,
+			// THE SCOPE TRAVELS WITH THE GRANT. A fork that inherited "may spawn in group X" but not the scope would
+			// hold the capability for EVERY group — a wider permission than the parent had, granted by an operation
+			// nobody described as an escalation.
+			Scope:     r.Scope,
 			GrantedAt: now, GrantedBy: "auto:fork:" + from,
 		})
 	}
@@ -169,6 +219,8 @@ type GrantSnapshot struct {
 	ExtID      string
 	Capability string
 	Params     string
+	// Scope is the object a grant was narrowed to, or "" for everywhere. See SessionGrant.Scope.
+	Scope string
 }
 
 // GrantsByExt groups a session's live grants by extension.
@@ -184,7 +236,7 @@ func (d *DB) GrantsByExt(tenant, session string) (map[string][]GrantSnapshot, er
 	out := make(map[string][]GrantSnapshot, 4)
 	for _, r := range rows {
 		out[r.ExtID] = append(out[r.ExtID], GrantSnapshot{
-			ExtID: r.ExtID, Capability: r.Capability, Params: r.Params,
+			ExtID: r.ExtID, Capability: r.Capability, Params: r.Params, Scope: r.Scope,
 		})
 	}
 	return out, nil
@@ -196,6 +248,38 @@ func (d *DB) GrantsByExt(tenant, session string) (map[string][]GrantSnapshot, er
 // This is the agent's whole check, and it is intentionally shallow: it answers "could this
 // possibly be allowed", never "is this call covered". A false positive costs one call the
 // extension then refuses; a false negative would block work the user authorised.
+/**
+ * GroupScope is the scope value that narrows a grant to one group.
+ *
+ * THE PREFIX IS PART OF THE VALUE, so a scope is self-describing: `group:<id>` says which kind of object it names
+ * without the reader having to consult the capability it was granted for. A bare id would be ambiguous the moment a
+ * second object kind needs scoping, and the column stores one string.
+ */
+func GroupScope(groupID string) string { return "group:" + groupID }
+
+/**
+ * HasCapabilityInScope reports whether a set of grants covers one capability for one object.
+ *
+ * A GRANT WITH NO SCOPE COVERS EVERYTHING. That is what almost every permission is, and it is what makes this a
+ * narrowing rather than a new requirement: an unscoped `group.spawn` still means "anywhere", which is how the
+ * capability behaved before scopes existed.
+ *
+ * THE SCOPED FORM IS AN ADDITION, NOT A REPLACEMENT. A session that was granted `group.spawn` for one group and
+ * nothing else holds it there, fails the check for a group it was not granted, and fails the unscoped check too —
+ * which is the point: the narrow grant must not read as the broad one.
+ */
+func HasCapabilityInScope(grants []GrantSnapshot, capability, scope string) bool {
+	for _, g := range grants {
+		if g.Capability != capability {
+			continue
+		}
+		if g.Scope == "" || g.Scope == scope {
+			return true
+		}
+	}
+	return false
+}
+
 func HasAnyCapability(grants []GrantSnapshot, keys []string) (missing string, ok bool) {
 	if len(keys) == 0 {
 		return "", true

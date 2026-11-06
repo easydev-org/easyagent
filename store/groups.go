@@ -40,10 +40,14 @@ type Group struct {
 	/**
 	 * Name is what a person calls this group — shown in lists, in the chat header, in member lists.
 	 *
-	 * NOT the identity. It is unique per tenant so that a person can tell two groups apart by sight, but nothing
-	 * ROUTES by it, which is what makes renaming a supported operation rather than a migration.
+	 * NOT UNIQUE, AND NOT THE IDENTITY. Two groups may share a label for the same reason two sessions may: the
+	 * name describes the work, and forcing a suffix would make the label serve the database. Nothing routes by it,
+	 * so nothing breaks when it repeats or changes.
+	 *
+	 * IT USED TO BE UNIQUE, which was a leftover from when it WAS the identity — and it made the auto-created group
+	 * for a session collision-prone exactly when a tenant had two sessions doing similar work.
 	 */
-	Name string `gorm:"column:name;size:128;uniqueIndex:uq_groups_tenant_name,priority:2"`
+	Name string `gorm:"column:name;size:128;index:idx_groups_tenant_name,priority:2"`
 
 	/**
 	 * AvatarFile is the group's picture, in the same `file:<code>` form a session uses.
@@ -121,7 +125,8 @@ func (GroupMember) TableName() string { return "group_members" }
 // ErrGroupNotFound is returned when a group does not exist for the tenant.
 var ErrGroupNotFound = errors.New("group not found")
 
-// ErrGroupExists is returned when creating a group whose name is taken.
+// ErrGroupExists is retained for callers that still branch on it, but creating a group can no longer produce it:
+// names are not unique. See Group.Name.
 var ErrGroupExists = errors.New("group already exists")
 
 // ErrNoCoordinator is returned when a group is created or edited without exactly one coordinator.
@@ -179,16 +184,6 @@ func (d *DB) CreateGroup(tenant string, g *Group, coordinator string, members []
 		g.ID = id
 	}
 	return d.g.Transaction(func(tx *gorm.DB) error {
-		// THE NAME IS UNIQUE PER TENANT so a person can tell two groups apart by sight. It is not the identity and
-		// nothing routes by it, which is what makes renaming an edit rather than a migration.
-		var n int64
-		if err := tx.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, g.Name).
-			Count(&n).Error; err != nil {
-			return err
-		}
-		if n > 0 {
-			return ErrGroupExists
-		}
 		g.Tenant = tenant
 		if err := tx.Create(g).Error; err != nil {
 			return err
@@ -214,6 +209,22 @@ func (d *DB) CreateGroup(tenant string, g *Group, coordinator string, members []
 		}
 		return nil
 	})
+}
+
+/**
+ * GroupsCreatedBy returns the groups one creator made, sorted by name.
+ *
+ * PROVENANCE IS THE ONLY WAY TO TELL an auto-created room from a group a person made: both are ordinary rows, and the
+ * question "which of these should disappear with this session" has no answer in the membership table — a person's
+ * group that this session coordinates looks identical there.
+ */
+func (d *DB) GroupsCreatedBy(tenant, createdBy string) ([]Group, error) {
+	var groups []Group
+	if err := d.g.Where("tenant = ? AND created_by = ?", tenant, createdBy).
+		Order("name").Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	return groups, nil
 }
 
 /**
@@ -253,14 +264,7 @@ func (d *DB) GroupByName(tenant, name string) (*Group, bool, error) {
  * operation was a migration, and nobody had written it.
  */
 func (d *DB) RenameGroup(tenant, id, name, now string) error {
-	var n int64
-	if err := d.g.Model(&Group{}).Where("tenant = ? AND name = ? AND id <> ?", tenant, name, id).
-		Count(&n).Error; err != nil {
-		return err
-	}
-	if n > 0 {
-		return ErrGroupExists
-	}
+	// NO COLLISION CHECK, because there is nothing to collide with: the name is a label and the id is the identity.
 	return d.g.Model(&Group{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{"name": name, "updated_at": now}).Error
 }

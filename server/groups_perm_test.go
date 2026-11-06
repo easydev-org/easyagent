@@ -123,21 +123,40 @@ func TestGroupCreateGrantIsPerSession(t *testing.T) {
 		t.Fatal("the grant did not stick")
 	}
 
-	// The other session holds nothing: the grant is not an extension-wide switch.
+	/**
+	 * THE OTHER SESSION HOLDS NOTHING *UNSCOPED*: the grant is not an extension-wide switch.
+	 *
+	 * IT DOES HOLD `group.create` SCOPED TO ITS OWN ROOM, because every session gets one at creation and may build
+	 * more groups inside it. That is a different authorisation — it says nothing about a group a person made — so it
+	 * is filtered out here. Counting it would make this test assert that a session has no room, which is not the
+	 * property under test.
+	 */
 	other, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: untrusted})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, g := range other.Grants {
-		if g.Capability == "group.create" {
+		if g.Capability == "group.create" && g.Scope == "" {
 			t.Error("group.create leaked to a session that was never granted it")
 		}
 	}
 
 	// And revoking takes it away again, which is the only way a user can undo the decision.
+	//
+	// THE UNSCOPED ROW IS THE ONE TO REVOKE. `grants.Grants[0]` was whichever row sorted first, and with a scoped
+	// grant present that could be the room's own permission — revoking that would prove nothing about this grant.
+	var unscopedID string
+	for _, g := range grants.Grants {
+		if g.Capability == "group.create" && g.Scope == "" {
+			unscopedID = g.Id
+		}
+	}
+	if unscopedID == "" {
+		t.Fatal("the explicit grant is not in the list")
+	}
 	if err := func() error {
 		_, err := c.RevokeGrant(ctx, &agentv1.RevokeGrantRequest{
-			Id: trusted, GrantId: grants.Grants[0].Id,
+			Id: trusted, GrantId: unscopedID,
 		})
 		return err
 	}(); err != nil {
@@ -148,7 +167,7 @@ func TestGroupCreateGrantIsPerSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range after.Grants {
-		if g.Capability == "group.create" {
+		if g.Capability == "group.create" && g.Scope == "" {
 			t.Error("the grant survived its revocation")
 		}
 	}

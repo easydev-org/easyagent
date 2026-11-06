@@ -410,8 +410,15 @@ message CreateSessionResponse {
 
   // The server-assigned identity. Use this for every subsequent call.
   string session_id = 3;
+  /**
+   * THE GROUP CREATED FOR THIS SESSION, so the console can open the room instead of the transcript.
+   *
+   * A caller that has to find it would list every group and match on a label — which is not unique, and is exactly
+   * the lookup the id exists to remove. Empty means the group could not be created; the session is still usable.
+   */
+  string group_id = 4;
   // The display label the caller asked for (may be empty).
-  string name = 4;
+  string name = 5;
 }
 
 message GetSessionRequest { string id = 1; }
@@ -502,7 +509,16 @@ enum ForkPermissionPolicy {
   FORK_PERMISSION_POLICY_INHERIT_NONE = 1;
   FORK_PERMISSION_POLICY_INHERIT_EXCEPT_SOME = 2;
 }
-message ForkResponse { Session session = 1; }
+message ForkResponse {
+  Session session = 1;
+  /**
+   * The group created for the fork, on the same terms as CreateSessionResponse.group_id.
+   *
+   * THE FORK GETS ITS OWN, it does not inherit the parent's: it is a different session that a person will direct
+   * separately, and the parent's room keeps meaning what it meant.
+   */
+  string group_id = 2;
+}
 
 message RenameRequest { string id = 1; string name = 2; }
 message RenameResponse { Session session = 1; }
@@ -536,6 +552,14 @@ message Grant {
   // granted_by records provenance: "user", "auto:fork:<parent>", "auto:preset:<name>".
   // A permission a user does not remember adding should say where it came from.
   string granted_by = 7;
+  /**
+   * scope narrows the grant to one object, `group:<id>` for the group capabilities. EMPTY MEANS EVERYWHERE.
+   *
+   * IT IS ON THE WIRE BECAUSE OTHERWISE THE PANEL LIES. Three rows saying `group.spawn` looked like three copies of
+   * one permission, and a user could not tell which group each was for — or that granting one group did not grant
+   * another.
+   */
+  string scope = 8;
 }
 
 message ListGrantsRequest { string id = 1; }
@@ -595,6 +619,8 @@ message CreateGrantRequest {
   // params is the JSON text for THIS instance. Empty for a boolean capability.
   string params = 4;
   string risk = 5;
+  // scope narrows the grant to one object (`group:<id>`), empty for everywhere. See Grant.scope.
+  string scope = 6;
 }
 message CreateGrantResponse { Grant grant = 1; }
 

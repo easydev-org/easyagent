@@ -6,11 +6,26 @@ package bundled
 
 import (
 	"github.com/easydev-org/easyagent/llm"
+	"github.com/easydev-org/easyagent/store"
 )
 
 // Deps are the host capabilities the bundled tools need. agent-go supplies an
 // implementation backed by the store + bus + blob + provider registry.
 type Deps interface {
+	/**
+	 * SessionGrants returns the session's live grants for THIS extension.
+	 *
+	 * THE IN-PROCESS EXTENSION HAS TO CHECK ITSELF. A discovered extension is gated by the agent before the call
+	 * crosses the bus, and then checks again against its own knowledge of the target — it is the boundary. Bundled
+	 * runs in this process, so the agent's composite routes its calls straight here; there is no second gate behind
+	 * this method. A `requires` on a bundled tool that nobody read was a declaration with no effect, which is how
+	 * `group.spawn` behaved: the manifest said the tool needed it, and every session could call it.
+	 *
+	 * RETURNS THE SCOPED FORM, because the group capabilities are per-group. A caller that reduced this to "does the
+	 * session hold the key at all" would make a grant for one group read as a grant for every group.
+	 */
+	SessionGrants(tenant, session string) []store.GrantSnapshot
+
 	// --- locale ---
 	// SessionVariable reads a session-scoped variable the agent projects
 	// (provider "agent", name "locale"). Returns ("", false) when unset.

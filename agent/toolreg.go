@@ -26,6 +26,19 @@ type ToolDef struct {
 	// in its own tool and is the real boundary.
 	Requires []string
 	/**
+	 * RequiresScope names the ARGUMENT that the requirement is scoped to, or "" for a capability that is not about a
+	 * particular object.
+	 *
+	 * `group.spawn` means "may put sessions to work" — and the question a gate has to answer is "may it do that IN
+	 * THIS GROUP". Without this field the check could only be "does the session hold the capability at all", which
+	 * makes a grant for one group read as a grant for every group: strictly more authority than anyone gave.
+	 *
+	 * THE VALUE IS AN ARGUMENT NAME, not a scope string. The manifest says WHERE to look; the arguments say WHICH
+	 * object; and `group:` is the prefix the grant records. Keeping the three separate is what lets a second kind of
+	 * scoped capability exist without teaching the gate about groups.
+	 */
+	RequiresScope string
+	/**
 	 * Effect is the IMPACT of calling this tool, independent of who may call it.
 	 *
 	 * SEPARATE FROM `Requires`, which answers "does this session hold the permission". A session can be

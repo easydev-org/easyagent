@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	agentpkg "github.com/easydev-org/easyagent/agent"
 	"github.com/easydev-org/easyagent/store"
 	easybus "github.com/easydev-org/easybus-sdk"
 )
@@ -64,17 +65,72 @@ func (e *ToolExecutor) sessionGrants(ctx context.Context, tenant, session, extID
 // Accepts the qualified name the model may use (`gitea-git-mr-merge`) as well as the bare
 // one, so a caller's spelling cannot sidestep the check.
 func (e *ToolExecutor) requiresOf(name string) []string {
+	d, ok := e.defOf(name)
+	if !ok {
+		return nil
+	}
+	return d.Requires
+}
+
+/**
+ * defOf resolves a model-emitted name to its definition, accepting both spellings.
+ *
+ * THE QUALIFIED FORM IS SPLIT AT THE LAST '-' and matched against the known pairs, exactly as Execute resolves
+ * names: a check that resolved differently from the call would guard a tool nobody invokes.
+ */
+func (e *ToolExecutor) defOf(name string) (agentpkg.ToolDef, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if d, ok := e.defs[name]; ok {
-		return d.Requires
+		return d, true
 	}
 	if i := strings.IndexByte(name, '-'); i > 0 {
 		if d, ok := e.defs[name[i+1:]]; ok {
-			return d.Requires
+			return d, true
 		}
 	}
-	return nil
+	return agentpkg.ToolDef{}, false
+}
+
+/**
+ * missingCapability answers "what does this call lack" for one tool, given its arguments.
+ *
+ * TWO CHECKS, IN THIS ORDER:
+ *
+ *	1. does the session hold the capability AT ALL — unscoped or for any scope;
+ *	2. if the tool names an argument that scopes it, does it hold that capability FOR THAT OBJECT.
+ *
+ * THE FIRST IS NOT REDUNDANT. It is what lets the refusal distinguish "you were never granted this" from "you were
+ * granted it somewhere else", and those are different instructions to the person who can fix it: grant the
+ * capability, versus grant it for the group this call names.
+ *
+ * THE OBJECT COMES FROM THE ARGUMENTS, read verbatim. `group` holds a group id, and the grant records `group:<id>`.
+ * The prefix lives in the store, so a second scoped capability is a second case here rather than a second gate.
+ */
+func (e *ToolExecutor) missingCapability(def agentpkg.ToolDef, grants []store.GrantSnapshot, input map[string]any) (capability string, ok bool) {
+	if len(def.Requires) == 0 {
+		return "", true
+	}
+	if missing, held := store.HasAnyCapability(grants, def.Requires); !held {
+		return missing, false
+	}
+	if def.RequiresScope == "" {
+		return "", true
+	}
+	raw, _ := input[def.RequiresScope].(string)
+	scope := strings.TrimSpace(raw)
+	if scope == "" {
+		// A CALL WITHOUT THE OBJECT IS LEFT TO THE TOOL. The gate cannot say which group was meant, and the tool
+		// knows how to refuse a missing argument with a better message than "permission denied" — which would send
+		// the reader looking for a grant they already hold.
+		return "", true
+	}
+	for _, capability := range def.Requires {
+		if !store.HasCapabilityInScope(grants, capability, store.GroupScope(scope)) {
+			return capability, false
+		}
+	}
+	return "", true
 }
 
 // grantsToWire converts the session's grants into the wire form the extension receives.

@@ -39,6 +39,13 @@ func TestForkPermissionPolicies(t *testing.T) {
 		}
 	}
 
+	/**
+	 * ONLY INHERITED GRANTS COUNT, which is why this skips scoped rows.
+	 *
+	 * A FORK GETS A GROUP OF ITS OWN, and that group carries the three group capabilities scoped to it — that is
+	 * the room being usable, not the parent's permissions arriving. Counting them as "inherited" would make
+	 * INHERIT_NONE look like it inherited everything, and the policy being tested would be unobservable.
+	 */
 	held := func(sid string) map[string]bool {
 		t.Helper()
 		res, err := c.ListGrants(ctx, &agentv1.ListGrantsRequest{Id: sid})
@@ -47,7 +54,7 @@ func TestForkPermissionPolicies(t *testing.T) {
 		}
 		out := map[string]bool{}
 		for _, g := range res.Grants {
-			if g.ExtId == "bundled" {
+			if g.ExtId == "bundled" && g.Scope == "" {
 				out[g.Capability] = true
 			}
 		}
@@ -132,6 +139,10 @@ func TestForkExclusionIsScopedToTheExtension(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, g := range res.Grants {
+		// SCOPED ROWS ARE THE FORK'S OWN GROUP, not an inheritance: see TestForkPermissionPolicies.
+		if g.Scope != "" {
+			continue
+		}
 		seen[g.ExtId+"/"+g.Capability] = true
 	}
 	if seen["bundled/group.create"] {
@@ -170,8 +181,21 @@ func TestForkDoesNotInheritGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Groups) != 0 {
-		t.Errorf("the fork joined %v, want no groups", list.Groups)
+	/**
+	 * THE FORK HAS A GROUP OF ITS OWN — that is deliberate, and it is not an inheritance. What must not happen is
+	 * the fork appearing in THE PARENT'S group, which is the membership question this test is about.
+	 */
+	parentGroup := groupIDByName(t, c, "g")
+	for _, g := range list.Groups {
+		if g.Id == parentGroup {
+			t.Errorf("the fork joined the parent's group %v, want only its own", g)
+		}
+		if g.Name != "child" {
+			t.Errorf("the fork is in an unexpected group %v, want only its own room", g)
+		}
+	}
+	if len(list.Groups) != 1 {
+		t.Errorf("the fork is in %d groups, want exactly its own room", len(list.Groups))
 	}
 
 	// And the parent is still the only coordinator.

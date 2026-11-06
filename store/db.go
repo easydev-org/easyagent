@@ -127,7 +127,34 @@ func (d *DB) Migrate() error {
 		Update("scope_id", gorm.Expr("id")).Error; err != nil {
 		return err
 	}
-	return d.backfillMessageSeq()
+	if err := d.backfillMessageSeq(); err != nil {
+		return err
+	}
+	return d.dropStaleGroupNameIndex()
+}
+
+/**
+ * dropStaleGroupNameIndex removes a uniqueness constraint the name used to carry.
+ *
+ * AutoMigrate ADDS AND ALTERS BUT NEVER DROPS. The model now declares a PLAIN index on `groups.name` — a group's
+ * label is not unique, because the id is the identity — but a database created while the name WAS unique still
+ * carries `uq_groups_tenant_name`, and GORM has no reason to notice: the column is still there, still indexed, and
+ * the extra uniqueness is invisible to it. The symptom would be a second group called "check the build" failing on
+ * a constraint whose reason no longer exists, with an error naming an index nothing in the code mentions.
+ *
+ * DROPPING AN INDEX IS NOT A DATA MIGRATION — no row is touched and every query still works. It runs after
+ * AutoMigrate so the replacement index exists first, and it is idempotent.
+ */
+func (d *DB) dropStaleGroupNameIndex() error {
+	if !d.g.Migrator().HasTable("groups") {
+		return nil
+	}
+	if err := d.g.Exec(`DROP INDEX IF EXISTS uq_groups_tenant_name`).Error; err != nil {
+		// REPORTED RATHER THAN IGNORED. The next duplicate label would fail with this index's name in the message,
+		// and a boot that silently left it in place would make that failure look like a bug in the insert.
+		return fmt.Errorf("drop the unique group-name index: %w", err)
+	}
+	return nil
 }
 
 /**

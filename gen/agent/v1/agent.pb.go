@@ -2014,8 +2014,14 @@ type CreateSessionResponse struct {
 	Ok    bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
 	// The server-assigned identity. Use this for every subsequent call.
 	SessionId string `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	//*
+	// THE GROUP CREATED FOR THIS SESSION, so the console can open the room instead of the transcript.
+	//
+	// A caller that has to find it would list every group and match on a label — which is not unique, and is exactly
+	// the lookup the id exists to remove. Empty means the group could not be created; the session is still usable.
+	GroupId string `protobuf:"bytes,4,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// The display label the caller asked for (may be empty).
-	Name          string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	Name          string `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2060,6 +2066,13 @@ func (x *CreateSessionResponse) GetOk() bool {
 func (x *CreateSessionResponse) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
+	}
+	return ""
+}
+
+func (x *CreateSessionResponse) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
 	}
 	return ""
 }
@@ -2564,8 +2577,14 @@ func (x *ForkRequest) GetExcludeCapabilities() []string {
 }
 
 type ForkResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Session *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
+	//*
+	// The group created for the fork, on the same terms as CreateSessionResponse.group_id.
+	//
+	// THE FORK GETS ITS OWN, it does not inherit the parent's: it is a different session that a person will direct
+	// separately, and the parent's room keeps meaning what it meant.
+	GroupId       string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2605,6 +2624,13 @@ func (x *ForkResponse) GetSession() *Session {
 		return x.Session
 	}
 	return nil
+}
+
+func (x *ForkResponse) GetGroupId() string {
+	if x != nil {
+		return x.GroupId
+	}
+	return ""
 }
 
 type RenameRequest struct {
@@ -3019,7 +3045,14 @@ type Grant struct {
 	GrantedAt string `protobuf:"bytes,6,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
 	// granted_by records provenance: "user", "auto:fork:<parent>", "auto:preset:<name>".
 	// A permission a user does not remember adding should say where it came from.
-	GrantedBy     string `protobuf:"bytes,7,opt,name=granted_by,json=grantedBy,proto3" json:"granted_by,omitempty"`
+	GrantedBy string `protobuf:"bytes,7,opt,name=granted_by,json=grantedBy,proto3" json:"granted_by,omitempty"`
+	//*
+	// scope narrows the grant to one object, `group:<id>` for the group capabilities. EMPTY MEANS EVERYWHERE.
+	//
+	// IT IS ON THE WIRE BECAUSE OTHERWISE THE PANEL LIES. Three rows saying `group.spawn` looked like three copies of
+	// one permission, and a user could not tell which group each was for — or that granting one group did not grant
+	// another.
+	Scope         string `protobuf:"bytes,8,opt,name=scope,proto3" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3099,6 +3132,13 @@ func (x *Grant) GetGrantedAt() string {
 func (x *Grant) GetGrantedBy() string {
 	if x != nil {
 		return x.GrantedBy
+	}
+	return ""
+}
+
+func (x *Grant) GetScope() string {
+	if x != nil {
+		return x.Scope
 	}
 	return ""
 }
@@ -3547,8 +3587,10 @@ type CreateGrantRequest struct {
 	ExtId      string                 `protobuf:"bytes,2,opt,name=ext_id,json=extId,proto3" json:"ext_id,omitempty"`
 	Capability string                 `protobuf:"bytes,3,opt,name=capability,proto3" json:"capability,omitempty"`
 	// params is the JSON text for THIS instance. Empty for a boolean capability.
-	Params        string `protobuf:"bytes,4,opt,name=params,proto3" json:"params,omitempty"`
-	Risk          string `protobuf:"bytes,5,opt,name=risk,proto3" json:"risk,omitempty"`
+	Params string `protobuf:"bytes,4,opt,name=params,proto3" json:"params,omitempty"`
+	Risk   string `protobuf:"bytes,5,opt,name=risk,proto3" json:"risk,omitempty"`
+	// scope narrows the grant to one object (`group:<id>`), empty for everywhere. See Grant.scope.
+	Scope         string `protobuf:"bytes,6,opt,name=scope,proto3" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3614,6 +3656,13 @@ func (x *CreateGrantRequest) GetParams() string {
 func (x *CreateGrantRequest) GetRisk() string {
 	if x != nil {
 		return x.Risk
+	}
+	return ""
+}
+
+func (x *CreateGrantRequest) GetScope() string {
+	if x != nil {
+		return x.Scope
 	}
 	return ""
 }
@@ -11460,12 +11509,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04repo\x18\x05 \x01(\tR\x04repo\x12\x16\n" +
 	"\x06branch\x18\x06 \x01(\tR\x06branch\x12\x18\n" +
 	"\avariant\x18\a \x01(\tR\avariant\x12\x16\n" +
-	"\x06locale\x18\t \x01(\tR\x06localeJ\x04\b\b\x10\tR\x05group\"n\n" +
+	"\x06locale\x18\t \x01(\tR\x06localeJ\x04\b\b\x10\tR\x05group\"\x89\x01\n" +
 	"\x15CreateSessionResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04nameJ\x04\b\x02\x10\x03R\fsession_name\"#\n" +
+	"session_id\x18\x03 \x01(\tR\tsessionId\x12\x19\n" +
+	"\bgroup_id\x18\x04 \x01(\tR\agroupId\x12\x12\n" +
+	"\x04name\x18\x05 \x01(\tR\x04nameJ\x04\b\x02\x10\x03R\fsession_name\"#\n" +
 	"\x11GetSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"A\n" +
 	"\x12GetSessionResponse\x12+\n" +
@@ -11495,9 +11545,10 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"message_id\x18\x03 \x01(\tR\tmessageId\x12\x16\n" +
 	"\x06preset\x18\x04 \x01(\tR\x06preset\x12@\n" +
 	"\vpermissions\x18\x05 \x01(\x0e2\x1e.agent.v1.ForkPermissionPolicyR\vpermissions\x121\n" +
-	"\x14exclude_capabilities\x18\x06 \x03(\tR\x13excludeCapabilities\";\n" +
+	"\x14exclude_capabilities\x18\x06 \x03(\tR\x13excludeCapabilities\"V\n" +
 	"\fForkResponse\x12+\n" +
-	"\asession\x18\x01 \x01(\v2\x11.agent.v1.SessionR\asession\"3\n" +
+	"\asession\x18\x01 \x01(\v2\x11.agent.v1.SessionR\asession\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\"3\n" +
 	"\rRenameRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"=\n" +
@@ -11519,7 +11570,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03seq\x18\x02 \x01(\x05R\x03seq\"?\n" +
 	"\x10MarkReadResponse\x12+\n" +
-	"\asession\x18\x01 \x01(\v2\x11.agent.v1.SessionR\asession\"\xb8\x01\n" +
+	"\asession\x18\x01 \x01(\v2\x11.agent.v1.SessionR\asession\"\xce\x01\n" +
 	"\x05Grant\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x15\n" +
 	"\x06ext_id\x18\x02 \x01(\tR\x05extId\x12\x1e\n" +
@@ -11531,7 +11582,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"granted_at\x18\x06 \x01(\tR\tgrantedAt\x12\x1d\n" +
 	"\n" +
-	"granted_by\x18\a \x01(\tR\tgrantedBy\"#\n" +
+	"granted_by\x18\a \x01(\tR\tgrantedBy\x12\x14\n" +
+	"\x05scope\x18\b \x01(\tR\x05scope\"#\n" +
 	"\x11ListGrantsRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"=\n" +
 	"\x12ListGrantsResponse\x12'\n" +
@@ -11559,7 +11611,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04tool\x18\x03 \x01(\tR\x04tool\x12\x19\n" +
 	"\bfirst_at\x18\x04 \x01(\x03R\afirstAt\x12\x17\n" +
 	"\alast_at\x18\x05 \x01(\x03R\x06lastAt\x12\x14\n" +
-	"\x05count\x18\x06 \x01(\x05R\x05count\"\x87\x01\n" +
+	"\x05count\x18\x06 \x01(\x05R\x05count\"\x9d\x01\n" +
 	"\x12CreateGrantRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x15\n" +
 	"\x06ext_id\x18\x02 \x01(\tR\x05extId\x12\x1e\n" +
@@ -11567,7 +11619,8 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"capability\x18\x03 \x01(\tR\n" +
 	"capability\x12\x16\n" +
 	"\x06params\x18\x04 \x01(\tR\x06params\x12\x12\n" +
-	"\x04risk\x18\x05 \x01(\tR\x04risk\"<\n" +
+	"\x04risk\x18\x05 \x01(\tR\x04risk\x12\x14\n" +
+	"\x05scope\x18\x06 \x01(\tR\x05scope\"<\n" +
 	"\x13CreateGrantResponse\x12%\n" +
 	"\x05grant\x18\x01 \x01(\v2\x0f.agent.v1.GrantR\x05grant\"?\n" +
 	"\x12RevokeGrantRequest\x12\x0e\n" +

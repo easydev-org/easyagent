@@ -146,3 +146,45 @@ func TestMigrateRecreatesLegacyGroupTables(t *testing.T) {
 		t.Fatalf("read back: %v %v %+v", ok, err, got)
 	}
 }
+
+/**
+ * A DATABASE THAT STILL CARRIES THE UNIQUE GROUP-NAME INDEX IS REPAIRED AT BOOT.
+ *
+ * THE INDEX IS A LEFTOVER, and it is the kind that hides: AutoMigrate adds and alters but never drops, so a
+ * database created while the name WAS the identity kept `uq_groups_tenant_name` forever. The model's change to a
+ * plain index is invisible to GORM — the column is still indexed, and the extra uniqueness is not something it looks
+ * for. The failure would surface as a second group called "check the build" being refused by a constraint whose
+ * reason no longer exists.
+ */
+func TestMigrateDropsTheStaleUniqueGroupNameIndex(t *testing.T) {
+	d := newTestDB(t)
+
+	// A DATABASE FROM BEFORE THE CHANGE: the name unique, the way it was when the name was the identity.
+	if err := d.g.Exec(`DROP INDEX IF EXISTS uq_groups_tenant_name`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := d.g.Exec(`CREATE UNIQUE INDEX uq_groups_tenant_name ON groups (tenant, name)`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	in := &SessionInput{Name: "c", Model: "p/m"}
+	if err := d.CreateSession("t1", in); err != nil {
+		t.Fatal(err)
+	}
+	first := &Group{Name: "check the build"}
+	if err := d.CreateGroup("t1", first, in.ID, nil, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// THE SAME LABEL AGAIN, which is the whole point: two sessions doing similar work get two rooms with one name.
+	second := &Group{Name: "check the build"}
+	if err := d.CreateGroup("t1", second, in.ID, nil, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("a repeated group name was refused: %v", err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("the two groups collapsed into one")
+	}
+}
