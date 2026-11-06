@@ -72,9 +72,26 @@ func run(cfgPath string) error {
 	}
 
 	hub := server.NewEventHub()
+	// ASSIGNED ONCE THE SERVER EXISTS (see OnTurnEnd); declared here because the runtime is built first.
+	var lateServer *server.Server
 	rtDeps := agent.RuntimeDeps{
 		DB: db, Resolver: &agent.StoreResolver{DB: db}, Lease: agent.NewMemoryLease(),
 		EmitFor: hub.Emitter, MaxTurns: cfg.Agent.DefaultMaxTurns,
+		/**
+		 * THE TURN-END CHECK, BOUND LATE.
+		 *
+		 * The server is constructed after the runtime (it needs the runtime), so the callback cannot name it yet. A
+		 * closure over a variable assigned below keeps the dependency one-way: `agent` never learns what a group is,
+		 * and the server decides what "this turn ended" means.
+		 *
+		 * NIL UNTIL ASSIGNED IS SAFE: a turn that ends during boot finds no callback and does nothing, which is the
+		 * right answer for a process that has no groups wired yet.
+		 */
+		OnTurnEnd: func(ctx context.Context, tenant, session string) {
+			if lateServer != nil {
+				lateServer.ChaseUnansweredReplies(ctx, tenant, session)
+			}
+		},
 		ToolTimeout:        cfg.Agent.ToolTimeout,
 		CompactAtFraction:  cfg.Agent.CompactAtFraction,
 		ForceCompactTokens: cfg.Agent.ForceCompactTokens,
@@ -369,6 +386,7 @@ func run(cfgPath string) error {
 		// without this the console's list is only live for whatever that single process wrote.
 		ListChanges: runtimeBus,
 	})
+	lateServer = srv
 	server.SetDefaultTenant(cfg.Tenant.Default)
 	// Mailbox consumer: each replica joins the durable consumer and processes
 	// exactly-once; every delivered message wakes the session.

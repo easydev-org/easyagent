@@ -133,7 +133,23 @@ type Deps interface {
 	 * rather than passed in, so a message that arrives after a rename still lands in the same transcript and the
 	 * prompt shows the name the group has NOW.
 	 */
-	PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) error
+	PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) (GroupPost, error)
+
+	/**
+	 * OpenReplyObligations records that each named session owes `from` one reply for the message just posted.
+	 *
+	 * THE OBLIGATION IS WHAT MAKES "MUST REPLY" REAL. Without it, `group-send` hands out work and nobody can tell a
+	 * session that is thinking from one that finished and forgot.
+	 */
+	OpenReplyObligations(tenant, groupID, from string, sessions []string, seq int64, messageID string) error
+
+	/**
+	 * FulfilReplyObligations settles what a session owed to the session it is now answering.
+	 *
+	 * CALLED ON EVERY REPLY, addressed to `to`. A reply addressed elsewhere settles nothing, which is the whole
+	 * distinction between answering and talking.
+	 */
+	FulfilReplyObligations(tenant, groupID, session, to string) error
 
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error
@@ -178,6 +194,17 @@ type GroupRow struct {
 	Members int
 	// Role is "coordinator" or "member" — this session's own role, not the group's.
 	Role string
+}
+
+/**
+ * GroupPost identifies a message just written to a group's transcript.
+ *
+ * RETURNED RATHER THAN DISCARDED because the seq is what a reply obligation is keyed by: a debt that cannot name the
+ * ask it came from cannot be settled against the right one.
+ */
+type GroupPost struct {
+	Seq       int64
+	MessageID string
 }
 
 // ChainEntry is one message in a chain walk.

@@ -891,7 +891,17 @@ message GroupMessage {
   string group_id = 2;
   // The group's name AT THE TIME OF SENDING would be wrong to freeze; this is the current one, for display.
   string group_name = 9;
-  // The sending session's ID, or EMPTY when a user posted it through the console.
+  /**
+   * WHO WROTE THIS: "user" | "session" | "system".
+   *
+   * A SYSTEM MESSAGE IS NOT A SESSION'S, and it is not the user's either — it is the platform telling a session it
+   * still owes a reply. The console renders it as a notice rather than as somebody's words.
+   *
+   * THIS IS EXPLICIT RATHER THAN DERIVED FROM `sender`. "empty sender" used to mean "the user", and a reminder that
+   * reused that convention would have been rendered as the person chasing their own worker.
+   */
+  string kind = 10;
+  // The sending session's ID; EMPTY for a user's post and for a system message (see `kind`).
   string sender = 3;
   // The sender's display name at the time of sending; survives a later rename so the transcript reads as
   // it did.

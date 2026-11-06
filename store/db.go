@@ -106,7 +106,7 @@ func (d *DB) Migrate() error {
 			&Session{}, &Message{}, &Part{},
 			&Provider{}, &Tenant{}, &TenantToken{}, &AgentFile{},
 			&BundledTodo{}, &AdminToken{}, &SessionToken{},
-			&SessionGrant{}, &Group{}, &GroupMember{}, &GroupMessage{},
+			&SessionGrant{}, &Group{}, &GroupMember{}, &GroupMessage{}, &GroupReplyObligation{},
 		)
 		if err == nil {
 			break

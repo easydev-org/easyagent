@@ -69,7 +69,11 @@ func (d *stubDeps) GroupsOfSession(string, string) ([]GroupRow, error) { return 
 // "nothing told me", not as "nothing held", so a test about tool behaviour is not silently turned into a test about
 // grants.
 func (d *stubDeps) SessionGrants(string, string) []store.GrantSnapshot { return nil }
-func (d *stubDeps) IsGroupMember(string, string, string) bool          { return false }
+func (d *stubDeps) OpenReplyObligations(string, string, string, []string, int64, string) error {
+	return nil
+}
+func (d *stubDeps) FulfilReplyObligations(string, string, string, string) error { return nil }
+func (d *stubDeps) IsGroupMember(string, string, string) bool                   { return false }
 func (d *stubDeps) GroupMemberProfiles(string, string) ([]GroupMemberRow, error) {
 	return nil, nil
 }
@@ -81,8 +85,8 @@ func (d *stubDeps) RevokeCapability(string, string, string, string) error { retu
 func (d *stubDeps) CreateGroupForSession(string, string, string) (string, error) {
 	return "gid", nil
 }
-func (d *stubDeps) PostGroupMessage(string, string, string, []string, string, []string) error {
-	return nil
+func (d *stubDeps) PostGroupMessage(string, string, string, []string, string, []string) (GroupPost, error) {
+	return GroupPost{}, nil
 }
 func (d *stubDeps) ForkSession(string, string, string, []string) (string, error) { return "", nil }
 func (d *stubDeps) DeleteSessionRow(string, string) error                        { return nil }

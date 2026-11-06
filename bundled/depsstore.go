@@ -324,6 +324,19 @@ func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) (st
 	return g.ID, nil
 }
 
+// OpenReplyObligations implements Deps.
+func (d *StoreDeps) OpenReplyObligations(tenant, groupID, from string, sessions []string, seq int64, messageID string) error {
+	return d.DB.OpenReplyObligations(tenant, groupID, from, sessions, seq, messageID,
+		time.Now().UTC().Format(time.RFC3339Nano))
+}
+
+// FulfilReplyObligations implements Deps.
+func (d *StoreDeps) FulfilReplyObligations(tenant, groupID, session, to string) error {
+	_, err := d.DB.FulfilReplyObligations(tenant, groupID, session, to,
+		time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
 /**
  * PostGroupMessage implements Deps: store the message, then deliver it.
  *
@@ -335,7 +348,7 @@ func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) (st
  * A DELIVERY FAILURE IS RETURNED, because at this layer the caller is a tool whose whole job that message
  * was. The message is already stored either way; the error says the recipients were not reached.
  */
-func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) error {
+func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) (GroupPost, error) {
 	/**
 	 * THE ATTACHMENT REFERENCES ARE RESOLVED AGAINST THE BLOB STORE, not taken on trust.
 	 *
@@ -355,10 +368,11 @@ func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, 
 		Attachments: attachmentsJSON,
 	}, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return err
+		return GroupPost{}, err
 	}
 	if d.ChannelFn == nil {
-		return fmt.Errorf("deliver group message: channels are not configured")
+		return GroupPost{Seq: msg.Seq, MessageID: msg.ID},
+			fmt.Errorf("deliver group message: channels are not configured")
 	}
 	// THE SUBJECT IS BUILT HERE FROM LITERALS, not from agentbus constants: bundled is imported BY
 	// agentbus, so naming them would be an import cycle. The two strings are pinned by a test in
@@ -385,7 +399,10 @@ func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, 
 			firstErr = err
 		}
 	}
-	return firstErr
+	// THE SEQ COMES BACK even on a delivery failure: the message is already in the transcript, and a caller that
+	// opened a reply obligation needs the seq that identifies it. Losing it here would leave a debt nobody could
+	// settle.
+	return GroupPost{Seq: msg.Seq, MessageID: msg.ID}, firstErr
 }
 
 /**

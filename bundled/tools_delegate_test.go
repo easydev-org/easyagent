@@ -40,6 +40,11 @@ type chainStub struct {
 	grants []store.GrantSnapshot
 	// coordinatedGroups overrides the derived single-group list, for tests about "several groups, one granted".
 	coordinatedGroups []string
+	// seq advances so each post has a distinct position, and obligations keyed by it stay distinguishable.
+	seq           int64
+	obligations   [][3]string // {group, owes, owedTo}
+	obligationSeq []int64
+	fulfilled     [][2]string // {session, to}
 }
 
 func newChainStub() *chainStub {
@@ -128,11 +133,33 @@ func (c *chainStub) IsGroupMember(_, group, session string) bool {
 	return false
 }
 
-func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string, attachments []string) error {
+func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string, attachments []string) (GroupPost, error) {
 	c.postedAttachments = append(c.postedAttachments, attachments)
 	c.posted = append(c.posted, [2]string{group, text})
 	for _, rcpt := range to {
 		c.published = append(c.published, [3]string{group, rcpt, text})
+	}
+	// THE RETURNED SEQ IS WHAT AN OBLIGATION IS KEYED BY, so the stub advances one — a constant would let a bug where
+	// two asks collide on one debt pass unnoticed.
+	c.seq++
+	return GroupPost{Seq: c.seq, MessageID: "m" + group}, nil
+}
+
+func (c *chainStub) OpenReplyObligations(_, group, from string, sessions []string, seq int64, _ string) error {
+	for _, s := range sessions {
+		c.obligations = append(c.obligations, [3]string{group, s, from})
+	}
+	c.obligationSeq = append(c.obligationSeq, seq)
+	return nil
+}
+
+func (c *chainStub) FulfilReplyObligations(_, group, session, to string) error {
+	for i, o := range c.obligations {
+		if o[0] == group && o[1] == session && o[2] == to {
+			c.fulfilled = append(c.fulfilled, [2]string{session, to})
+			c.obligations = append(c.obligations[:i], c.obligations[i+1:]...)
+			return nil
+		}
 	}
 	return nil
 }

@@ -30,8 +30,11 @@ import (
 
 func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
 	return &agentv1.GroupMessage{
-		Id:          m.ID,
-		GroupId:     m.GroupID,
+		Id:      m.ID,
+		GroupId: m.GroupID,
+		// DERIVED FOR OLD ROWS: a message written before the column existed has no kind, and an empty sender has
+		// always meant the user. See store.KindOf.
+		Kind:        store.KindOf(m.Kind, m.Sender),
 		Sender:      m.Sender,
 		SenderName:  m.SenderName,
 		Body:        m.Body,
@@ -188,6 +191,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, groupID, sender, 
 		ID:          newUUID(),
 		Tenant:      tenant,
 		GroupID:     id,
+		Kind:        store.KindOf("", sender),
 		Sender:      sender,
 		SenderName:  senderName,
 		Body:        text,
@@ -249,9 +253,28 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 	if s.chanPub == nil || len(to) == 0 {
 		return
 	}
+	payload := groupMessagePayload(msg, group, msg.Body)
+	for _, rcpt := range to {
+		if err := s.chanPub.PublishChannel(ctx, tenant, agentbus.GroupChannel,
+			agentbus.GroupMemberTopic(group, rcpt), payload, origin); err != nil {
+			slog.Warn("group delivery failed",
+				"tenant", tenant, "group", group, "recipient", rcpt, "err", err)
+		}
+	}
+}
+
+/**
+ * groupMessagePayload builds what a woken session reads.
+ *
+ * SHARED BY EVERY PRODUCER OF A GROUP MESSAGE — the RPC path, the tool path through the deps, and a system reminder.
+ * A field missing in one of them is a field the model never saw, and the difference would show up as a session that
+ * "did not understand the task" rather than as a payload bug.
+ */
+func groupMessagePayload(msg store.GroupMessage, groupName, text string) map[string]any {
 	payload := map[string]any{
-		"group": group, "from": sender, "from_name": msg.SenderName, "text": msg.Body,
-		"message_id": msg.ID, "seq": msg.Seq,
+		"group": msg.GroupID, "group_name": groupName,
+		"from": msg.Sender, "from_name": msg.SenderName, "kind": msg.Kind,
+		"text": text, "message_id": msg.ID, "seq": msg.Seq,
 	}
 	/**
 	 * THE ATTACHMENT REFERENCES RIDE WITH THE DELIVERY, not only in the transcript.
@@ -270,13 +293,7 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 		}
 		payload["attachments"] = files
 	}
-	for _, rcpt := range to {
-		if err := s.chanPub.PublishChannel(ctx, tenant, agentbus.GroupChannel,
-			agentbus.GroupMemberTopic(group, rcpt), payload, origin); err != nil {
-			slog.Warn("group delivery failed",
-				"tenant", tenant, "group", group, "recipient", rcpt, "err", err)
-		}
-	}
+	return payload
 }
 
 // SendGroupMessage posts a message into a group.

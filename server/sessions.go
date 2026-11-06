@@ -149,6 +149,9 @@ func (s *Server) DeleteSession(ctx context.Context, req *agentv1.DeleteSessionRe
 	// Best-effort: the session is already gone, and failing here would report an error for a deletion
 	// that succeeded. A leftover row is repaired by the next group read, which cannot resolve it.
 	_ = s.db.DeleteGroupMemberships(tenant, req.Id)
+	// THE DEPARTED SESSION OWES NOTHING, because it can answer nothing. A debt kept past its session is a permanent
+	// "unanswered" mark on a group page with no way to clear it.
+	_ = s.db.DropObligationsOf(tenant, req.Id)
 	/**
 	 * THE DELETED SESSION TAKES ITS OWN ROOM WITH IT. An auto-created group exists to direct that one session, so
 	 * once the session is gone the room addresses nobody — and it would sit in the list forever as a place a person

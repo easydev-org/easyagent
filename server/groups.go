@@ -440,6 +440,13 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *agentv1.RemoveGroup
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
+	/**
+	 * LEAVING THE GROUP ENDS EVERY ASK INSIDE IT. An obligation says "you were addressed here and have not answered";
+	 * once the member is gone, that can never be discharged and the group page would show a debt to nobody.
+	 */
+	if err := s.db.DropObligationsInGroup(tenant, id, member); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
 	if err := s.db.RemoveGroupMember(tenant, id, member); err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotGroupMember):

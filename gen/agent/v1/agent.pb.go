@@ -5673,7 +5673,16 @@ type GroupMessage struct {
 	GroupId string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// The group's name AT THE TIME OF SENDING would be wrong to freeze; this is the current one, for display.
 	GroupName string `protobuf:"bytes,9,opt,name=group_name,json=groupName,proto3" json:"group_name,omitempty"`
-	// The sending session's ID, or EMPTY when a user posted it through the console.
+	//*
+	// WHO WROTE THIS: "user" | "session" | "system".
+	//
+	// A SYSTEM MESSAGE IS NOT A SESSION'S, and it is not the user's either — it is the platform telling a session it
+	// still owes a reply. The console renders it as a notice rather than as somebody's words.
+	//
+	// THIS IS EXPLICIT RATHER THAN DERIVED FROM `sender`. "empty sender" used to mean "the user", and a reminder that
+	// reused that convention would have been rendered as the person chasing their own worker.
+	Kind string `protobuf:"bytes,10,opt,name=kind,proto3" json:"kind,omitempty"`
+	// The sending session's ID; EMPTY for a user's post and for a system message (see `kind`).
 	Sender string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
 	// The sender's display name at the time of sending; survives a later rename so the transcript reads as
 	// it did.
@@ -5739,6 +5748,13 @@ func (x *GroupMessage) GetGroupId() string {
 func (x *GroupMessage) GetGroupName() string {
 	if x != nil {
 		return x.GroupName
+	}
+	return ""
+}
+
+func (x *GroupMessage) GetKind() string {
+	if x != nil {
+		return x.Kind
 	}
 	return ""
 }
@@ -11769,12 +11785,14 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06member\x18\x02 \x01(\tR\x06member\"s\n" +
 	"\x19RemoveGroupMemberResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\x8b\x02\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\x9f\x02\n" +
 	"\fGroupMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1d\n" +
 	"\n" +
-	"group_name\x18\t \x01(\tR\tgroupName\x12\x16\n" +
+	"group_name\x18\t \x01(\tR\tgroupName\x12\x12\n" +
+	"\x04kind\x18\n" +
+	" \x01(\tR\x04kind\x12\x16\n" +
 	"\x06sender\x18\x03 \x01(\tR\x06sender\x12\x1f\n" +
 	"\vsender_name\x18\x04 \x01(\tR\n" +
 	"senderName\x12\x12\n" +

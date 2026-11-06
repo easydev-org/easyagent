@@ -75,6 +75,18 @@ type RuntimeDeps struct {
 	// builds a per-session sink so live subscribers receive the run's events.
 	Emit    Emitter
 	EmitFor func(tenant, session string) Emitter
+	/**
+	 * OnTurnEnd runs after a session's turn finishes, on the replica that ran it.
+	 *
+	 * THE ONE MOMENT "IT STOPPED AND LEFT SOMETHING UNFINISHED" IS KNOWABLE. A group member that was addressed owes a
+	 * reply; a check at any other time would either fire while it is still working (a false alarm) or depend on a
+	 * poller noticing an idle state that also occurs between every turn. Here the turn has ended and nothing else is
+	 * running, which is exactly the condition worth acting on.
+	 *
+	 * NIL MEANS NO CHECK, which is what an in-memory test server wants. A NON-NIL FUNCTION MUST NOT BLOCK: it is
+	 * called on the turn's own goroutine, and a slow one would delay the next wake.
+	 */
+	OnTurnEnd func(ctx context.Context, tenant, session string)
 	// InterruptWatch, when set, streams a session's mailbox wake frames while a
 	// turn runs, so an `interrupt` published by ANOTHER replica aborts the run.
 	InterruptWatch func(ctx context.Context, tenant, session string) (<-chan string, func(), error)
@@ -256,6 +268,16 @@ func (r *Runtime) Wake(ctx context.Context, tenant, session string) error {
 		}
 	}
 
+	/**
+	 * THE TURN IS OVER — BEFORE THE LEASE GOES, because "this session is idle" is what the check is about and a
+	 * reminder delivered after the release would race the next wake.
+	 *
+	 * THE CONTEXT IS DETACHED FROM CANCELLATION: a turn that ended because its caller went away still owes whatever it
+	 * owed, and `context.WithoutCancel` is what keeps the reminder from being skipped for a reason unrelated to it.
+	 */
+	if r.deps.OnTurnEnd != nil && !leaseLost.Load() {
+		r.deps.OnTurnEnd(context.WithoutCancel(ctx), tenant, session)
+	}
 	// Release only a lock we still hold (a lost lock belongs to another replica).
 	r.releaseIfHeld(ctx, tenant, session, leaseLost.Load())
 	if leaseLost.Load() {

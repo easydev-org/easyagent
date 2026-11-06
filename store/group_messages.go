@@ -39,6 +39,15 @@ type GroupMessage struct {
 	Sender     string `gorm:"column:sender;size:64"`
 	SenderName string `gorm:"column:sender_name;size:128"`
 
+	/**
+	 * Kind is "user" | "session" | "system", and it says WHO WROTE THIS.
+	 *
+	 * EXPLICIT RATHER THAN DERIVED FROM `Sender`. "Empty sender means the user" was true while there were only two
+	 * authors; a system reminder is a third, and reusing the empty convention would have rendered the platform's
+	 * notice as the person's own words — the reader chasing their own worker.
+	 */
+	Kind string `gorm:"column:kind;size:16;index"`
+
 	// Body is the message text.
 	Body string `gorm:"column:body;type:text"`
 
@@ -69,6 +78,37 @@ type GroupMessage struct {
 }
 
 func (GroupMessage) TableName() string { return "group_messages" }
+
+/**
+ * The three authors a group message can have.
+ *
+ * USER IS THE ONE WITH NO SESSION BEHIND IT — a person typing into the console. SESSION is one member addressing
+ * another. SYSTEM is the platform itself, which today means a reminder that a reply is still owed.
+ *
+ * THEY ARE CONSTANTS RATHER THAN LITERALS because the console branches on them, and a typo would render the platform's
+ * notice as somebody's words.
+ */
+const (
+	GroupMessageKindUser    = "user"
+	GroupMessageKindSession = "session"
+	GroupMessageKindSystem  = "system"
+)
+
+/**
+ * KindOf derives the author kind for a message written without one.
+ *
+ * FOR ROWS THAT PREDATE THE COLUMN, and for callers that set only a sender. An empty sender is a user, because that is
+ * what it meant before there were three authors.
+ */
+func KindOf(kind, sender string) string {
+	if kind != "" {
+		return kind
+	}
+	if sender == "" {
+		return GroupMessageKindUser
+	}
+	return GroupMessageKindSession
+}
 
 // ErrGroupMessageNotFound is returned when a message does not exist in the given group.
 var ErrGroupMessageNotFound = errors.New("group message not found")

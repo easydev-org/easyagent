@@ -171,7 +171,15 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
 	desc := strings.TrimSpace(strArg(args, "description"))
 	// A BRIEF HAS NO FILES: it is the task description that wakes the worker, and the worker's first move is to
 	// look at the group. Attachments belong to a message someone composed, not to a spawn.
-	if err := e.deps.PostGroupMessage(tenant, group, session, []string{worker}, s.brief(session, group, task), nil); err != nil {
+	posted, err := e.deps.PostGroupMessage(tenant, group, session, []string{worker}, s.brief(session, group, task), nil)
+	if err != nil {
+		return agent.ToolOutcome{}, err
+	}
+	/**
+	 * THE WORKER OWES A REPLY, and that is the point of `spawn`: the coordinator hands over a task and then waits. A
+	 * worker that reports back is the normal case; one that finishes quietly is the failure this makes visible.
+	 */
+	if err := e.deps.OpenReplyObligations(tenant, group, session, []string{worker}, posted.Seq, posted.MessageID); err != nil {
 		return agent.ToolOutcome{}, err
 	}
 
@@ -289,9 +297,14 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 		 * NOTHING IS DELIVERED TO MEMBERS: a reply is for the group's reader, not an instruction. Waking
 		 * three workers to read "收到，我来汇总" would cost three turns and produce three more replies.
 		 */
-		if err := e.deps.PostGroupMessage(tenant, group, session, nil, text, attachments); err != nil {
+		if _, err := e.deps.PostGroupMessage(tenant, group, session, nil, text, attachments); err != nil {
 			return agent.ToolOutcome{}, err
 		}
+		/**
+		 * A BARE REPLY SETTLES NOTHING. An obligation is discharged only by ADDRESSING the session that asked, which
+		 * is the one form of "I answered you" that cannot be confused with talking to the room: a message to the
+		 * group is seen by everyone and confirms nothing to anyone in particular.
+		 */
 		return agent.ToolOutcome{
 			Content:  s.replied(group),
 			Metadata: map[string]any{"group": group},
@@ -299,7 +312,23 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 	}
 
 	for _, rcpt := range to {
-		if err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text, attachments); err != nil {
+		posted, err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text, attachments)
+		if err != nil {
+			return agent.ToolOutcome{}, err
+		}
+		/**
+		 * BEING NAMED IS A DEBT. The coordinator asked this member something, and "did it answer" is a question the
+		 * group page has to be able to answer later — which is why the obligation carries the seq of THIS message.
+		 */
+		if err := e.deps.OpenReplyObligations(tenant, group, session, []string{rcpt}, posted.Seq, posted.MessageID); err != nil {
+			return agent.ToolOutcome{}, err
+		}
+		/**
+		 * AND IT MAY SETTLE ONE. Addressing `rcpt` is exactly the form a reply takes, so whatever this session owed
+		 * that recipient is now answered. Both happen in one call: a message can be an answer to what it was asked
+		 * and a question to whoever it names next.
+		 */
+		if err := e.deps.FulfilReplyObligations(tenant, group, session, rcpt); err != nil {
 			return agent.ToolOutcome{}, err
 		}
 	}
