@@ -193,9 +193,17 @@ func (r *replica) setToken(tok string) {
 }
 
 func (r replica) createSession(ctx context.Context, name string) (string, error) {
+	/**
+	 * A MODEL IS NAMED EXPLICITLY, because creation now REFUSES a session that could not run a turn.
+	 *
+	 * THIS BINARY CHECKS REPLICATION, NOT MODEL RESOLUTION. Leaving the field empty would make it depend on the
+	 * deployment having a provider registered and a default configured — a second thing to get wrong, in a job
+	 * whose subject is the list and the transcript. The model only has to exist as a string here: the assertions
+	 * never run a turn (that is the separate `E2E_TURN` check, which needs a real one).
+	 */
 	res, err := r.cli.CreateSession(ctx, &agentv1.CreateSessionRequest{
 		// `locale: zh` pins the language at creation, which is what the console does.
-		Name: name, Locale: "zh",
+		Name: name, Locale: "zh", Model: "e2e/model",
 	})
 	if err != nil {
 		return "", err
