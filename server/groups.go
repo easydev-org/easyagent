@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect/v2"
 
@@ -28,31 +29,31 @@ import (
  * enumerate the tenant by watching which names fail differently.
  */
 
-// validateGroupName keeps a group name usable as a subject segment.
-//
-// The same rule a session name obeys, for the same reason: a group is addressed by name on a channel,
-// and a dot would silently change the subject's shape ("a.b" reads as two segments) while ">" would
-// match everything.
+/**
+ * validateGroupName keeps a group name usable as a LABEL — and nothing more.
+ *
+ * IT USED TO ENFORCE SUBJECT-SEGMENT SYNTAX, because the name WAS the channel address. Now the address is the id, so
+ * a name may be anything a person would type: "发布协调群" is a name, and refusing it was the old constraint leaking
+ * through a field that no longer needs it.
+ *
+ * WHAT IS STILL REFUSED IS EMPTINESS AND LENGTH. An empty label renders as nothing in a list, and a name longer than
+ * the column is silently truncated by the database — both are failures the reader would experience without being
+ * told why.
+ */
 func validateGroupName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("group name is required")
 	}
-	if len(name) > 128 {
+	if utf8.RuneCountInString(name) > 128 {
 		return fmt.Errorf("group name is limited to 128 characters")
 	}
+	// CONTROL CHARACTERS ARE REFUSED: a newline or a tab in a label breaks the row layout, and neither is something a
+	// person types on purpose.
 	for _, r := range name {
-		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
-			r == '_' || r == '-' || r == '.'
-		if !ok {
-			return fmt.Errorf("group name %q may only contain letters, digits, '_', '-' and '.'", name)
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("group name must not contain control characters")
 		}
-	}
-	if name[0] == '.' || name[len(name)-1] == '.' {
-		return fmt.Errorf("group name must not start or end with '.'")
-	}
-	if strings.Contains(name, "..") {
-		return fmt.Errorf("group name must not contain an empty segment")
 	}
 	return nil
 }

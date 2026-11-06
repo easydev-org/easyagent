@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect/v2"
@@ -247,16 +248,22 @@ func TestGroupAvatarClearAndKeep(t *testing.T) {
 	}
 }
 
-// A group name is a subject segment, so anything that would change the subject's shape is refused
-// here rather than turning one publish into a broadcast.
+/**
+ * A GROUP NAME IS A LABEL, NOT AN ADDRESS — so a person may type what they call it.
+ *
+ * IT USED TO ENFORCE SUBJECT-SEGMENT SYNTAX, because the name WAS the channel address. Now the address is the id, and
+ * the old rule leaked through: "发布协调群" was refused by a constraint about message subjects, in a field a person
+ * was typing into.
+ *
+ * ONLY EMPTINESS, LENGTH AND CONTROL CHARACTERS ARE REFUSED — an empty label renders as nothing, an over-long one is
+ * silently truncated by the column, and a newline breaks the row it is drawn in.
+ */
 func TestGroupNameValidation(t *testing.T) {
 	ts, db, _ := newTestServerWith(t, nil)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
 	ctx := context.Background()
 
-	// A DIFFERENT COORDINATOR PER NAME, because a session may coordinate only one group — reusing one
-	// would make every name after the first fail on that rule instead of on the one under test.
 	coords := []string{
 		newSession(t, c, "c0"),
 		newSession(t, c, "c1"),
@@ -264,14 +271,15 @@ func TestGroupNameValidation(t *testing.T) {
 	}
 	next := 0
 	coord := func() string { s := coords[next%3]; next++; return s }
-	for _, name := range []string{"", "  ", "a b", "a>b", "a..b", ".a", "a."} {
+	for _, name := range []string{"", "  ", "bad\nname", strings.Repeat("x", 200)} {
 		if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
 			Name: name, Coordinator: coord(), CreatedBy: "user",
 		}); err == nil {
 			t.Errorf("name %q was accepted, want rejection", name)
 		}
 	}
-	for _, name := range []string{"incident-42", "team.alpha", "A_b-9"} {
+	// WHAT A PERSON WOULD ACTUALLY TYPE — including the shapes the subject rule used to forbid.
+	for _, name := range []string{"发布协调群", "team alpha", "a>b", "team.alpha", "A_b-9", "a..b"} {
 		if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
 			Name: name, Coordinator: coord(), CreatedBy: "user",
 		}); err != nil {
