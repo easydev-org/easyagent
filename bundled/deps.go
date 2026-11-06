@@ -143,10 +143,18 @@ type GroupMemberRow struct {
 	Role string
 }
 
-// GroupRow is one group as the tools see it: a name and how many sessions are in it.
+/**
+ * GroupRow is one group as the tools see it.
+ *
+ * ROLE IS PER-READER, which is why it is filled by the query rather than stored: the same group is "mine to run"
+ * for its coordinator and "somewhere I am told what to do" for a member, and a tool that showed only the name left
+ * a session unable to tell which of its groups it answers for.
+ */
 type GroupRow struct {
 	Name    string
 	Members int
+	// Role is "coordinator" or "member" — this session's own role, not the group's.
+	Role string
 }
 
 // ChainEntry is one message in a chain walk.

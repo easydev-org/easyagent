@@ -234,7 +234,7 @@ func (d *StoreDeps) GroupsOfSession(tenant, session string) ([]GroupRow, error) 
 	}
 	out := make([]GroupRow, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, GroupRow{Name: g.Name, Members: counts[g.Name]})
+		out = append(out, GroupRow{Name: g.Name, Members: counts[g.Name], Role: g.MyRole})
 	}
 	return out, nil
 }

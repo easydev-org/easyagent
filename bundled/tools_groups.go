@@ -42,10 +42,33 @@ func (e *Extension) groupList(_ context.Context, tenant, session string, _ map[s
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Name < groups[j].Name })
 
+	/**
+	 * THE ROLE IS PART OF THE ANSWER.
+	 *
+	 * "Which groups am I in" and "which am I answerable for" are two different questions, and a session needs both:
+	 * the first says where it may be addressed, the second says where the work arrives and where it may spawn. A
+	 * list of names alone left it to discover the second by trying — and with one session able to coordinate several
+	 * groups, guessing is no longer even possible to do reliably.
+	 */
+	locale := e.localeOf(tenant, session)
+	zh := strings.HasPrefix(locale, "zh")
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%d group(s):\n", len(groups)))
+	if zh {
+		b.WriteString(fmt.Sprintf("%d 个群：\n", len(groups)))
+	} else {
+		b.WriteString(fmt.Sprintf("%d group(s):\n", len(groups)))
+	}
 	for _, g := range groups {
-		b.WriteString(fmt.Sprintf("- %s (%d member(s))\n", g.Name, g.Members))
+		switch {
+		case zh && g.Role == GroupRoleCoordinator:
+			b.WriteString(fmt.Sprintf("- %s（%d 个成员）—— 协调者\n", g.Name, g.Members))
+		case zh:
+			b.WriteString(fmt.Sprintf("- %s（%d 个成员）—— 成员\n", g.Name, g.Members))
+		case g.Role == GroupRoleCoordinator:
+			b.WriteString(fmt.Sprintf("- %s (%d member(s)) — coordinator\n", g.Name, g.Members))
+		default:
+			b.WriteString(fmt.Sprintf("- %s (%d member(s)) — member\n", g.Name, g.Members))
+		}
 	}
 	return agent.ToolOutcome{Content: strings.TrimRight(b.String(), "\n")}, nil
 }

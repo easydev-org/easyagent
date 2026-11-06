@@ -253,3 +253,52 @@ func TestGroupMembersNamesTheCoordinator(t *testing.T) {
 		t.Errorf("a coordinator should see both notes on its own row:\n%s", out.Content)
 	}
 }
+
+/**
+ * THE GROUP LIST SAYS WHICH GROUPS THE SESSION ANSWERS FOR.
+ *
+ * "WHICH GROUPS AM I IN" AND "WHICH AM I ANSWERABLE FOR" ARE DIFFERENT QUESTIONS, and a session needs both: the
+ * first says where it may be addressed, the second says where work arrives and where it may spawn a worker. With one
+ * session able to coordinate several groups, a list of names alone left it to discover the second by trying — and
+ * guessing which of several groups a tool should act on is exactly what the required `group` parameter prevents.
+ *
+ * THE ROLE IS PER-READER: the same group is "mine to run" for its coordinator and "somewhere I am told what to do"
+ * for a member, so it cannot be a property of the group row.
+ */
+func TestGroupListShowsTheReadersRole(t *testing.T) {
+	stub := &groupStub{
+		stubDeps: &stubDeps{},
+		groups: map[string][]GroupRow{
+			"alice": {
+				{Name: "release", Members: 3, Role: GroupRoleCoordinator},
+				{Name: "incident", Members: 2, Role: "member"},
+			},
+		},
+	}
+	e := newGroupExt(t, stub)
+
+	out, err := e.groupList(context.Background(), "t", "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "release") || !strings.Contains(out.Content, "coordinator") {
+		t.Errorf("the coordinated group is not marked:\n%s", out.Content)
+	}
+	if !strings.Contains(out.Content, "incident") || !strings.Contains(out.Content, "member") {
+		t.Errorf("the member group is not marked:\n%s", out.Content)
+	}
+}
+
+// A session in no groups still gets a sentence rather than an empty string.
+func TestGroupListForASessionWithNoGroups(t *testing.T) {
+	stub := &groupStub{stubDeps: &stubDeps{}, groups: map[string][]GroupRow{}}
+	e := newGroupExt(t, stub)
+
+	out, err := e.groupList(context.Background(), "t", "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "no groups") && !strings.Contains(out.Content, "任何群") {
+		t.Errorf("an empty result should be stated, got %q", out.Content)
+	}
+}

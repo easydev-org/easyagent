@@ -737,11 +737,21 @@ tools:
     # reads membership
     effect: none
     description: >-
-      List the groups this session belongs to, with their member counts. A group is a named set of
-      sessions that can see each other; use group-members to see who is in one.
+      List the groups this session belongs to, WITH ITS ROLE IN EACH — coordinator or member.
+
+      THE ROLE IS THE POINT. "Which groups am I in" says where you may be addressed; "which am I answerable for"
+      says where work arrives and where you may spawn a worker. A list of names alone made a session discover the
+      second by trying, which no longer even works reliably now that one session may coordinate several groups.
+
+      Returns nothing for a session in no groups.
     descriptions:
       zh: >-
-        列出本会话所在的群（含成员数）。群是一组可以互相看见的会话；用 group-members 查看某个群里还有谁。
+        列出本会话所在的群，并标出它在**每个群里的角色**——协调者还是成员。
+
+        **角色就是重点。**「我在哪些群」说明哪里可以找到我；「我负责哪些群」说明工作从哪里来、以及我可以往
+        哪里派生工作会话。只列名字会让会话靠试错去发现后者——而一个会话可以协调多个群之后，试错也不再可靠。
+
+        不属于任何群时返回空。
     input_schema:
       type: object
       properties: {}

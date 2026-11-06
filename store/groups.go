@@ -52,6 +52,15 @@ type Group struct {
 	CreatedBy string `gorm:"column:created_by;size:128"`
 	CreatedAt string `gorm:"column:created_at"`
 	UpdatedAt string `gorm:"column:updated_at"`
+
+	/**
+	 * MyRole is the READING session's role in this group — "coordinator" or "member".
+	 *
+	 * NOT A COLUMN (`gorm:"-"`): it depends on who is asking, so it cannot be a property of the group row. It is
+	 * filled by GroupsOfSession, which already has the membership rows in hand, and is empty when the caller has no
+	 * single reader in mind.
+	 */
+	MyRole string `gorm:"-"`
 }
 
 func (Group) TableName() string { return "groups" }
@@ -399,7 +408,7 @@ func (d *DB) IsGroupMember(tenant, group, session string) (bool, error) {
 func (d *DB) GroupsOfSession(tenant, session string) ([]Group, error) {
 	var memberships []GroupMember
 	if err := d.g.Where("tenant = ? AND session = ?", tenant, session).
-		Find(&memberships).Error; err != nil {
+		Order("\"group\"").Find(&memberships).Error; err != nil {
 		return nil, err
 	}
 	if len(memberships) == 0 {
@@ -414,7 +423,18 @@ func (d *DB) GroupsOfSession(tenant, session string) ([]Group, error) {
 		Order("name").Find(&groups).Error; err != nil {
 		return nil, err
 	}
-	return groups, nil
+	// THE ROLE COMES FROM THE MEMBERSHIP ROWS just read, not from a second query: it is the same row, and asking
+	// the database again for a value already in hand is how a list gets slower every time someone adds a field.
+	role := make(map[string]string, len(memberships))
+	for _, m := range memberships {
+		role[m.Group] = m.Role
+	}
+	out := make([]Group, 0, len(groups))
+	for _, g := range groups {
+		g.MyRole = role[g.Name]
+		out = append(out, g)
+	}
+	return out, nil
 }
 
 // ListGroups returns every group in the tenant, sorted by name (the console's view).
