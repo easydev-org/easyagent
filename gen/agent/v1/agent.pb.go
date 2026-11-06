@@ -5674,6 +5674,12 @@ type GroupMessage struct {
 	// The group's name AT THE TIME OF SENDING would be wrong to freeze; this is the current one, for display.
 	GroupName string `protobuf:"bytes,9,opt,name=group_name,json=groupName,proto3" json:"group_name,omitempty"`
 	//*
+	// WHETHER THIS MESSAGE ASKS OR ANSWERS: "request" | "reply", or empty for neither.
+	//
+	// A REQUEST LEAVES AN OBLIGATION BEHIND — see the reply-obligation RPCs — and a REPLY CLOSES ONE. Empty is a
+	// person's message or a system notice: the platform asking nobody anything.
+	Intent string `protobuf:"bytes,11,opt,name=intent,proto3" json:"intent,omitempty"`
+	//*
 	// WHO WROTE THIS: "user" | "session" | "system".
 	//
 	// A SYSTEM MESSAGE IS NOT A SESSION'S, and it is not the user's either — it is the platform telling a session it
@@ -5752,6 +5758,13 @@ func (x *GroupMessage) GetGroupName() string {
 	return ""
 }
 
+func (x *GroupMessage) GetIntent() string {
+	if x != nil {
+		return x.Intent
+	}
+	return ""
+}
+
 func (x *GroupMessage) GetKind() string {
 	if x != nil {
 		return x.Kind
@@ -5815,6 +5828,12 @@ type SendGroupMessageRequest struct {
 	// transcript from accepting messages from anyone who guesses the name.
 	Sender string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
 	//*
+	// Whether this message is a REQUEST (someone then owes an answer) or a REPLY (it answers one).
+	//
+	// ONLY SESSIONS HAVE INTENT. A person typing into the group neither asks nor answers on anyone's behalf, so a
+	// user's message leaves this empty and opens no obligation.
+	Intent string `protobuf:"bytes,11,opt,name=intent,proto3" json:"intent,omitempty"`
+	//*
 	// Files to attach, already uploaded by the console. A code names a tenant blob, so posting it grants no
 	// access the uploader did not already have.
 	Attachments   []*FileRef `protobuf:"bytes,6,rep,name=attachments,proto3" json:"attachments,omitempty"`
@@ -5869,6 +5888,13 @@ func (x *SendGroupMessageRequest) GetText() string {
 func (x *SendGroupMessageRequest) GetSender() string {
 	if x != nil {
 		return x.Sender
+	}
+	return ""
+}
+
+func (x *SendGroupMessageRequest) GetIntent() string {
+	if x != nil {
+		return x.Intent
 	}
 	return ""
 }
@@ -11785,12 +11811,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06member\x18\x02 \x01(\tR\x06member\"s\n" +
 	"\x19RemoveGroupMemberResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\x9f\x02\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\xb7\x02\n" +
 	"\fGroupMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1d\n" +
 	"\n" +
-	"group_name\x18\t \x01(\tR\tgroupName\x12\x12\n" +
+	"group_name\x18\t \x01(\tR\tgroupName\x12\x16\n" +
+	"\x06intent\x18\v \x01(\tR\x06intent\x12\x12\n" +
 	"\x04kind\x18\n" +
 	" \x01(\tR\x04kind\x12\x16\n" +
 	"\x06sender\x18\x03 \x01(\tR\x06sender\x12\x1f\n" +
@@ -11800,11 +11827,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\a \x01(\tR\tcreatedAt\x123\n" +
-	"\vattachments\x18\b \x03(\v2\x11.agent.v1.FileRefR\vattachments\"\x9f\x01\n" +
+	"\vattachments\x18\b \x03(\v2\x11.agent.v1.FileRefR\vattachments\"\xb7\x01\n" +
 	"\x17SendGroupMessageRequest\x12\x19\n" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x16\n" +
-	"\x06sender\x18\x03 \x01(\tR\x06sender\x123\n" +
+	"\x06sender\x18\x03 \x01(\tR\x06sender\x12\x16\n" +
+	"\x06intent\x18\v \x01(\tR\x06intent\x123\n" +
 	"\vattachments\x18\x06 \x03(\v2\x11.agent.v1.FileRefR\vattachmentsJ\x04\b\x04\x10\x05R\x02to\"o\n" +
 	"\x18SendGroupMessageResponse\x120\n" +
 	"\amessage\x18\x01 \x01(\v2\x16.agent.v1.GroupMessageR\amessage\x12!\n" +

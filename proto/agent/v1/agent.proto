@@ -892,6 +892,13 @@ message GroupMessage {
   // The group's name AT THE TIME OF SENDING would be wrong to freeze; this is the current one, for display.
   string group_name = 9;
   /**
+   * WHETHER THIS MESSAGE ASKS OR ANSWERS: "request" | "reply", or empty for neither.
+   *
+   * A REQUEST LEAVES AN OBLIGATION BEHIND — see the reply-obligation RPCs — and a REPLY CLOSES ONE. Empty is a
+   * person's message or a system notice: the platform asking nobody anything.
+   */
+  string intent = 11;
+  /**
    * WHO WROTE THIS: "user" | "session" | "system".
    *
    * A SYSTEM MESSAGE IS NOT A SESSION'S, and it is not the user's either — it is the platform telling a session it
@@ -939,6 +946,13 @@ message SendGroupMessageRequest {
   // future field cannot silently inherit the meaning.
   reserved 4;
   reserved "to";
+  /**
+   * Whether this message is a REQUEST (someone then owes an answer) or a REPLY (it answers one).
+   *
+   * ONLY SESSIONS HAVE INTENT. A person typing into the group neither asks nor answers on anyone's behalf, so a
+   * user's message leaves this empty and opens no obligation.
+   */
+  string intent = 11;
   /**
    * Files to attach, already uploaded by the console. A code names a tenant blob, so posting it grants no
    * access the uploader did not already have.

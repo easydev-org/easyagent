@@ -171,7 +171,9 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
 	desc := strings.TrimSpace(strArg(args, "description"))
 	// A BRIEF HAS NO FILES: it is the task description that wakes the worker, and the worker's first move is to
 	// look at the group. Attachments belong to a message someone composed, not to a spawn.
-	posted, err := e.deps.PostGroupMessage(tenant, group, session, []string{worker}, s.brief(session, group, task), nil)
+	// A SPAWNED TASK IS A REQUEST: the coordinator handed over work and is waiting for the report.
+	posted, err := e.deps.PostGroupMessage(tenant, group, session, []string{worker},
+		s.brief(session, group, task), nil, storeGroupIntentRequest)
 	if err != nil {
 		return agent.ToolOutcome{}, err
 	}
@@ -285,6 +287,20 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 		}
 	}
 
+	/**
+	 * THE SENDER SAYS WHAT THIS IS. `kind` is "request" or "reply", and it decides everything below.
+	 *
+	 * INFERENCE WAS TRIED FIRST AND IT FAILED. "A message that settles a debt is a reply, so it asks nothing" works
+	 * until a reply answers nothing in particular — and, more importantly, it cannot describe the FIRST request at
+	 * all. On the first live run the two sessions chased each other: the worker answered, which opened an obligation
+	 * for the coordinator to answer the answer, which the worker then answered… reminders 1/3, 2/3, 1/3 while both
+	 * politely confirmed at each other. Declaring the intent removes the guess.
+	 */
+	intent := strings.TrimSpace(strings.ToLower(strArg(args, "kind")))
+	if intent != storeGroupIntentRequest && intent != storeGroupIntentReply {
+		return agent.ToolOutcome{Content: s.errBadKind}, nil
+	}
+
 	if len(to) == 0 {
 		/**
 		 * NO `to` MEANS A REPLY TO THE GROUP, NOT AN ERROR.
@@ -297,7 +313,7 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 		 * NOTHING IS DELIVERED TO MEMBERS: a reply is for the group's reader, not an instruction. Waking
 		 * three workers to read "收到，我来汇总" would cost three turns and produce three more replies.
 		 */
-		if _, err := e.deps.PostGroupMessage(tenant, group, session, nil, text, attachments); err != nil {
+		if _, err := e.deps.PostGroupMessage(tenant, group, session, nil, text, attachments, intent); err != nil {
 			return agent.ToolOutcome{}, err
 		}
 		/**
@@ -312,23 +328,22 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 	}
 
 	for _, rcpt := range to {
-		posted, err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text, attachments)
+		posted, err := e.deps.PostGroupMessage(tenant, group, session, []string{rcpt}, text, attachments, intent)
 		if err != nil {
 			return agent.ToolOutcome{}, err
 		}
+		if intent == storeGroupIntentReply {
+			// A REPLY IS AN END. It discharges what this session owed that recipient and asks nothing further.
+			if err := e.deps.FulfilReplyObligations(tenant, group, session, rcpt); err != nil {
+				return agent.ToolOutcome{}, err
+			}
+			continue
+		}
 		/**
-		 * BEING NAMED IS A DEBT. The coordinator asked this member something, and "did it answer" is a question the
+		 * A REQUEST OPENS A DEBT. The coordinator asked this member something, and "did it answer" is a question the
 		 * group page has to be able to answer later — which is why the obligation carries the seq of THIS message.
 		 */
 		if err := e.deps.OpenReplyObligations(tenant, group, session, []string{rcpt}, posted.Seq, posted.MessageID); err != nil {
-			return agent.ToolOutcome{}, err
-		}
-		/**
-		 * AND IT MAY SETTLE ONE. Addressing `rcpt` is exactly the form a reply takes, so whatever this session owed
-		 * that recipient is now answered. Both happen in one call: a message can be an answer to what it was asked
-		 * and a question to whoever it names next.
-		 */
-		if err := e.deps.FulfilReplyObligations(tenant, group, session, rcpt); err != nil {
 			return agent.ToolOutcome{}, err
 		}
 	}
@@ -337,6 +352,16 @@ func (e *Extension) groupSend(_ context.Context, tenant, session string, args ma
 		Metadata: map[string]any{"group": group, "to": to},
 	}, nil
 }
+
+/**
+ * The two intents, restated here so this file does not import the storage package for two string constants.
+ *
+ * A TEST IN THE STORE ASSERTS THEY MATCH, so a rename on one side cannot drift silently.
+ */
+const (
+	storeGroupIntentRequest = "request"
+	storeGroupIntentReply   = "reply"
+)
 
 // isGroupExists keeps the store's sentinel out of this package's imports.
 func isGroupExists(err error) bool {
@@ -367,6 +392,7 @@ type groupStrings struct {
 	errNotMemberOf        func(to, group string) string
 	errPeerToPeer         func(group string) string
 	errSelfAddress        string
+	errBadKind            string
 }
 
 func groupStringsFor(locale string) groupStrings {
@@ -419,6 +445,7 @@ func groupStringsFor(locale string) groupStrings {
 			errMissingAddress: `group-send: "to" 必须是会话名数组。`,
 			errBadTo:          `group-send: "to" 必须是会话名数组，例如 ["worker-1","worker-2"]。`,
 			errMissingText:    `group-send: 缺少 "text"。`,
+			errBadKind:        `group-send: "kind" 必须是 "request" 或 "reply"。request 表示你在向对方提要求（对方欠你一次回复），reply 表示你在回答对方。`,
 			errNoCoordinatedGroup: "spawn: 你不是任何群的协调者，无法派生工作会话。请先用 group-create " +
 				"创建自己的群。注意：仅仅作为某个群的成员是不够的——成员不能往群里加人。",
 			errNotMember:   func(g string) string { return fmt.Sprintf("群 '%s' 不存在，或你不在其中。", g) },
@@ -487,5 +514,7 @@ func groupStringsFor(locale string) groupStrings {
 				"coordinator, which relays.", g)
 		},
 		errSelfAddress: "group-send: you cannot address yourself.",
+		errBadKind: `group-send: "kind" must be "request" or "reply". "request" means you are asking for ` +
+			`something (the recipient then owes you a reply); "reply" means you are answering.`,
 	}
 }

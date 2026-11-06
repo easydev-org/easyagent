@@ -857,6 +857,7 @@ tools:
         就是：协调者在自己会话里把问题解释得清清楚楚，却从来没发到群里。
     input_schema:
       type: object
+      required: [group, kind]
       properties:
         group:
           type: string
@@ -868,6 +869,23 @@ tools:
             zh: >-
               群的 **id**——来自 group-list 或 group-create 返回的 `id` 字段。**不是群名称**：名称是用户可以
               改的标签，用它寻址会在这个群被改名后立刻失效。
+        kind:
+          type: string
+          enum: [request, reply]
+          description: >-
+            WHETHER THIS MESSAGE ASKS OR ANSWERS. "request" means you want something from the sessions in
+            `to`, and they then owe you a reply — the group tracks that debt and reminds them if they stop
+            without answering. "reply" means you are answering someone, and it closes the debt they opened.
+
+            REQUIRED, because guessing produced a livelock: a reply that names its asker looks exactly like a
+            new request, so two sessions chased each other with reminders, forever.
+          descriptions:
+            zh: >-
+              这条消息是**提问**还是**回答**。`request` 表示你在向 `to` 里的人要东西，对方因此欠你一次回复——
+              群会记下这笔未回复，并在对方停下而没有回答时提醒它。`reply` 表示你在回答某人，它会清掉对方开的那笔记录。
+
+              **必填**，因为靠推断会导致死循环：一条回应点名者的回复，看起来和一次新的提问一模一样，
+              于是两个会话会用提醒互相追逐，永不停止。
         to:
           type: array
           items:
@@ -904,7 +922,9 @@ tools:
       # `to` IS NOT REQUIRED: omitting it means "reply to the group", which is the common case.
       # `text` IS NOT REQUIRED either: a message may be a file with no caption. The tool refuses only when BOTH
       # are empty, which is not a message.
-      required: [group]
+      #
+      # `kind` IS REQUIRED and is listed at the top, with `group`. Stating the requirement twice was not a harmless
+      # duplication: YAML keeps the LAST value, so this line silently erased it.
 
 config:
   - name: search_provider

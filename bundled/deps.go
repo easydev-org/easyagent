@@ -133,7 +133,7 @@ type Deps interface {
 	 * rather than passed in, so a message that arrives after a rename still lands in the same transcript and the
 	 * prompt shows the name the group has NOW.
 	 */
-	PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) (GroupPost, error)
+	PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string, intent string) (GroupPost, error)
 
 	/**
 	 * OpenReplyObligations records that each named session owes `from` one reply for the message just posted.
@@ -148,6 +148,8 @@ type Deps interface {
 	 *
 	 * CALLED ON EVERY REPLY, addressed to `to`. A reply addressed elsewhere settles nothing, which is the whole
 	 * distinction between answering and talking.
+	 *
+	 * TRUE MEANS THIS MESSAGE WAS A REPLY, and the caller must not also treat it as a new ask.
 	 */
 	FulfilReplyObligations(tenant, groupID, session, to string) error
 

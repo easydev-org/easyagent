@@ -331,6 +331,9 @@ func (d *StoreDeps) OpenReplyObligations(tenant, groupID, from string, sessions 
 }
 
 // FulfilReplyObligations implements Deps.
+//
+// THE CALLER ALREADY KNOWS THIS IS A REPLY — the sender declared it — so this does not report whether anything was
+// settled: settling zero obligations is normal (a reply to someone who asked nothing).
 func (d *StoreDeps) FulfilReplyObligations(tenant, groupID, session, to string) error {
 	_, err := d.DB.FulfilReplyObligations(tenant, groupID, session, to,
 		time.Now().UTC().Format(time.RFC3339Nano))
@@ -348,7 +351,7 @@ func (d *StoreDeps) FulfilReplyObligations(tenant, groupID, session, to string) 
  * A DELIVERY FAILURE IS RETURNED, because at this layer the caller is a tool whose whole job that message
  * was. The message is already stored either way; the error says the recipients were not reached.
  */
-func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) (GroupPost, error) {
+func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string, intent string) (GroupPost, error) {
 	/**
 	 * THE ATTACHMENT REFERENCES ARE RESOLVED AGAINST THE BLOB STORE, not taken on trust.
 	 *
@@ -364,6 +367,7 @@ func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, 
 	attachmentsJSON := d.encodeAttachments(tenant, attachments)
 	msg, err := d.DB.AppendGroupMessage(store.GroupMessage{
 		ID: newGroupMessageID(), Tenant: tenant, GroupID: groupID,
+		Kind: store.KindOf("", from), Intent: intent,
 		Sender: from, SenderName: d.sessionName(tenant, from), Body: text,
 		Attachments: attachmentsJSON,
 	}, time.Now().UTC().Format(time.RFC3339Nano))
@@ -388,7 +392,7 @@ func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, 
 		 */
 		payload := map[string]any{
 			"group": groupID, "group_name": groupName, "from": from, "from_name": msg.SenderName, "text": text,
-			"message_id": msg.ID, "seq": msg.Seq,
+			"message_id": msg.ID, "seq": msg.Seq, "intent": intent,
 		}
 		// THE FILES RIDE WITH THE DELIVERY: a woken member reads the prompt built from this payload, so a
 		// picture that only reached the transcript would be one nobody was told about.

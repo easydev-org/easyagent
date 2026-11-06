@@ -135,7 +135,7 @@ func (s *Server) groupAttachmentsFromRefs(tenant string, refs []*agentv1.FileRef
  * That rule lives here rather than in the channel layer because it needs the membership table, and the
  * channel layer deliberately knows nothing about groups.
  */
-func (s *Server) sendGroupMessage(ctx context.Context, tenant, groupID, sender, text string, attachments []*agentv1.FileRef) (*agentv1.GroupMessage, []string, error) {
+func (s *Server) sendGroupMessage(ctx context.Context, tenant, groupID, sender, text string, attachments []*agentv1.FileRef, intent string) (*agentv1.GroupMessage, []string, error) {
 	id := strings.TrimSpace(groupID)
 	if id == "" {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group id is required")
@@ -192,6 +192,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, groupID, sender, 
 		Tenant:      tenant,
 		GroupID:     id,
 		Kind:        store.KindOf("", sender),
+		Intent:      intent,
 		Sender:      sender,
 		SenderName:  senderName,
 		Body:        text,
@@ -299,7 +300,7 @@ func groupMessagePayload(msg store.GroupMessage, groupName, text string) map[str
 // SendGroupMessage posts a message into a group.
 func (s *Server) SendGroupMessage(ctx context.Context, req *agentv1.SendGroupMessageRequest) (*agentv1.SendGroupMessageResponse, error) {
 	msg, delivered, err := s.sendGroupMessage(ctx, tenantOf(ctx),
-		req.GetGroupId(), req.GetSender(), req.GetText(), req.GetAttachments())
+		req.GetGroupId(), req.GetSender(), req.GetText(), req.GetAttachments(), req.GetIntent())
 	if err != nil {
 		return nil, err
 	}

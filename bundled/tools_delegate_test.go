@@ -133,7 +133,7 @@ func (c *chainStub) IsGroupMember(_, group, session string) bool {
 	return false
 }
 
-func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string, attachments []string) (GroupPost, error) {
+func (c *chainStub) PostGroupMessage(_, group, from string, to []string, text string, attachments []string, _ string) (GroupPost, error) {
 	c.postedAttachments = append(c.postedAttachments, attachments)
 	c.posted = append(c.posted, [2]string{group, text})
 	for _, rcpt := range to {
@@ -394,7 +394,7 @@ func TestGroupSendAllowsBothDirections(t *testing.T) {
 	worker := c.forked[0]
 
 	// Downward: coordinator → member.
-	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{worker}, "text": "keep going",
 	}); err != nil {
 		t.Fatal(err)
@@ -425,7 +425,7 @@ func TestGroupSendRefusesMemberToMember(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
-	out, err := e.groupSend(ctx, "t", "w1", map[string]any{
+	out, err := e.groupSend(ctx, "t", "w1", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w2"}, "text": "hello",
 	})
 	if err != nil {
@@ -449,7 +449,7 @@ func TestGroupSendRefusesOutsiders(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := e.groupSend(ctx, "t", "mallory", map[string]any{
+	out, err := e.groupSend(ctx, "t", "mallory", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"alice"}, "text": "let me in",
 	})
 	if err != nil {
@@ -470,7 +470,7 @@ func TestGroupSendRefusesSelfAddress(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"alice"}, "text": "note to self",
 	})
 	if err != nil {
@@ -542,7 +542,7 @@ func TestGroupSendToSeveralMembers(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1", "w2", "w3"}
 
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w1", "w2"}, "text": "same instruction",
 	})
 	if err != nil {
@@ -594,7 +594,7 @@ func TestGroupSendRejectsTheWholeListOnOneBadName(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w1", "not-a-member"}, "text": "x",
 	})
 	if err != nil {
@@ -621,7 +621,7 @@ func TestGroupSendRequiresAnArray(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": "w1", "text": "x",
 	})
 	if err != nil {
@@ -648,7 +648,7 @@ func TestGroupSendCollapsesDuplicates(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
-	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w1", "w1", "", "  "}, "text": "x",
 	}); err != nil {
 		t.Fatal(err)
@@ -676,7 +676,7 @@ func TestGroupSendMemberCanOnlyAddressTheCoordinator(t *testing.T) {
 	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
 	// w1 → coordinator: allowed.
-	if _, err := e.groupSend(ctx, "t", "w1", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "w1", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"alice"}, "text": "done",
 	}); err != nil {
 		t.Fatal(err)
@@ -687,7 +687,7 @@ func TestGroupSendMemberCanOnlyAddressTheCoordinator(t *testing.T) {
 
 	// w1 → [coordinator, w2]: refused whole.
 	c.published = nil
-	out, err := e.groupSend(ctx, "t", "w1", map[string]any{
+	out, err := e.groupSend(ctx, "t", "w1", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"alice", "w2"}, "text": "done",
 	})
 	if err != nil {
@@ -722,7 +722,7 @@ func TestGroupSendWithoutToIsAReply(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "reply",
 		"group": "gid-alice", "text": "收到，我来汇总",
 	})
 	if err != nil {
@@ -757,7 +757,7 @@ func TestGroupSendWithToIsAnInstruction(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
-	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w1"}, "text": "you do it",
 	}); err != nil {
 		t.Fatal(err)
@@ -798,7 +798,7 @@ func TestGroupSendCarriesAttachments(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
-	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w1"},
 		"text": "here is the chart", "attachments": []any{"file-1", "file-2"},
 	}); err != nil {
@@ -833,7 +833,7 @@ func TestGroupSendAllowsAnAttachmentWithoutText(t *testing.T) {
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	// Attachment only: accepted.
-	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "reply",
 		"group": "gid-alice", "attachments": []any{"file-1"},
 	}); err != nil {
 		t.Fatal(err)
@@ -844,7 +844,7 @@ func TestGroupSendAllowsAnAttachmentWithoutText(t *testing.T) {
 
 	// Neither: refused, and nothing was posted.
 	before := len(c.posted)
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"group": "gid-alice"})
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "reply", "group": "gid-alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -900,7 +900,7 @@ func TestGroupSendRefusesARecipientOutsideTheGroup(t *testing.T) {
 	// The group holds alice and w1; mallory exists as a session but is NOT a member.
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"mallory"}, "text": "you are not in this group",
 	})
 	if err != nil {
@@ -934,7 +934,7 @@ func TestGroupSendWithOneOutsiderDeliversToNobody(t *testing.T) {
 	}
 	c.membership["gid-alice"] = []string{"alice", "w1"}
 
-	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{"kind": "request",
 		"group": "gid-alice", "to": []any{"w1", "mallory"}, "text": "half of you can do this",
 	}); err != nil {
 		t.Fatal(err)
@@ -1078,5 +1078,66 @@ func TestSpawnIsRefusedWithoutAnyGroupSpawnGrant(t *testing.T) {
 	}
 	if denied.Scope != "" {
 		t.Errorf("scope = %q, want empty for an unscoped capability refusal", denied.Scope)
+	}
+}
+
+/**
+ * A REPLY ASKS NOTHING, AND THAT IS THE RULE THAT STOPS THE PING-PONG.
+ *
+ * A MESSAGE CANNOT DO BOTH. The first live run proved why this needs to be explicit rather than inferred: the worker
+ * answered the coordinator with `to=<coordinator>`, the inference read that as "addressed someone, so it is a new
+ * request", the coordinator then owed an answer to the answer, and the two chased each other — reminders 1/3, 2/3,
+ * 1/3 — while both politely confirmed at each other forever.
+ *
+ * `kind` IS THE SENDER'S DECLARATION, and it decides: `reply` discharges what was owed and opens nothing.
+ */
+func TestAReplyDoesNotOpenADebtForTheAsker(t *testing.T) {
+	c := newChainStub()
+	c.existing["alice"] = true
+	c.existing["w1"] = true
+	c.coordinated["alice"] = "gid-alice"
+	c.membership["gid-alice"] = []string{"alice", "w1"}
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	// THE COORDINATOR ASKS.
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"kind": "request", "group": "gid-alice", "to": []any{"w1"}, "text": "please answer 1+1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.obligations) != 1 || c.obligations[0] != [3]string{"gid-alice", "w1", "alice"} {
+		t.Fatalf("after the request: obligations = %v, want w1 owing alice", c.obligations)
+	}
+
+	// THE WORKER ANSWERS. This must SETTLE the debt and open NONE.
+	if _, err := e.groupSend(ctx, "t", "w1", map[string]any{
+		"kind": "reply", "group": "gid-alice", "to": []any{"alice"}, "text": "2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.obligations) != 0 {
+		t.Errorf("the reply left %v outstanding, want none — the answer asked nothing", c.obligations)
+	}
+	if len(c.fulfilled) != 1 || c.fulfilled[0] != [2]string{"w1", "alice"} {
+		t.Errorf("fulfilled = %v, want w1→alice", c.fulfilled)
+	}
+}
+
+// A MESSAGE WITH NO DECLARED KIND IS REFUSED, because guessing is what produced the loop.
+func TestGroupSendRequiresAnIntent(t *testing.T) {
+	c := newChainStub()
+	c.coordinated["alice"] = "gid-alice"
+	c.membership["gid-alice"] = []string{"alice", "w1"}
+	e := newChainExt(t, c)
+
+	out, err := e.groupSend(context.Background(), "t", "alice", map[string]any{
+		"group": "gid-alice", "to": []any{"w1"}, "text": "do it",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "kind") {
+		t.Errorf("a message with no intent was accepted: %q", out.Content)
 	}
 }

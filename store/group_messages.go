@@ -49,6 +49,15 @@ type GroupMessage struct {
 	Kind string `gorm:"column:kind;size:16;index"`
 
 	// Body is the message text.
+	/**
+	 * Kind is WHO WROTE IT, and Intent is WHAT IT IS: a request or a reply.
+	 *
+	 * TWO AXES, NOT ONE. "who" is about attribution (the console draws it differently), "what" is about the work: a
+	 * request EXPECTS AN ANSWER and a reply IS one. Folding them together was the mistake — a reply is written by the
+	 * same session that can write a request, so "who" cannot tell you whether anyone is waiting.
+	 */
+	Intent string `gorm:"column:intent;size:16;index"`
+
 	Body string `gorm:"column:body;type:text"`
 
 	/**
@@ -92,6 +101,24 @@ const (
 	GroupMessageKindUser    = "user"
 	GroupMessageKindSession = "session"
 	GroupMessageKindSystem  = "system"
+)
+
+/**
+ * The two things a session's group message can BE.
+ *
+ * A REQUEST OPENS A DEBT: the addressee owes an answer, and the group page can say who has not given one yet.
+ * A REPLY CLOSES ONE: it is the answer, and by definition asks nothing further.
+ *
+ * THE SENDER DECLARES IT. Inferring it — "this one settled something, so it must be a reply" — cannot work for the
+ * first request, and made a reply that happened to answer nothing indistinguishable from a new ask. The ping-pong
+ * that produced on the first live run is what this parameter exists to prevent.
+ *
+ * EMPTY MEANS "NO OPINION", which is every message a person posts and every system notice: neither owes nor settles
+ * anything.
+ */
+const (
+	GroupIntentRequest = "request"
+	GroupIntentReply   = "reply"
 )
 
 /**

@@ -85,7 +85,7 @@ func (d *stubDeps) RevokeCapability(string, string, string, string) error { retu
 func (d *stubDeps) CreateGroupForSession(string, string, string) (string, error) {
 	return "gid", nil
 }
-func (d *stubDeps) PostGroupMessage(string, string, string, []string, string, []string) (GroupPost, error) {
+func (d *stubDeps) PostGroupMessage(string, string, string, []string, string, []string, string) (GroupPost, error) {
 	return GroupPost{}, nil
 }
 func (d *stubDeps) ForkSession(string, string, string, []string) (string, error) { return "", nil }
