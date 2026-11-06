@@ -85,6 +85,15 @@ type Server struct {
 
 	// nowFn is an injectable clock (tests).
 	nowFn func() time.Time
+
+	/**
+	 * statusOverride answers "is this session running" for a test that is about something else.
+	 *
+	 * THE PRODUCTION PATH READS THE SHARED LEASE, which needs a broker. A test server has none, so without this seam
+	 * every status would be "idle" and a test about what a member list carries would be unable to observe anything
+	 * but the empty case. nil means "use the lease".
+	 */
+	statusOverride func(session string) string
 }
 
 /**

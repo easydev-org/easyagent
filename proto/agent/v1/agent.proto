@@ -766,6 +766,17 @@ message GroupMember {
   string joined_at = 3;
   // Provenance: "user" or "user:<name>". A member nobody remembers adding needs an answer.
   string joined_by = 4;
+  /**
+   * "busy" while a turn holds the session's run lease anywhere, "idle" otherwise.
+   *
+   * IT IS ON THE MEMBER ROW BECAUSE THE ROOM IS WHERE A PERSON WATCHES. "Is anyone actually working on this" is the
+   * first question a group page has to answer, and answering it by opening each member's transcript in turn is not
+   * an answer — it is four page loads.
+   *
+   * IT COMES FROM THE SHARED LEASE, not from a process's own active set: a turn runs on one replica, and a
+   * process-local answer would show "idle" for working sessions on every other one.
+   */
+  string status = 5;
 }
 
 message CreateGroupRequest {

@@ -182,3 +182,64 @@ func TestForkingASessionGivesItItsOwnGroup(t *testing.T) {
 		t.Errorf("the parent's groups = %v, want only its own room", parentGroups.Groups)
 	}
 }
+
+/**
+ * A GROUP'S MEMBER LIST SAYS WHO IS WORKING.
+ *
+ * "IS ANYONE ACTUALLY DOING THIS" is the first question a group page has to answer, and it is the reason the status
+ * lives on the member row instead of only on the session list: a person watching the room would otherwise have to
+ * open each member's transcript in turn to find out, which is four page loads rather than one glance.
+ *
+ * THE STATUS IS THE LEASE'S, not this process's active set — see statusOf. That matters because a turn runs on
+ * exactly one replica, and a process-local answer would show "idle" for working sessions on every other one.
+ */
+func TestGroupMembersCarryRuntimeStatus(t *testing.T) {
+	ts, db, srv := newTestServerWithSrv(t)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	worker := newSession(t, c, "worker")
+	created, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "g", Coordinator: coord, Members: []string{worker}, CreatedBy: "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// NOTHING IS RUNNING YET: every member is idle, and the field is PRESENT rather than omitted — a caller that
+	// cannot tell "idle" from "unknown" has to ask again to learn anything.
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: created.Group.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range got.Members {
+		if m.Status != "idle" {
+			t.Errorf("%s has status %q, want idle", m.Session, m.Status)
+		}
+	}
+
+	// THE RUNTIME REPORTS THE WORKER BUSY, and the member list follows. The stub is the same seam the real runtime
+	// plugs into, so this exercises the wiring rather than a mock of it.
+	srv.statusOverride = func(session string) string {
+		if session == worker {
+			return "busy"
+		}
+		return "idle"
+	}
+	got, err = c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: created.Group.Id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySession := map[string]string{}
+	for _, m := range got.Members {
+		bySession[m.Session] = m.Status
+	}
+	if bySession[worker] != "busy" {
+		t.Errorf("the working member reads %q, want busy", bySession[worker])
+	}
+	if bySession[coord] != "idle" {
+		t.Errorf("the idle member reads %q, want idle", bySession[coord])
+	}
+}

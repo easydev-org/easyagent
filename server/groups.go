@@ -90,13 +90,14 @@ func (s *Server) groupToRow(tenant string, g store.Group, memberCount int) *agen
 	return out
 }
 
-func memberToMsg(m store.GroupMember) *agentv1.GroupMember {
+func memberToMsg(m store.GroupMember, status string) *agentv1.GroupMember {
 	role := m.Role
 	if role == "" {
 		role = store.GroupRoleMember
 	}
 	return &agentv1.GroupMember{
 		Session: m.Session, Role: role, JoinedAt: m.JoinedAt, JoinedBy: m.JoinedBy,
+		Status: status,
 	}
 }
 
@@ -531,7 +532,9 @@ func (s *Server) groupWithMembers(ctx context.Context, tenant, name string) (*ag
 	}
 	out := make([]*agentv1.GroupMember, 0, len(members))
 	for _, m := range members {
-		out = append(out, memberToMsg(m))
+		// THE STATUS IS READ PER MEMBER, which is the whole point of putting it here: a coordinator looking at a
+		// group needs to know who is working, and asking each session's transcript in turn is not an answer.
+		out = append(out, memberToMsg(m, s.statusOf(ctx, m.Session)))
 	}
 	return groupToMsg(*g, len(members)), out, nil
 }

@@ -443,9 +443,34 @@ func (s *Server) MarkRead(ctx context.Context, req *agentv1.MarkReadRequest) (*a
 	return &agentv1.MarkReadResponse{Session: sessionToMsg(*row, s.statusOf(ctx, req.Id))}, nil
 }
 
-// statusOf reports a session's runtime status ("busy" while a turn holds it).
+/**
+ * statusOf reports a session's runtime status: "busy" while a turn holds it, "idle" otherwise.
+ *
+ * THE LEASE IS THE SOURCE, NOT THIS PROCESS'S ACTIVE SET. A turn runs on exactly one replica, so a busy session was
+ * invisible to every other one — a person watching the list from replica B saw "idle" for a session that had been
+ * working for a minute, and the group page would have shown the same. The lease lives in the shared KV bucket, so
+ * asking it answers the question that was actually being asked: is a turn running anywhere.
+ *
+ * THE IN-PROCESS SET IS THE FALLBACK for a deployment with no broker, where there is exactly one replica and the
+ * local answer is the whole truth. It is also what keeps the in-memory test server working.
+ *
+ * A FAILED LEASE READ REPORTS "idle" RATHER THAN AN ERROR: the status is a decoration on a row, and a broker hiccup
+ * should not blank a list. The direction is honest — "not known to be working" is what an unreadable lease means.
+ */
 func (s *Server) statusOf(ctx context.Context, session string) string {
-	if s.rt != nil && s.rt.IsActive(tenantOf(ctx), session) {
+	if s.statusOverride != nil {
+		return s.statusOverride(session)
+	}
+	tenant := tenantOf(ctx)
+	if s.runtimeBus != nil {
+		if held, err := s.runtimeBus.IsHeld(ctx, tenant, session); err == nil {
+			if held {
+				return "busy"
+			}
+			return "idle"
+		}
+	}
+	if s.rt != nil && s.rt.IsActive(tenant, session) {
 		return "busy"
 	}
 	return "idle"

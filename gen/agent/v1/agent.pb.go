@@ -4714,7 +4714,17 @@ type GroupMember struct {
 	Role     string `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
 	JoinedAt string `protobuf:"bytes,3,opt,name=joined_at,json=joinedAt,proto3" json:"joined_at,omitempty"`
 	// Provenance: "user" or "user:<name>". A member nobody remembers adding needs an answer.
-	JoinedBy      string `protobuf:"bytes,4,opt,name=joined_by,json=joinedBy,proto3" json:"joined_by,omitempty"`
+	JoinedBy string `protobuf:"bytes,4,opt,name=joined_by,json=joinedBy,proto3" json:"joined_by,omitempty"`
+	//*
+	// "busy" while a turn holds the session's run lease anywhere, "idle" otherwise.
+	//
+	// IT IS ON THE MEMBER ROW BECAUSE THE ROOM IS WHERE A PERSON WATCHES. "Is anyone actually working on this" is the
+	// first question a group page has to answer, and answering it by opening each member's transcript in turn is not
+	// an answer — it is four page loads.
+	//
+	// IT COMES FROM THE SHARED LEASE, not from a process's own active set: a turn runs on one replica, and a
+	// process-local answer would show "idle" for working sessions on every other one.
+	Status        string `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4773,6 +4783,13 @@ func (x *GroupMember) GetJoinedAt() string {
 func (x *GroupMember) GetJoinedBy() string {
 	if x != nil {
 		return x.JoinedBy
+	}
+	return ""
+}
+
+func (x *GroupMember) GetStatus() string {
+	if x != nil {
+		return x.Status
 	}
 	return ""
 }
@@ -11692,12 +11709,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fmember_count\x18\x05 \x01(\x05R\vmemberCount\x12\x14\n" +
 	"\x05intro\x18\x06 \x01(\tR\x05intro\x120\n" +
 	"\x14last_message_preview\x18\a \x01(\tR\x12lastMessagePreview\x12&\n" +
-	"\x0flast_message_at\x18\b \x01(\tR\rlastMessageAt\"u\n" +
+	"\x0flast_message_at\x18\b \x01(\tR\rlastMessageAt\"\x8d\x01\n" +
 	"\vGroupMember\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\x12\x1b\n" +
 	"\tjoined_at\x18\x03 \x01(\tR\bjoinedAt\x12\x1b\n" +
-	"\tjoined_by\x18\x04 \x01(\tR\bjoinedBy\"\xba\x01\n" +
+	"\tjoined_by\x18\x04 \x01(\tR\bjoinedBy\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\"\xba\x01\n" +
 	"\x12CreateGroupRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vavatar_file\x18\x02 \x01(\tR\n" +
