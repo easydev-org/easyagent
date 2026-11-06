@@ -34,7 +34,10 @@ func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
 		GroupId: m.GroupID,
 		// DERIVED FOR OLD ROWS: a message written before the column existed has no kind, and an empty sender has
 		// always meant the user. See store.KindOf.
-		Kind:        store.KindOf(m.Kind, m.Sender),
+		Kind: store.KindOf(m.Kind, m.Sender),
+		// CARRIED, NOT DERIVED: whether a message asks or answers is what the sender declared, and the console needs
+		// it to tell "waiting on a reply" from "answered".
+		Intent:      m.Intent,
 		Sender:      m.Sender,
 		SenderName:  m.SenderName,
 		Body:        m.Body,

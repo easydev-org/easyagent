@@ -157,17 +157,18 @@ func replyReminderText(locale, groupName, fromID, fromName string, attempt int) 
 	}
 	if strings.HasPrefix(strings.ToLower(locale), "zh") {
 		return fmt.Sprintf(
-			"【系统提醒 %d/%d】在群「%s」里，%s 点名了你，你还没有回复。\n\n"+
-				"请用 group-send 把回复发给 %s（group 参数填本群 id，to 参数填 %s 的 id）。"+
-				"这是第 %d 次自动提醒，最多 %d 次。",
-			attempt, maxReplyReminders, groupName, who, who, fromID, attempt, maxReplyReminders,
+			"【系统提醒 %d/%d】在群「%s」里，%s 向你提了一个请求（kind=request），你还没有答复。\n\n"+
+				"请调用 group-send：group 填本群 id，to 填 [\"%s\"]，kind 填 \"reply\"，text 填你的答复。"+
+				"这是第 %d 次自动提醒，最多 %d 次；超过之后系统不再提醒，这笔未回复会留在群里显示。",
+			attempt, maxReplyReminders, groupName, who, fromID, attempt, maxReplyReminders,
 		)
 	}
 	return fmt.Sprintf(
-		"[System reminder %d/%d] In group %q, %s addressed you and you have not replied.\n\n"+
-			"Use group-send to answer %s (group = this group's id, to = %s's id). "+
-			"This is automatic reminder %d of %d.",
-		attempt, maxReplyReminders, groupName, who, who, fromID, attempt, maxReplyReminders,
+		"[System reminder %d/%d] In group %q, %s asked you something (kind=request) and you have not answered.\n\n"+
+			"Call group-send with group = this group's id, to = [\"%s\"], kind = \"reply\", and your answer as text. "+
+			"This is automatic reminder %d of %d; after that the system stops, and the outstanding request stays "+
+			"visible in the group.",
+		attempt, maxReplyReminders, groupName, who, fromID, attempt, maxReplyReminders,
 	)
 }
 
