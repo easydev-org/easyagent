@@ -60,6 +60,7 @@ func validateGroupName(name string) error {
 // groupToMsg renders a group with its member count.
 func groupToMsg(g store.Group, memberCount int) *agentv1.Group {
 	return &agentv1.Group{
+		Id:          g.ID,
 		Name:        g.Name,
 		AvatarFile:  g.AvatarFile,
 		CreatedBy:   g.CreatedBy,
@@ -78,7 +79,7 @@ func groupToMsg(g store.Group, memberCount int) *agentv1.Group {
  */
 func (s *Server) groupToRow(tenant string, g store.Group, memberCount int) *agentv1.Group {
 	out := groupToMsg(g, memberCount)
-	preview, at, err := s.db.GroupTranscriptPreview(tenant, g.Name)
+	preview, at, err := s.db.GroupTranscriptPreview(tenant, g.ID)
 	if err == nil {
 		out.LastMessagePreview = preview
 		out.LastMessageAt = at
@@ -171,7 +172,7 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 	}
 
 	now := nowRFC3339()
-	g := store.Group{
+	g := &store.Group{
 		Name: name, AvatarFile: req.GetAvatarFile(),
 		// A GROUP'S INTRO IS SET AT CREATION, so the person naming the group also says what it is for — the
 		// moment they know the answer, and before the first member reads an unexplained list of names.
@@ -188,9 +189,9 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 	// A NEW GROUP IS A NEW ROW. Announced before the subscription sync, because the list should show it even if
 	// routing takes another moment to establish.
 	s.notifyListChange(tenant, agentbus.SessionListChange{
-		Kind: agentbus.ListKindGroup, Name: name,
+		Kind: agentbus.ListKindGroup, Name: g.ID,
 	})
-	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
+	if err := s.syncGroupSubscriptions(ctx, tenant, g.ID, nil); err != nil {
 		// THE GROUP EXISTS AND IS CORRECT; only its routing is not established yet. Reported rather
 		// than ignored so the operator can re-run, and not rolled back because deleting a group the user
 		// just made is a worse outcome than a routing delay.
@@ -199,12 +200,12 @@ func (s *Server) CreateGroup(ctx context.Context, req *agentv1.CreateGroupReques
 	}
 	// THE COUNT IS PART OF THE ANSWER, not decoration: `member_count: 0` on a group that HAS members is a
 	// lie the client cannot detect, and it would render an empty member list on a group the user just made.
-	members, err := s.db.ListGroupMembers(tenant, name)
+	members, err := s.db.ListGroupMembers(tenant, g.ID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	return &agentv1.CreateGroupResponse{
-		Group: groupToMsg(g, len(members)),
+		Group: groupToMsg(*g, len(members)),
 	}, nil
 }
 
@@ -249,12 +250,12 @@ func (s *Server) ListGroups(ctx context.Context, req *agentv1.ListGroupsRequest)
 // GetGroup returns a group and its members.
 func (s *Server) GetGroup(ctx context.Context, req *agentv1.GetGroupRequest) (*agentv1.GetGroupResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetName())
-	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "group id is required")
 	}
 
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
@@ -263,7 +264,7 @@ func (s *Server) GetGroup(ctx context.Context, req *agentv1.GetGroupRequest) (*a
 	// A SESSION MUST BE A MEMBER; the console may ask for any group. NOT_FOUND rather than
 	// PERMISSION_DENIED, so the answer does not confirm the group exists.
 	if sid := req.GetSession(); sid != "" {
-		member, err := s.db.IsGroupMember(tenant, name, sid)
+		member, err := s.db.IsGroupMember(tenant, id, sid)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error())
 		}
@@ -274,7 +275,7 @@ func (s *Server) GetGroup(ctx context.Context, req *agentv1.GetGroupRequest) (*a
 
 	// THE SAME ARM EVERY OTHER RPC USES, so "the group as it now stands" is assembled in one place and a
 	// change to what a group response carries cannot land in three of four handlers.
-	gm, members, err := s.groupWithMembers(ctx, tenant, name)
+	gm, members, err := s.groupWithMembers(ctx, tenant, id)
 	if err != nil {
 		return nil, err
 	}
@@ -284,14 +285,29 @@ func (s *Server) GetGroup(ctx context.Context, req *agentv1.GetGroupRequest) (*a
 // UpdateGroup changes the group's picture.
 func (s *Server) UpdateGroup(ctx context.Context, req *agentv1.UpdateGroupRequest) (*agentv1.UpdateGroupResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetName())
-	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "group id is required")
 	}
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
+	}
+
+	/**
+	 * THE NAME IS EDITABLE NOW, and that is the change the identity split bought: it touches nothing else.
+	 *
+	 * Collisions are refused rather than silently suffixed — two groups with the same name would defeat the only
+	 * reason the name is unique, which is a person telling them apart by sight.
+	 */
+	if req.Name != nil {
+		if err := s.db.RenameGroup(tenant, id, strings.TrimSpace(req.GetName()), nowRFC3339()); err != nil {
+			if errors.Is(err, store.ErrGroupExists) {
+				return nil, connect.NewError(connect.CodeAlreadyExists, err.Error())
+			}
+			return nil, connect.NewError(connect.CodeInternal, err.Error())
+		}
 	}
 
 	/**
@@ -300,7 +316,7 @@ func (s *Server) UpdateGroup(ctx context.Context, req *agentv1.UpdateGroupReques
 	 * card — and a partial write would let the picture and the intro disagree about which save they came from.
 	 */
 	if req.AvatarFile != nil || req.Intro != nil {
-		current, ok, err := s.db.GetGroup(tenant, name)
+		current, ok, err := s.db.GetGroup(tenant, id)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error())
 		}
@@ -314,12 +330,12 @@ func (s *Server) UpdateGroup(ctx context.Context, req *agentv1.UpdateGroupReques
 		if req.Intro != nil {
 			intro = strings.TrimSpace(req.GetIntro())
 		}
-		if err := s.db.UpdateGroupProfile(tenant, name, avatar, intro, nowRFC3339()); err != nil {
+		if err := s.db.UpdateGroupProfile(tenant, id, avatar, intro, nowRFC3339()); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error())
 		}
 	}
 
-	gm, _, err := s.groupWithMembers(ctx, tenant, name)
+	gm, _, err := s.groupWithMembers(ctx, tenant, id)
 	if err != nil {
 		return nil, err
 	}
@@ -329,11 +345,11 @@ func (s *Server) UpdateGroup(ctx context.Context, req *agentv1.UpdateGroupReques
 // DeleteGroup removes a group and its memberships.
 func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupRequest) (*agentv1.DeleteGroupResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetName())
-	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "group id is required")
 	}
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
@@ -341,16 +357,16 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 	// UNSUBSCRIBE BEFORE THE ROWS GO: the member list is what says WHO to unsubscribe, so reading it
 	// after the delete would find nobody and leave every member still listening to a group that no
 	// longer exists.
-	previous, err := s.db.SessionsInGroupIDs(tenant, name, "")
+	previous, err := s.db.SessionsInGroupIDs(tenant, id, "")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	if err := s.db.DeleteGroup(tenant, name); err != nil {
+	if err := s.db.DeleteGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	// THE TRANSCRIPT GOES WITH THE GROUP. Left behind, the rows are unreachable through any RPC and grow
 	// forever — and a later group with the same name would inherit a stranger's conversation.
-	if err := s.db.DeleteGroupMessages(tenant, name); err != nil {
+	if err := s.db.DeleteGroupMessages(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			"group deleted but its transcript remains: "+err.Error())
 	}
@@ -358,14 +374,14 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 		// A GROUP THAT STILL ROUTES AFTER ITS DELETION IS A LIE THE USER CANNOT SEE: members keep receiving
 		// messages from a group the console says is gone. Reported rather than swallowed; the group rows
 		// are already deleted, so re-running the delete repairs the subscriptions.
-		if err := s.channels.DropGroup(ctx, tenant, name, previous); err != nil {
+		if err := s.channels.DropGroup(ctx, tenant, id, previous); err != nil {
 			return nil, connect.NewError(connect.CodeInternal,
 				"group deleted but its subscriptions remain: "+err.Error())
 		}
 	}
 	// THE ROW IS GONE, SO THE LIST MUST DROP IT — on every replica, not only the one that served the delete.
 	s.notifyListChange(tenant, agentbus.SessionListChange{
-		Kind: agentbus.ListKindGroup, Name: name, Deleted: true,
+		Kind: agentbus.ListKindGroup, Name: id, Deleted: true,
 	})
 	return &agentv1.DeleteGroupResponse{}, nil
 }
@@ -373,11 +389,11 @@ func (s *Server) DeleteGroup(ctx context.Context, req *agentv1.DeleteGroupReques
 // AddGroupMember enrolls sessions.
 func (s *Server) AddGroupMember(ctx context.Context, req *agentv1.AddGroupMemberRequest) (*agentv1.AddGroupMemberResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetGroup())
-	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
+	id := strings.TrimSpace(req.GetGroupId())
+	if id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "group id is required")
 	}
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
@@ -391,18 +407,18 @@ func (s *Server) AddGroupMember(ctx context.Context, req *agentv1.AddGroupMember
 	if addedBy == "" {
 		addedBy = "user"
 	}
-	previous, err := s.db.SessionsInGroupIDs(tenant, name, "")
+	previous, err := s.db.SessionsInGroupIDs(tenant, id, "")
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	if err := s.db.AddGroupMembers(tenant, name, req.GetMembers(), nowRFC3339(), addedBy); err != nil {
+	if err := s.db.AddGroupMembers(tenant, id, req.GetMembers(), nowRFC3339(), addedBy); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
-	if err := s.syncGroupSubscriptions(ctx, tenant, name, previous); err != nil {
+	if err := s.syncGroupSubscriptions(ctx, tenant, id, previous); err != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			"members added but their subscriptions could not be written: "+err.Error())
 	}
-	g, members, err := s.groupWithMembers(ctx, tenant, name)
+	g, members, err := s.groupWithMembers(ctx, tenant, id)
 	if err != nil {
 		return nil, err
 	}
@@ -412,17 +428,17 @@ func (s *Server) AddGroupMember(ctx context.Context, req *agentv1.AddGroupMember
 // RemoveGroupMember drops one membership.
 func (s *Server) RemoveGroupMember(ctx context.Context, req *agentv1.RemoveGroupMemberRequest) (*agentv1.RemoveGroupMemberResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetGroup())
+	id := strings.TrimSpace(req.GetGroupId())
 	member := strings.TrimSpace(req.GetMember())
-	if name == "" || member == "" {
+	if id == "" || member == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "group and member are required")
 	}
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
-	if err := s.db.RemoveGroupMember(tenant, name, member); err != nil {
+	if err := s.db.RemoveGroupMember(tenant, id, member); err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotGroupMember):
 			return nil, connect.NewError(connect.CodeNotFound, err.Error())
@@ -436,13 +452,13 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *agentv1.RemoveGroup
 	// A NEW GROUP IS A NEW ROW. Announced before the subscription sync, because the list should show it even if
 	// routing takes another moment to establish.
 	s.notifyListChange(tenant, agentbus.SessionListChange{
-		Kind: agentbus.ListKindGroup, Name: name,
+		Kind: agentbus.ListKindGroup, Name: id,
 	})
-	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
+	if err := s.syncGroupSubscriptions(ctx, tenant, id, nil); err != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			"member removed but their subscription could not be dropped: "+err.Error())
 	}
-	g, members, err := s.groupWithMembers(ctx, tenant, name)
+	g, members, err := s.groupWithMembers(ctx, tenant, id)
 	if err != nil {
 		return nil, err
 	}
@@ -458,17 +474,17 @@ func (s *Server) RemoveGroupMember(ctx context.Context, req *agentv1.RemoveGroup
  */
 func (s *Server) SetGroupCoordinator(ctx context.Context, req *agentv1.SetGroupCoordinatorRequest) (*agentv1.SetGroupCoordinatorResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetGroup())
+	id := strings.TrimSpace(req.GetGroupId())
 	session := strings.TrimSpace(req.GetSession())
-	if name == "" || session == "" {
+	if id == "" || session == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "group and session are required")
 	}
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	if _, ok, err := s.db.GetGroup(tenant, id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error())
 	} else if !ok {
 		return nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
-	if err := s.db.SetGroupCoordinator(tenant, name, session); err != nil {
+	if err := s.db.SetGroupCoordinator(tenant, id, session); err != nil {
 		if errors.Is(err, store.ErrNotGroupMember) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				"the new coordinator must already be a member of the group")
@@ -480,13 +496,13 @@ func (s *Server) SetGroupCoordinator(ctx context.Context, req *agentv1.SetGroupC
 	// A NEW GROUP IS A NEW ROW. Announced before the subscription sync, because the list should show it even if
 	// routing takes another moment to establish.
 	s.notifyListChange(tenant, agentbus.SessionListChange{
-		Kind: agentbus.ListKindGroup, Name: name,
+		Kind: agentbus.ListKindGroup, Name: id,
 	})
-	if err := s.syncGroupSubscriptions(ctx, tenant, name, nil); err != nil {
+	if err := s.syncGroupSubscriptions(ctx, tenant, id, nil); err != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			"role changed but the subscriptions could not be rewritten: "+err.Error())
 	}
-	g, members, err := s.groupWithMembers(ctx, tenant, name)
+	g, members, err := s.groupWithMembers(ctx, tenant, id)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +524,7 @@ func (s *Server) groupWithMembers(ctx context.Context, tenant, name string) (*ag
 	if !ok {
 		return nil, nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
-	members, err := s.db.ListGroupMembers(tenant, name)
+	members, err := s.db.ListGroupMembers(tenant, g.ID)
 	if err != nil {
 		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
 	}

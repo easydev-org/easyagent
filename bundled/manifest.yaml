@@ -691,11 +691,12 @@ tools:
         group:
           type: string
           description: >-
-            Which of your groups to put the worker in. ALWAYS REQUIRED, even when you coordinate only one.
-            Must be a group you coordinate.
+            The group's ID to put the worker in — from group-list, not its name. ALWAYS REQUIRED, even when you
+            coordinate only one. Must be a group you coordinate.
           descriptions:
             zh: >-
-              把工作会话放进你的哪个群。**始终必填**，即使你只有一个群。必须是你作为协调者的群。
+              把工作会话放进哪个群的 **id**——来自 group-list，不是群名称。**始终必填**，即使你只有一个群。
+              必须是你作为协调者的群。
         task:
           type: string
           description: The complete, self-contained task for the worker.
@@ -785,9 +786,14 @@ tools:
       properties:
         group:
           type: string
-          description: Group name.
+          description: >-
+            The group's ID — the `id` field from group-list or group-create. NOT its name: the name is a
+            label a person can change, and addressing by it would stop working the moment someone renamed
+            the group.
           descriptions:
-            zh: 群名称。
+            zh: >-
+              群的 **id**——来自 group-list 或 group-create 返回的 `id` 字段。**不是群名称**：名称是用户可以
+              改的标签，用它寻址会在这个群被改名后立刻失效。
       required: [group]
 
   - name: group-send
@@ -850,9 +856,14 @@ tools:
       properties:
         group:
           type: string
-          description: Group name.
+          description: >-
+            The group's ID — the `id` field from group-list or group-create. NOT its name: the name is a
+            label a person can change, and addressing by it would stop working the moment someone renamed
+            the group.
           descriptions:
-            zh: 群名称。
+            zh: >-
+              群的 **id**——来自 group-list 或 group-create 返回的 `id` 字段。**不是群名称**：名称是用户可以
+              改的标签，用它寻址会在这个群被改名后立刻失效。
         to:
           type: array
           items:

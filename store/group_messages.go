@@ -27,8 +27,9 @@ import (
 type GroupMessage struct {
 	ID     string `gorm:"column:id;primaryKey;size:64"`
 	Tenant string `gorm:"column:tenant;size:64;index:idx_group_messages_group,priority:1"`
-	// Group is the group's name (its identity and its address).
-	Group string `gorm:"column:group;size:128;index:idx_group_messages_group,priority:2"`
+	// GroupID is the group's immutable identity. It used to be the group's NAME, which meant a rename orphaned the
+	// transcript: the rows would still exist, under a name no group has any more.
+	GroupID string `gorm:"column:group_id;size:64;index:idx_group_messages_group,priority:2"`
 
 	// Sender is the originating session's id, or empty when a USER posted it.
 	//
@@ -84,7 +85,7 @@ func (d *DB) AppendGroupMessage(m GroupMessage, now string) (GroupMessage, error
 	err := d.g.Transaction(func(tx *gorm.DB) error {
 		var highest int64
 		if err := tx.Model(&GroupMessage{}).
-			Where("tenant = ? AND \"group\" = ?", m.Tenant, m.Group).
+			Where("tenant = ? AND group_id = ?", m.Tenant, m.GroupID).
 			Select("COALESCE(MAX(seq), 0)").Scan(&highest).Error; err != nil {
 			return err
 		}
@@ -103,12 +104,12 @@ func (d *DB) AppendGroupMessage(m GroupMessage, now string) (GroupMessage, error
 // `afterSeq` is EXCLUSIVE, so a caller that holds message 12 asks for messages after 12 and receives 13
 // onward. `limit <= 0` means the server's default page; a caller wanting everything should page rather than
 // ask for an unbounded scan, because a group's transcript has no natural cap.
-func (d *DB) ListGroupMessages(tenant, group string, afterSeq int64, limit int) ([]GroupMessage, error) {
+func (d *DB) ListGroupMessages(tenant, groupID string, afterSeq int64, limit int) ([]GroupMessage, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	var out []GroupMessage
-	err := d.g.Where("tenant = ? AND \"group\" = ? AND seq > ?", tenant, group, afterSeq).
+	err := d.g.Where("tenant = ? AND group_id = ? AND seq > ?", tenant, groupID, afterSeq).
 		Order("seq").Limit(limit).Find(&out).Error
 	return out, err
 }
@@ -126,9 +127,9 @@ func (d *DB) ListGroupMessages(tenant, group string, afterSeq int64, limit int) 
  * PREFERS A MESSAGE WITH WORDS. A group whose last message is a picture would otherwise render an empty
  * preview, which reads as "nothing was said" rather than "something was sent that has no words".
  */
-func (d *DB) GroupTranscriptPreview(tenant, group string) (text string, at string, err error) {
+func (d *DB) GroupTranscriptPreview(tenant, groupID string) (text string, at string, err error) {
 	var rows []GroupMessage
-	if e := d.g.Where("tenant = ? AND \"group\" = ?", tenant, group).
+	if e := d.g.Where("tenant = ? AND group_id = ?", tenant, groupID).
 		Order("seq DESC").Limit(5).Find(&rows).Error; e != nil {
 		return "", "", e
 	}
@@ -149,19 +150,19 @@ func (d *DB) GroupTranscriptPreview(tenant, group string) (text string, at strin
 //
 // Used by a watch that starts without a cursor: the client is told where "now" is, so it does not receive
 // the whole transcript before it can begin.
-func (d *DB) LatestGroupSeq(tenant, group string) (int64, error) {
+func (d *DB) LatestGroupSeq(tenant, groupID string) (int64, error) {
 	var highest int64
 	err := d.g.Model(&GroupMessage{}).
-		Where("tenant = ? AND \"group\" = ?", tenant, group).
+		Where("tenant = ? AND group_id = ?", tenant, groupID).
 		Select("COALESCE(MAX(seq), 0)").Scan(&highest).Error
 	return highest, err
 }
 
 // GroupMessageCount returns how many messages a group holds.
-func (d *DB) GroupMessageCount(tenant, group string) (int64, error) {
+func (d *DB) GroupMessageCount(tenant, groupID string) (int64, error) {
 	var n int64
 	err := d.g.Model(&GroupMessage{}).
-		Where("tenant = ? AND \"group\" = ?", tenant, group).Count(&n).Error
+		Where("tenant = ? AND group_id = ?", tenant, groupID).Count(&n).Error
 	return n, err
 }
 
@@ -169,7 +170,7 @@ func (d *DB) GroupMessageCount(tenant, group string) (int64, error) {
 //
 // A DELETED GROUP'S MESSAGES MUST NOT OUTLIVE IT: the rows would be unreachable through any RPC and would
 // accumulate forever, and a later group with the same name would inherit a stranger's conversation.
-func (d *DB) DeleteGroupMessages(tenant, group string) error {
-	return d.g.Where("tenant = ? AND \"group\" = ?", tenant, group).
+func (d *DB) DeleteGroupMessages(tenant, groupID string) error {
+	return d.g.Where("tenant = ? AND group_id = ?", tenant, groupID).
 		Delete(&GroupMessage{}).Error
 }

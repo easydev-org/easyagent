@@ -34,14 +34,14 @@ func TestWatchGroupReplaysThenFollows(t *testing.T) {
 
 	// Posted BEFORE the watch opens — this is the replay half.
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "already here",
+		GroupId: groupIDByName(t, c, "g"), Text: "already here",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	streamCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	stream, err := c.WatchGroup(streamCtx, &agentv1.WatchGroupRequest{Group: "g"})
+	stream, err := c.WatchGroup(streamCtx, &agentv1.WatchGroupRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestWatchGroupReplaysThenFollows(t *testing.T) {
 
 	// Then a LIVE one, posted after the stream was open.
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "live one",
+		GroupId: groupIDByName(t, c, "g"), Text: "live one",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +106,14 @@ func TestWatchGroupSinceSeqIsExclusive(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "m"}); err != nil {
+		if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{GroupId: groupIDByName(t, c, "g"), Text: "m"}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	streamCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	stream, err := c.WatchGroup(streamCtx, &agentv1.WatchGroupRequest{Group: "g", SinceSeq: 2})
+	stream, err := c.WatchGroup(streamCtx, &agentv1.WatchGroupRequest{GroupId: groupIDByName(t, c, "g"), SinceSeq: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestWatchGroupRequiresMembership(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stream, err := c.WatchGroup(ctx, &agentv1.WatchGroupRequest{Group: "g", Session: outsider})
+	stream, err := c.WatchGroup(ctx, &agentv1.WatchGroupRequest{GroupId: groupIDByName(t, c, "g"), Session: outsider})
 	if err == nil {
 		// The error may arrive on the first Receive rather than the call itself, depending on the transport.
 		if _, rerr := stream.Receive(); rerr == nil {

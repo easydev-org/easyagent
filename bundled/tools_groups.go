@@ -59,15 +59,22 @@ func (e *Extension) groupList(_ context.Context, tenant, session string, _ map[s
 		b.WriteString(fmt.Sprintf("%d group(s):\n", len(groups)))
 	}
 	for _, g := range groups {
+		/**
+		 * THE ID IS PRINTED BECAUSE IT IS WHAT EVERY TOOL TAKES.
+		 *
+		 * A list of names alone left a model holding a label and no address: the very next call (`group-send`,
+		 * `group-members`, `spawn`) takes an id, and one it has never seen is one it can only guess at. The name is
+		 * shown beside it because that is what a person recognises.
+		 */
 		switch {
 		case zh && g.Role == GroupRoleCoordinator:
-			b.WriteString(fmt.Sprintf("- %s（%d 个成员）—— 协调者\n", g.Name, g.Members))
+			b.WriteString(fmt.Sprintf("- %s（id：%s，%d 个成员）—— 协调者\n", g.Name, g.ID, g.Members))
 		case zh:
-			b.WriteString(fmt.Sprintf("- %s（%d 个成员）—— 成员\n", g.Name, g.Members))
+			b.WriteString(fmt.Sprintf("- %s（id：%s，%d 个成员）—— 成员\n", g.Name, g.ID, g.Members))
 		case g.Role == GroupRoleCoordinator:
-			b.WriteString(fmt.Sprintf("- %s (%d member(s)) — coordinator\n", g.Name, g.Members))
+			b.WriteString(fmt.Sprintf("- %s (id: %s, %d member(s)) — coordinator\n", g.Name, g.ID, g.Members))
 		default:
-			b.WriteString(fmt.Sprintf("- %s (%d member(s)) — member\n", g.Name, g.Members))
+			b.WriteString(fmt.Sprintf("- %s (id: %s, %d member(s)) — member\n", g.Name, g.ID, g.Members))
 		}
 	}
 	return agent.ToolOutcome{Content: strings.TrimRight(b.String(), "\n")}, nil

@@ -72,7 +72,9 @@ func (d *stubDeps) CoordinatedGroups(string, string) ([]string, error)    { retu
 func (d *stubDeps) CoordinatedGroupOrMembership(string, string) string    { return "" }
 func (d *stubDeps) AddGroupMemberOnly(string, string, string) error       { return nil }
 func (d *stubDeps) RevokeCapability(string, string, string, string) error { return nil }
-func (d *stubDeps) CreateGroupForSession(string, string, string) error    { return nil }
+func (d *stubDeps) CreateGroupForSession(string, string, string) (string, error) {
+	return "gid", nil
+}
 func (d *stubDeps) PostGroupMessage(string, string, string, []string, string, []string) error {
 	return nil
 }

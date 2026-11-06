@@ -4522,7 +4522,14 @@ func (x *ListChannelsResponse) GetChannels() []*ChannelDecl {
 // member reads before finding the member list. Name, picture, members.
 type Group struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	//*
+	// THE GROUP'S IDENTITY: random, immutable, and what every RPC below takes.
+	//
+	// NAME IS A LABEL. While the two were one column, renaming a group meant abandoning its transcript, its members
+	// and its subscriptions, because all of them were keyed by the string that changed.
+	Id string `protobuf:"bytes,9,opt,name=id,proto3" json:"id,omitempty"`
+	// The display label. Unique per tenant so a person can tell two groups apart; nothing routes by it.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// `file:<code>` from the blob store. EMPTY MEANS "DERIVE ONE": the console seeds the same
 	// honeycomb identicon from the name, so a group with no picture still has a stable face.
 	AvatarFile string `protobuf:"bytes,2,opt,name=avatar_file,json=avatarFile,proto3" json:"avatar_file,omitempty"`
@@ -4577,6 +4584,13 @@ func (x *Group) ProtoReflect() protoreflect.Message {
 // Deprecated: Use Group.ProtoReflect.Descriptor instead.
 func (*Group) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *Group) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
 }
 
 func (x *Group) GetName() string {
@@ -4950,7 +4964,9 @@ func (x *ListGroupsResponse) GetGroups() []*Group {
 
 type GetGroupRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// THE GROUP'S ID. `name` was the identity here, which is why this field is renamed rather than reused: a caller
+	// that still sends a name gets a clear not-found instead of a group it did not mean.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// The asking session. Empty means "a user is asking" (console, admin) and skips the membership
 	// check. A session that names itself must be a member, and a non-member gets NOT_FOUND — the same
 	// answer as a group that does not exist, because distinguishing them would let any session
@@ -4990,9 +5006,9 @@ func (*GetGroupRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{71}
 }
 
-func (x *GetGroupRequest) GetName() string {
+func (x *GetGroupRequest) GetId() string {
 	if x != nil {
-		return x.Name
+		return x.Id
 	}
 	return ""
 }
@@ -5058,7 +5074,13 @@ func (x *GetGroupResponse) GetMembers() []*GroupMember {
 
 type UpdateGroupRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	//*
+	// A NEW DISPLAY NAME, or absent to keep the current one.
+	//
+	// `optional` because '' is not a legal name but "leave it alone" must be expressible — and because before the
+	// identity split a rename could not be offered at all.
+	Name *string `protobuf:"bytes,4,opt,name=name,proto3,oneof" json:"name,omitempty"`
 	// `optional`, like a session's own avatar: absent = leave alone, present-but-empty = clear.
 	AvatarFile *string `protobuf:"bytes,2,opt,name=avatar_file,json=avatarFile,proto3,oneof" json:"avatar_file,omitempty"`
 	// Same rule: absent = leave it alone, present-but-empty = clear it.
@@ -5097,9 +5119,16 @@ func (*UpdateGroupRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{73}
 }
 
-func (x *UpdateGroupRequest) GetName() string {
+func (x *UpdateGroupRequest) GetId() string {
 	if x != nil {
-		return x.Name
+		return x.Id
+	}
+	return ""
+}
+
+func (x *UpdateGroupRequest) GetName() string {
+	if x != nil && x.Name != nil {
+		return *x.Name
 	}
 	return ""
 }
@@ -5164,7 +5193,7 @@ func (x *UpdateGroupResponse) GetGroup() *Group {
 
 type DeleteGroupRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5199,9 +5228,9 @@ func (*DeleteGroupRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{75}
 }
 
-func (x *DeleteGroupRequest) GetName() string {
+func (x *DeleteGroupRequest) GetId() string {
 	if x != nil {
-		return x.Name
+		return x.Id
 	}
 	return ""
 }
@@ -5244,7 +5273,7 @@ func (*DeleteGroupResponse) Descriptor() ([]byte, []int) {
 
 type AddGroupMemberRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Group         string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	Members       []string               `protobuf:"bytes,2,rep,name=members,proto3" json:"members,omitempty"`
 	AddedBy       string                 `protobuf:"bytes,3,opt,name=added_by,json=addedBy,proto3" json:"added_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -5281,9 +5310,9 @@ func (*AddGroupMemberRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{77}
 }
 
-func (x *AddGroupMemberRequest) GetGroup() string {
+func (x *AddGroupMemberRequest) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
 	}
 	return ""
 }
@@ -5304,8 +5333,8 @@ func (x *AddGroupMemberRequest) GetAddedBy() string {
 
 // SetGroupCoordinator moves the role to another existing member.
 type SetGroupCoordinatorRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Group string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	GroupId string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// Must already be a member: promoting a stranger would add it to the group as a side effect of
 	// naming it, which is the opposite of what an explicit member list is for.
 	Session       string `protobuf:"bytes,2,opt,name=session,proto3" json:"session,omitempty"`
@@ -5343,9 +5372,9 @@ func (*SetGroupCoordinatorRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{78}
 }
 
-func (x *SetGroupCoordinatorRequest) GetGroup() string {
+func (x *SetGroupCoordinatorRequest) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
 	}
 	return ""
 }
@@ -5463,7 +5492,7 @@ func (x *AddGroupMemberResponse) GetMembers() []*GroupMember {
 
 type RemoveGroupMemberRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Group         string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	GroupId       string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	Member        string                 `protobuf:"bytes,2,opt,name=member,proto3" json:"member,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5499,9 +5528,9 @@ func (*RemoveGroupMemberRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{81}
 }
 
-func (x *RemoveGroupMemberRequest) GetGroup() string {
+func (x *RemoveGroupMemberRequest) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
 	}
 	return ""
 }
@@ -5574,7 +5603,10 @@ func (x *RemoveGroupMemberResponse) GetMembers() []*GroupMember {
 type GroupMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Group string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`
+	// The group's id (its identity). The display name is on the Group itself.
+	GroupId string `protobuf:"bytes,2,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
+	// The group's name AT THE TIME OF SENDING would be wrong to freeze; this is the current one, for display.
+	GroupName string `protobuf:"bytes,9,opt,name=group_name,json=groupName,proto3" json:"group_name,omitempty"`
 	// The sending session's ID, or EMPTY when a user posted it through the console.
 	Sender string `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
 	// The sender's display name at the time of sending; survives a later rename so the transcript reads as
@@ -5631,9 +5663,16 @@ func (x *GroupMessage) GetId() string {
 	return ""
 }
 
-func (x *GroupMessage) GetGroup() string {
+func (x *GroupMessage) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
+	}
+	return ""
+}
+
+func (x *GroupMessage) GetGroupName() string {
+	if x != nil {
+		return x.GroupName
 	}
 	return ""
 }
@@ -5681,8 +5720,8 @@ func (x *GroupMessage) GetAttachments() []*FileRef {
 }
 
 type SendGroupMessageRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Group string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	GroupId string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	//*
 	// The message body. MAY BE EMPTY WHEN `attachments` IS NOT: a photo with no caption is a message, and
 	// requiring text for it would make the user invent words to send a picture.
@@ -5731,9 +5770,9 @@ func (*SendGroupMessageRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{84}
 }
 
-func (x *SendGroupMessageRequest) GetGroup() string {
+func (x *SendGroupMessageRequest) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
 	}
 	return ""
 }
@@ -5815,8 +5854,8 @@ func (x *SendGroupMessageResponse) GetDeliveredTo() []string {
 }
 
 type ListGroupMessagesRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Group string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	GroupId string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// EXCLUSIVE cursor: return messages with seq GREATER than this. 0 starts from the beginning.
 	AfterSeq int64 `protobuf:"varint,2,opt,name=after_seq,json=afterSeq,proto3" json:"after_seq,omitempty"`
 	// Page size; 0 means the server default.
@@ -5857,9 +5896,9 @@ func (*ListGroupMessagesRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{86}
 }
 
-func (x *ListGroupMessagesRequest) GetGroup() string {
+func (x *ListGroupMessagesRequest) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
 	}
 	return ""
 }
@@ -5945,8 +5984,8 @@ func (x *ListGroupMessagesResponse) GetLatestSeq() int64 {
 // then follows live. Unlike WatchSession it does not reimplement replay — the messages are in a table, so
 // "everything after N" is a query and the live part is a notification.
 type WatchGroupRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	Group string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	GroupId string                 `protobuf:"bytes,1,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// Send messages with seq GREATER than this first, then follow live. 0 = from the beginning.
 	SinceSeq int64 `protobuf:"varint,2,opt,name=since_seq,json=sinceSeq,proto3" json:"since_seq,omitempty"`
 	// The asking session. When set, it must be a member.
@@ -5985,9 +6024,9 @@ func (*WatchGroupRequest) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{88}
 }
 
-func (x *WatchGroupRequest) GetGroup() string {
+func (x *WatchGroupRequest) GetGroupId() string {
 	if x != nil {
-		return x.Group
+		return x.GroupId
 	}
 	return ""
 }
@@ -11587,8 +11626,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x15\n" +
 	"\x13ListChannelsRequest\"I\n" +
 	"\x14ListChannelsResponse\x121\n" +
-	"\bchannels\x18\x01 \x03(\v2\x15.agent.v1.ChannelDeclR\bchannels\"\x8d\x02\n" +
-	"\x05Group\x12\x12\n" +
+	"\bchannels\x18\x01 \x03(\v2\x15.agent.v1.ChannelDeclR\bchannels\"\x9d\x02\n" +
+	"\x05Group\x12\x0e\n" +
+	"\x02id\x18\t \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vavatar_file\x18\x02 \x01(\tR\n" +
 	"avatarFile\x12\x1d\n" +
@@ -11619,47 +11659,51 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x11ListGroupsRequest\x12\x18\n" +
 	"\asession\x18\x01 \x01(\tR\asession\"=\n" +
 	"\x12ListGroupsResponse\x12'\n" +
-	"\x06groups\x18\x01 \x03(\v2\x0f.agent.v1.GroupR\x06groups\"?\n" +
-	"\x0fGetGroupRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\x06groups\x18\x01 \x03(\v2\x0f.agent.v1.GroupR\x06groups\";\n" +
+	"\x0fGetGroupRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\"j\n" +
 	"\x10GetGroupResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\x83\x01\n" +
-	"\x12UpdateGroupRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12$\n" +
-	"\vavatar_file\x18\x02 \x01(\tH\x00R\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\xa1\x01\n" +
+	"\x12UpdateGroupRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\x04name\x18\x04 \x01(\tH\x00R\x04name\x88\x01\x01\x12$\n" +
+	"\vavatar_file\x18\x02 \x01(\tH\x01R\n" +
 	"avatarFile\x88\x01\x01\x12\x19\n" +
-	"\x05intro\x18\x03 \x01(\tH\x01R\x05intro\x88\x01\x01B\x0e\n" +
+	"\x05intro\x18\x03 \x01(\tH\x02R\x05intro\x88\x01\x01B\a\n" +
+	"\x05_nameB\x0e\n" +
 	"\f_avatar_fileB\b\n" +
 	"\x06_intro\"<\n" +
 	"\x13UpdateGroupResponse\x12%\n" +
-	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\"(\n" +
-	"\x12DeleteGroupRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\x15\n" +
-	"\x13DeleteGroupResponse\"b\n" +
-	"\x15AddGroupMemberRequest\x12\x14\n" +
-	"\x05group\x18\x01 \x01(\tR\x05group\x12\x18\n" +
+	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\"$\n" +
+	"\x12DeleteGroupRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x15\n" +
+	"\x13DeleteGroupResponse\"g\n" +
+	"\x15AddGroupMemberRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x18\n" +
 	"\amembers\x18\x02 \x03(\tR\amembers\x12\x19\n" +
-	"\badded_by\x18\x03 \x01(\tR\aaddedBy\"L\n" +
-	"\x1aSetGroupCoordinatorRequest\x12\x14\n" +
-	"\x05group\x18\x01 \x01(\tR\x05group\x12\x18\n" +
+	"\badded_by\x18\x03 \x01(\tR\aaddedBy\"Q\n" +
+	"\x1aSetGroupCoordinatorRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\"u\n" +
 	"\x1bSetGroupCoordinatorResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
 	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"p\n" +
 	"\x16AddGroupMemberResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"H\n" +
-	"\x18RemoveGroupMemberRequest\x12\x14\n" +
-	"\x05group\x18\x01 \x01(\tR\x05group\x12\x16\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"M\n" +
+	"\x18RemoveGroupMemberRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x16\n" +
 	"\x06member\x18\x02 \x01(\tR\x06member\"s\n" +
 	"\x19RemoveGroupMemberResponse\x12%\n" +
 	"\x05group\x18\x01 \x01(\v2\x0f.agent.v1.GroupR\x05group\x12/\n" +
-	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\xe7\x01\n" +
+	"\amembers\x18\x02 \x03(\v2\x15.agent.v1.GroupMemberR\amembers\"\x8b\x02\n" +
 	"\fGroupMessage\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05group\x18\x02 \x01(\tR\x05group\x12\x16\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\bgroup_id\x18\x02 \x01(\tR\agroupId\x12\x1d\n" +
+	"\n" +
+	"group_name\x18\t \x01(\tR\tgroupName\x12\x16\n" +
 	"\x06sender\x18\x03 \x01(\tR\x06sender\x12\x1f\n" +
 	"\vsender_name\x18\x04 \x01(\tR\n" +
 	"senderName\x12\x12\n" +
@@ -11667,26 +11711,26 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\a \x01(\tR\tcreatedAt\x123\n" +
-	"\vattachments\x18\b \x03(\v2\x11.agent.v1.FileRefR\vattachments\"\x9a\x01\n" +
-	"\x17SendGroupMessageRequest\x12\x14\n" +
-	"\x05group\x18\x01 \x01(\tR\x05group\x12\x12\n" +
+	"\vattachments\x18\b \x03(\v2\x11.agent.v1.FileRefR\vattachments\"\x9f\x01\n" +
+	"\x17SendGroupMessageRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x16\n" +
 	"\x06sender\x18\x03 \x01(\tR\x06sender\x123\n" +
 	"\vattachments\x18\x06 \x03(\v2\x11.agent.v1.FileRefR\vattachmentsJ\x04\b\x04\x10\x05R\x02to\"o\n" +
 	"\x18SendGroupMessageResponse\x120\n" +
 	"\amessage\x18\x01 \x01(\v2\x16.agent.v1.GroupMessageR\amessage\x12!\n" +
-	"\fdelivered_to\x18\x02 \x03(\tR\vdeliveredTo\"}\n" +
-	"\x18ListGroupMessagesRequest\x12\x14\n" +
-	"\x05group\x18\x01 \x01(\tR\x05group\x12\x1b\n" +
+	"\fdelivered_to\x18\x02 \x03(\tR\vdeliveredTo\"\x82\x01\n" +
+	"\x18ListGroupMessagesRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x1b\n" +
 	"\tafter_seq\x18\x02 \x01(\x03R\bafterSeq\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12\x18\n" +
 	"\asession\x18\x04 \x01(\tR\asession\"n\n" +
 	"\x19ListGroupMessagesResponse\x122\n" +
 	"\bmessages\x18\x01 \x03(\v2\x16.agent.v1.GroupMessageR\bmessages\x12\x1d\n" +
 	"\n" +
-	"latest_seq\x18\x02 \x01(\x03R\tlatestSeq\"`\n" +
-	"\x11WatchGroupRequest\x12\x14\n" +
-	"\x05group\x18\x01 \x01(\tR\x05group\x12\x1b\n" +
+	"latest_seq\x18\x02 \x01(\x03R\tlatestSeq\"e\n" +
+	"\x11WatchGroupRequest\x12\x19\n" +
+	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x1b\n" +
 	"\tsince_seq\x18\x02 \x01(\x03R\bsinceSeq\x12\x18\n" +
 	"\asession\x18\x03 \x01(\tR\asession\"{\n" +
 	"\x12WatchGroupResponse\x12\x14\n" +

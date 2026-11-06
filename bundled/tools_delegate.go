@@ -51,16 +51,24 @@ func (e *Extension) groupCreate(_ context.Context, tenant, session string, args 
 	if name == "" {
 		return agent.ToolOutcome{Content: s.errMissingName}, nil
 	}
-	if err := e.deps.CreateGroupForSession(tenant, name, session); err != nil {
+	id, err := e.deps.CreateGroupForSession(tenant, name, session)
+	if err != nil {
 		if isGroupExists(err) {
 			return agent.ToolOutcome{Content: s.errGroupTaken(name)}, nil
 		}
 		return agent.ToolOutcome{}, err
 	}
 
+	/**
+	 * THE ANSWER CARRIES BOTH: the id to address with, the name to read.
+	 *
+	 * Every tool that takes a group takes the ID (`group-send`, `group-members`, `spawn`), and a model that is told
+	 * only the name it just chose has nothing to call next. Saying both is what makes the very next step possible
+	 * without a lookup.
+	 */
 	return agent.ToolOutcome{
-		Content:  s.created(name),
-		Metadata: map[string]any{"group": name, "created": true},
+		Content:  s.created(name, id),
+		Metadata: map[string]any{"group": id, "name": name, "created": true},
 	}, nil
 }
 
@@ -307,7 +315,7 @@ func isGroupExists(err error) bool {
 }
 
 type groupStrings struct {
-	created               func(group string) string
+	created               func(name, id string) string
 	alreadyCreated        func(group string) string
 	spawned               func(name, workerId, group, desc string) string
 	brief                 func(parent, group, task string) string
@@ -335,14 +343,11 @@ type groupStrings struct {
 func groupStringsFor(locale string) groupStrings {
 	if strings.HasPrefix(strings.ToLower(locale), "zh") {
 		return groupStrings{
-			created: func(g string) string {
-				return fmt.Sprintf("已创建群 '%s'，你是它的协调者。用 group-send 向成员点名布置任务；"+
-					"用 group-members 查看成员。", g)
+			created: func(name, id string) string {
+				return fmt.Sprintf("已创建群 '%s'（id：%s），你是它的协调者。之后所有工具都用这个 id 指定该群："+
+					"用 group-send 向成员点名布置任务；用 group-members 查看成员。", name, id)
 			},
-			alreadyCreated: func(g string) string {
-				return fmt.Sprintf("你已经是群 '%s' 的协调者（一个会话只能协调一个群）。"+
-					"用 group-members 查看成员，用 group-send 向成员布置任务。", g)
-			},
+
 			spawned: func(name, workerId, group, desc string) string {
 				extra := ""
 				if desc != "" {
@@ -396,13 +401,10 @@ func groupStringsFor(locale string) groupStrings {
 		}
 	}
 	return groupStrings{
-		created: func(g string) string {
-			return fmt.Sprintf("Created group %q with you as its coordinator. Use group-send to address a "+
-				"member with work, and group-members to see who is in it.", g)
-		},
-		alreadyCreated: func(g string) string {
-			return fmt.Sprintf("You already coordinate group %q. Use group-members to see its members and "+
-				"group-send to address them.", g)
+		created: func(name, id string) string {
+			return fmt.Sprintf("Created group %q (id: %s) with you as its coordinator. Every later tool names "+
+				"the group by that id: group-send to give a member work, group-members to see who is in it.",
+				name, id)
 		},
 		spawned: func(name, workerId, group, desc string) string {
 			extra := ""

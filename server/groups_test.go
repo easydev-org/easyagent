@@ -33,7 +33,7 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 	}
 
 	// A MEMBER SEES THE OTHER MEMBERS. This is the whole feature: "who else is here".
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "incident-42", Session: alice})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "incident-42"), Session: alice})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestGroupMembershipIsTheOnlyPermission(t *testing.T) {
 	//
 	// The difference matters: PERMISSION_DENIED would confirm the group exists, which turns this call
 	// into an oracle for enumerating every group in the tenant.
-	_, err = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "incident-42", Session: carol})
+	_, err = c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "incident-42"), Session: carol})
 	if err == nil {
 		t.Fatal("a non-member must not be able to read the group")
 	}
@@ -136,7 +136,7 @@ func TestAddGroupMemberRejectsUnknownSession(t *testing.T) {
 	}
 
 	_, err := c.AddGroupMember(ctx, &agentv1.AddGroupMemberRequest{
-		Group: "g", Members: []string{"ghost"},
+		GroupId: groupIDByName(t, c, "g"), Members: []string{"ghost"},
 	})
 	if err == nil {
 		t.Fatal("adding a session that does not exist must fail")
@@ -146,7 +146,7 @@ func TestAddGroupMemberRejectsUnknownSession(t *testing.T) {
 	}
 
 	// AND THE REAL MEMBER IS STILL THERE: a rejected add must not have partially applied.
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestAddGroupMemberIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		res, err := c.AddGroupMember(ctx, &agentv1.AddGroupMemberRequest{Group: "g", Members: []string{s}})
+		res, err := c.AddGroupMember(ctx, &agentv1.AddGroupMemberRequest{GroupId: groupIDByName(t, c, "g"), Members: []string{s}})
 		if err != nil {
 			t.Fatalf("add %d: %v", i, err)
 		}
@@ -193,14 +193,14 @@ func TestRemoveGroupMemberRevokesVisibility(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: b}); err != nil {
+	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{GroupId: groupIDByName(t, c, "g"), Member: b}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g", Session: b}); err == nil {
+	if _, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g"), Session: b}); err == nil {
 		t.Fatal("a removed member must lose visibility")
 	}
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g", Session: a})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g"), Session: a})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +225,10 @@ func TestGroupAvatarClearAndKeep(t *testing.T) {
 	}
 
 	// An update that does not mention the avatar leaves it alone.
-	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Name: "g"}); err != nil {
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: groupIDByName(t, c, "g")}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestGroupAvatarClearAndKeep(t *testing.T) {
 
 	// Present-but-empty clears it.
 	empty := ""
-	res, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Name: "g", AvatarFile: &empty})
+	res, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: groupIDByName(t, c, "g"), AvatarFile: &empty})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestDeleteGroupClearsMemberships(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Name: "g"}); err != nil {
+	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Id: groupIDByName(t, c, "g")}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -303,7 +303,7 @@ func TestDeleteGroupClearsMemberships(t *testing.T) {
 	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "g", Coordinator: s, CreatedBy: "user:ops"}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,5 +312,93 @@ func TestDeleteGroupClearsMemberships(t *testing.T) {
 	}
 	if got.Members[0].Role != "coordinator" {
 		t.Errorf("role = %q, want coordinator", got.Members[0].Role)
+	}
+}
+
+/**
+ * RENAMING A GROUP CHANGES NOTHING BUT ITS LABEL.
+ *
+ * THIS IS WHAT THE IDENTITY SPLIT BOUGHT. While the name WAS the identity, a rename was a migration: memberships,
+ * transcript rows and channel subscriptions were all keyed by the string that changed, so renaming either orphaned
+ * them or was not offered at all. Now the name is a label and the id is what everything points at.
+ *
+ * THE ASSERTIONS ARE THE THINGS THAT WOULD HAVE BROKEN: the transcript is still readable, the members are still
+ * members, and the id has not moved.
+ */
+func TestRenamingAGroupKeepsItsHistoryAndMembers(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	worker := newSession(t, c, "worker")
+	created, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+		Name: "before", Coordinator: coord, Members: []string{worker}, CreatedBy: "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid := created.Group.Id
+
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
+		GroupId: gid, Text: "said before the rename",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	renamed := "after"
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: gid, Name: &renamed}); err != nil {
+		t.Fatal(err)
+	}
+
+	// THE ID IS UNCHANGED, and still addresses everything.
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: gid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Group.Name != "after" {
+		t.Errorf("name = %q, want the new label", got.Group.Name)
+	}
+	if got.Group.Id != gid {
+		t.Errorf("id = %q, want it unchanged", got.Group.Id)
+	}
+	if len(got.Members) != 2 {
+		t.Errorf("members = %d, want the same 2", len(got.Members))
+	}
+
+	// THE TRANSCRIPT SURVIVED, under the same id.
+	msgs, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: gid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs.Messages) != 1 || msgs.Messages[0].Body != "said before the rename" {
+		t.Fatalf("transcript = %+v", msgs.Messages)
+	}
+}
+
+// A RENAME ONTO A TAKEN NAME IS REFUSED: two groups with one label defeats the only reason the label is unique.
+func TestRenamingAGroupRefusesACollision(t *testing.T) {
+	ts, db, _ := newTestServerWith(t, nil)
+	tok := seedTenant(t, db, "acme")
+	c := clientFor(t, ts, tok)
+	ctx := context.Background()
+
+	coord := newSession(t, c, "coord")
+	a, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "a", Coordinator: coord, CreatedBy: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{Name: "b", Coordinator: coord, CreatedBy: "user"}); err != nil {
+		t.Fatal(err)
+	}
+
+	taken := "b"
+	_, err = c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: a.Group.Id, Name: &taken})
+	if err == nil {
+		t.Fatal("a rename onto a taken name was accepted")
+	}
+	if got := connect.CodeOf(err); got != connect.CodeAlreadyExists {
+		t.Errorf("code = %v, want AlreadyExists", got)
 	}
 }

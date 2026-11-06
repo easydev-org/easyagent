@@ -222,8 +222,9 @@ func (d *StoreDeps) GroupsOfSession(tenant, session string) ([]GroupRow, error) 
 		return nil, err
 	}
 	names := make([]string, 0, len(groups))
+	// THE COUNTS ARE KEYED BY ID, which is what GroupMemberCounts now takes and returns.
 	for _, g := range groups {
-		names = append(names, g.Name)
+		names = append(names, g.ID)
 	}
 	// A FAILED COUNT IS REPORTED AS AN ERROR, not as zero members. The tool renders "N member(s)"; a
 	// failure silently shown as 0 would tell a coordinator its group is empty when it is not — and the
@@ -234,7 +235,7 @@ func (d *StoreDeps) GroupsOfSession(tenant, session string) ([]GroupRow, error) 
 	}
 	out := make([]GroupRow, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, GroupRow{Name: g.Name, Members: counts[g.Name], Role: g.MyRole})
+		out = append(out, GroupRow{ID: g.ID, Name: g.Name, Members: counts[g.ID], Role: g.MyRole})
 	}
 	return out, nil
 }
@@ -278,11 +279,18 @@ func (d *StoreDeps) AddGroupMemberOnly(tenant, group, session string) error {
  * one worker, so an extension cannot build a group with three members or invite a session it did not
  * fork — the narrow shape IS the restriction. `group.create` gates the call before it gets here.
  */
-func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) error {
+func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) (string, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	return d.DB.CreateGroup(tenant, store.Group{
+	g := &store.Group{
 		Name: group, CreatedBy: "session:" + coordinator, CreatedAt: now, UpdatedAt: now,
-	}, coordinator, nil, now)
+	}
+	if err := d.DB.CreateGroup(tenant, g, coordinator, nil, now); err != nil {
+		return "", err
+	}
+	// THE ID IS RETURNED because it is what the caller needs for everything after: addressing the group, adding
+	// members, deleting it on failure. The name it passed in is a label, and going back to the database to translate
+	// one into the other would be a lookup whose answer is already in hand.
+	return g.ID, nil
 }
 
 /**
@@ -296,16 +304,22 @@ func (d *StoreDeps) CreateGroupForSession(tenant, group, coordinator string) err
  * A DELIVERY FAILURE IS RETURNED, because at this layer the caller is a tool whose whole job that message
  * was. The message is already stored either way; the error says the recipients were not reached.
  */
-func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, text string, attachments []string) error {
+func (d *StoreDeps) PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) error {
 	/**
 	 * THE ATTACHMENT REFERENCES ARE RESOLVED AGAINST THE BLOB STORE, not taken on trust.
 	 *
 	 * The tool hands over bare codes; the blob record is what says a code exists, what it is and how big. Storing
 	 * a code nobody ingested would put a tile in the transcript that every member sees and nothing can load.
 	 */
+	// THE NAME IS READ HERE, at delivery time, so a rename is reflected in the next message rather than frozen into
+	// whoever held a stale copy.
+	groupName := ""
+	if g, ok, err := d.DB.GetGroup(tenant, groupID); err == nil && ok {
+		groupName = g.Name
+	}
 	attachmentsJSON := d.encodeAttachments(tenant, attachments)
 	msg, err := d.DB.AppendGroupMessage(store.GroupMessage{
-		ID: newGroupMessageID(), Tenant: tenant, Group: group,
+		ID: newGroupMessageID(), Tenant: tenant, GroupID: groupID,
 		Sender: from, SenderName: d.sessionName(tenant, from), Body: text,
 		Attachments: attachmentsJSON,
 	}, time.Now().UTC().Format(time.RFC3339Nano))
@@ -320,8 +334,15 @@ func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, te
 	// agentbus that asserts its own constants match, so a rename on one side cannot drift silently.
 	var firstErr error
 	for _, rcpt := range to {
+		/**
+		 * THE PAYLOAD CARRIES BOTH: the ID to address with, the NAME to read.
+		 *
+		 * A woken member is shown the name — that is what a person recognises — while every call it makes back
+		 * (`group-send`, `group-members`, `spawn`) takes the id. Sending only the id would make the prompt unreadable;
+		 * sending only the name would make the model unable to address the group it is answering in.
+		 */
 		payload := map[string]any{
-			"group": group, "from": from, "from_name": msg.SenderName, "text": text,
+			"group": groupID, "group_name": groupName, "from": from, "from_name": msg.SenderName, "text": text,
 			"message_id": msg.ID, "seq": msg.Seq,
 		}
 		// THE FILES RIDE WITH THE DELIVERY: a woken member reads the prompt built from this payload, so a
@@ -329,7 +350,7 @@ func (d *StoreDeps) PostGroupMessage(tenant, group, from string, to []string, te
 		if files := d.attachmentPayload(tenant, attachments); len(files) > 0 {
 			payload["attachments"] = files
 		}
-		if err := d.ChannelFn(tenant, groupChannel, groupTopicTo(group, rcpt), payload, "session:"+from); err != nil && firstErr == nil {
+		if err := d.ChannelFn(tenant, groupChannel, groupTopicTo(groupID, rcpt), payload, "session:"+from); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

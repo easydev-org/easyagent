@@ -39,7 +39,7 @@ func TestGroupMessageIsStoredThenDelivered(t *testing.T) {
 
 	// A USER posts: it reaches the coordinator and lands in the transcript.
 	res, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "please split this",
+		GroupId: groupIDByName(t, c, "g"), Text: "please split this",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestGroupMessageIsStoredThenDelivered(t *testing.T) {
 	}
 
 	// AND IT IS READABLE afterwards — the whole point of a transcript.
-	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestGroupMessageSeqIncreases(t *testing.T) {
 	}
 	for i := 1; i <= 3; i++ {
 		res, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-			Group: "g", Text: "m", Sender: coord,
+			GroupId: groupIDByName(t, c, "g"), Text: "m", Sender: coord,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -95,7 +95,7 @@ func TestGroupMessageSeqIncreases(t *testing.T) {
 	}
 
 	// The cursor is EXCLUSIVE: after 2 means "3 onward".
-	page, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g", AfterSeq: 2})
+	page, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g"), AfterSeq: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestGroupMessagesRequireMembership(t *testing.T) {
 	}
 
 	_, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "hi", Sender: outsider,
+		GroupId: groupIDByName(t, c, "g"), Text: "hi", Sender: outsider,
 	})
 	if err == nil {
 		t.Fatal("a non-member posted to the group")
@@ -134,7 +134,7 @@ func TestGroupMessagesRequireMembership(t *testing.T) {
 		t.Errorf("code = %v, want NotFound", got)
 	}
 
-	_, err = c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g", Session: outsider})
+	_, err = c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g"), Session: outsider})
 	if err == nil {
 		t.Fatal("a non-member read the transcript")
 	}
@@ -143,7 +143,7 @@ func TestGroupMessagesRequireMembership(t *testing.T) {
 	}
 
 	// And the member CAN.
-	if _, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g", Session: coord}); err != nil {
+	if _, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g"), Session: coord}); err != nil {
 		t.Fatalf("the coordinator could not read its own group: %v", err)
 	}
 }
@@ -162,10 +162,10 @@ func TestDeleteGroupRemovesTranscript(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "x"}); err != nil {
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{GroupId: groupIDByName(t, c, "g"), Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Name: "g"}); err != nil {
+	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Id: groupIDByName(t, c, "g")}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,7 +174,7 @@ func TestDeleteGroupRemovesTranscript(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestCoordinatorCannotBeLeftAbsent(t *testing.T) {
 		t.Fatal("the store allowed the last coordinator to be removed")
 	}
 	// And the group still posts, because nothing was changed.
-	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "x"}); err != nil {
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{GroupId: groupIDByName(t, c, "g"), Text: "x"}); err != nil {
 		t.Fatalf("the group stopped accepting messages: %v", err)
 	}
 }
@@ -237,7 +237,7 @@ func TestGroupMessageRecipientIsAlwaysTheCoordinator(t *testing.T) {
 	}
 
 	// A USER'S MESSAGE reaches the coordinator.
-	res, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g", Text: "hi"})
+	res, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{GroupId: groupIDByName(t, c, "g"), Text: "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestGroupMessageRecipientIsAlwaysTheCoordinator(t *testing.T) {
 
 	// A MEMBER'S REPORT reaches the same place.
 	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "done", Sender: w1,
+		GroupId: groupIDByName(t, c, "g"), Text: "done", Sender: w1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestGroupMessageRecipientIsAlwaysTheCoordinator(t *testing.T) {
 	// A COORDINATOR'S POST IS RECORDED AND WAKES NOBODY: it hands out work through its own tool, which stores
 	// and delivers that message itself. This RPC is not that path.
 	res, err = c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "a note", Sender: coord,
+		GroupId: groupIDByName(t, c, "g"), Text: "a note", Sender: coord,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestGroupMessageRecipientIsAlwaysTheCoordinator(t *testing.T) {
 	}
 
 	// ALL THREE ARE IN THE TRANSCRIPT, which is what makes the record complete regardless of who was woken.
-	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,13 +299,13 @@ func TestGroupPostRefusesANonMemberSender(t *testing.T) {
 	}
 
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "x", Sender: outsider,
+		GroupId: groupIDByName(t, c, "g"), Text: "x", Sender: outsider,
 	}); err == nil {
 		t.Fatal("a non-member posted to the group")
 	}
 
 	// NOTHING WAS STORED, so no recipient can find a message from outside.
-	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,13 +337,13 @@ func TestGroupMessageNeedsTextOrAnAttachment(t *testing.T) {
 	}
 
 	// Neither: refused.
-	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{Group: "g"}); err == nil {
+	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{GroupId: groupIDByName(t, c, "g")}); err == nil {
 		t.Fatal("a message with no text and no attachment was accepted")
 	}
 
 	// Attachment only: accepted, and the reference survives the round trip.
 	sent, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group:       "g",
+		GroupId:     groupIDByName(t, c, "g"),
 		Attachments: []*agentv1.FileRef{{Code: "file-1", Name: "shot.png", Size: 1234}},
 	})
 	if err != nil {
@@ -360,7 +360,7 @@ func TestGroupMessageNeedsTextOrAnAttachment(t *testing.T) {
 	}
 
 	// And it is readable later — the reference is part of the transcript, not just the acknowledgement.
-	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestGroupMessageDropsAnEmptyAttachmentRef(t *testing.T) {
 
 	// An empty ref alongside a real one: the real one survives, the empty one is gone.
 	sent, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "look",
+		GroupId: groupIDByName(t, c, "g"), Text: "look",
 		Attachments: []*agentv1.FileRef{{Code: "", Name: "broken"}, {Code: "file-2", Name: "ok"}},
 	})
 	if err != nil {
@@ -436,7 +436,7 @@ func TestGroupMessageAttachmentTypeComesFromTheBlob(t *testing.T) {
 
 	// The caller sends ONLY a code, and a misleading name for good measure.
 	sent, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group:       "g",
+		GroupId:     groupIDByName(t, c, "g"),
 		Attachments: []*agentv1.FileRef{{Code: code, Name: "not-a-picture.bin"}},
 	})
 	if err != nil {
@@ -458,7 +458,7 @@ func TestGroupMessageAttachmentTypeComesFromTheBlob(t *testing.T) {
 	}
 
 	// AND IT SURVIVES A RELOAD, because the type is stored with the message rather than re-derived per reader.
-	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: "g"})
+	list, err := c.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +609,7 @@ func TestGroupIntroRoundTrips(t *testing.T) {
 	}
 
 	// IT IS READABLE FROM THE GROUP, which is what the info page shows.
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,20 +619,20 @@ func TestGroupIntroRoundTrips(t *testing.T) {
 
 	// LEAVING IT ALONE: a picture-only save must not wipe the intro.
 	pic := "file:abc"
-	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Name: "g", AvatarFile: &pic}); err != nil {
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: groupIDByName(t, c, "g"), AvatarFile: &pic}); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, _ = c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if got.Group.Intro != "release coordination for acme/app" {
 		t.Errorf("a picture-only save changed the intro to %q", got.Group.Intro)
 	}
 
 	// CLEARING IT: present-but-empty means "say nothing".
 	empty := ""
-	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Name: "g", Intro: &empty}); err != nil {
+	if _, err := c.UpdateGroup(ctx, &agentv1.UpdateGroupRequest{Id: groupIDByName(t, c, "g"), Intro: &empty}); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, _ = c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if got.Group.Intro != "" {
 		t.Errorf("intro = %q after clearing it", got.Group.Intro)
 	}
@@ -676,7 +676,7 @@ func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
 
 	// A message with words becomes the preview, with its timestamp.
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "please check main",
+		GroupId: groupIDByName(t, c, "g"), Text: "please check main",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +694,7 @@ func TestListGroupsCarriesTheTranscriptPreview(t *testing.T) {
 
 	// AN ATTACHMENT-ONLY MESSAGE DOES NOT BLANK THE PREVIEW: the words before it still say what is going on.
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Attachments: []*agentv1.FileRef{{Code: "x"}},
+		GroupId: groupIDByName(t, c, "g"), Attachments: []*agentv1.FileRef{{Code: "x"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -725,34 +725,38 @@ func TestListChangeIsPublishedForEveryReplica(t *testing.T) {
 	srv.SetListChanges(fake)
 
 	coord := newSession(t, c, "coord")
-	if _, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+	created, err := c.CreateGroup(ctx, &agentv1.CreateGroupRequest{
 		Name: "g", Coordinator: coord, CreatedBy: "user",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	// THE NUDGE CARRIES THE ID, because that is what the watcher re-reads the row with — a name would make the
+	// notification a second place that assumes a label identifies something.
+	gid := created.Group.Id
 
 	// A new group is a new row.
-	if !fake.saw("group", "g", false) {
+	if !fake.saw("group", gid, false) {
 		t.Errorf("creating a group published %+v, want a group change", fake.all())
 	}
 
 	// A message changes the row's preview and timestamp.
 	fake.reset()
 	if _, err := c.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: "g", Text: "hello",
+		GroupId: gid, Text: "hello",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !fake.saw("group", "g", false) {
+	if !fake.saw("group", gid, false) {
 		t.Errorf("a message published %+v, want a group change", fake.all())
 	}
 
 	// Deleting it removes the row.
 	fake.reset()
-	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Name: "g"}); err != nil {
+	if _, err := c.DeleteGroup(ctx, &agentv1.DeleteGroupRequest{Id: gid}); err != nil {
 		t.Fatal(err)
 	}
-	if !fake.saw("group", "g", true) {
+	if !fake.saw("group", gid, true) {
 		t.Errorf("deleting a group published %+v, want a removal", fake.all())
 	}
 }

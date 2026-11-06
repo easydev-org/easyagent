@@ -326,3 +326,26 @@ func newSession(t *testing.T, c agentv1connect.AgentServiceClient, name string) 
 	}
 	return res.SessionId
 }
+
+/**
+ * groupIDByName resolves a display name to the id the group APIs now take.
+ *
+ * THE APIs TAKE AN ID because the name is a label a user may edit; a test that created a group and then addressed
+ * it by name would be re-deriving an identity from that label at every call site, which is the habit the split
+ * exists to break. This helper does the one resolution a console does once, and keeps the tests reading in the terms
+ * they assert on.
+ */
+func groupIDByName(t *testing.T, c agentv1connect.AgentServiceClient, name string) string {
+	t.Helper()
+	res, err := c.ListGroups(context.Background(), &agentv1.ListGroupsRequest{})
+	if err != nil {
+		t.Fatalf("list groups: %v", err)
+	}
+	for _, g := range res.Groups {
+		if g.Name == name {
+			return g.Id
+		}
+	}
+	t.Fatalf("no group named %q", name)
+	return ""
+}

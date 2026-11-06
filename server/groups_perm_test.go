@@ -209,7 +209,7 @@ func TestCoordinatorCannotBeRemovedDirectly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: coord})
+	_, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{GroupId: groupIDByName(t, c, "g"), Member: coord})
 	if err == nil {
 		t.Fatal("removing the coordinator directly must fail")
 	}
@@ -218,10 +218,10 @@ func TestCoordinatorCannotBeRemovedDirectly(t *testing.T) {
 	}
 
 	// The supported way: move the role, then remove the old one.
-	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g", Session: worker}); err != nil {
+	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{GroupId: groupIDByName(t, c, "g"), Session: worker}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{Group: "g", Member: coord}); err != nil {
+	if _, err := c.RemoveGroupMember(ctx, &agentv1.RemoveGroupMemberRequest{GroupId: groupIDByName(t, c, "g"), Member: coord}); err != nil {
 		t.Fatalf("after the role moved, the old coordinator should be removable: %v", err)
 	}
 }
@@ -241,7 +241,7 @@ func TestSetCoordinatorRequiresExistingMember(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g", Session: stranger}); err == nil {
+	if _, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{GroupId: groupIDByName(t, c, "g"), Session: stranger}); err == nil {
 		t.Fatal("promoting a non-member must fail")
 	}
 }
@@ -265,7 +265,7 @@ func TestGroupMemberRoleRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestSessionMayCoordinateManyGroups(t *testing.T) {
 
 	// EVERY ONE OF THEM NAMES THE SAME SESSION AS COORDINATOR, and each has exactly one.
 	for _, name := range []string{"first", "second", "third"} {
-		got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: name})
+		got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, name)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -359,13 +359,13 @@ func TestPromotionRespectsOneCoordinatorPerSession(t *testing.T) {
 	}
 
 	// `other` already coordinates g2, so it cannot take over g1.
-	_, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{Group: "g1", Session: other})
+	_, err := c.SetGroupCoordinator(ctx, &agentv1.SetGroupCoordinatorRequest{GroupId: groupIDByName(t, c, "g1"), Session: other})
 	if err == nil {
 		t.Fatal("promoting a session that already coordinates elsewhere must be refused")
 	}
 
 	// And g1 still has its original coordinator — a refused move must not leave it headless.
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g1"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g1")})
 	if err != nil {
 		t.Fatal(err)
 	}

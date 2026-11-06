@@ -94,7 +94,7 @@ type Deps interface {
 	 * anyone beyond the two sessions named, and it cannot touch a group it did not create. Permission
 	 * `group.create` gates it further — without the grant the call never reaches this method.
 	 */
-	CreateGroupForSession(tenant, group, coordinator string) error
+	CreateGroupForSession(tenant, group, coordinator string) (string, error)
 	/**
 	 * PostGroupMessage STORES a message in the group's transcript and then delivers it to the named members.
 	 *
@@ -113,7 +113,12 @@ type Deps interface {
 	 * hands a picture to a group passes the code it was given, and the recipients resolve it exactly as a chat
 	 * reader would.
 	 */
-	PostGroupMessage(tenant, group, from string, to []string, text string, attachments []string) error
+	/**
+	 * `groupID` IS THE ADDRESS, and it is what the channel subject carries. The group's NAME is looked up here
+	 * rather than passed in, so a message that arrives after a rename still lands in the same transcript and the
+	 * prompt shows the name the group has NOW.
+	 */
+	PostGroupMessage(tenant, groupID, from string, to []string, text string, attachments []string) error
 
 	// --- todos ---
 	TodosReplace(tenant, sid string, rows []TodoRow) error
@@ -151,6 +156,9 @@ type GroupMemberRow struct {
  * a session unable to tell which of its groups it answers for.
  */
 type GroupRow struct {
+	// ID is the group's identity, and the value every tool takes. It is shown because a model that reads a list of
+	// names and then has to call `group-send` has nothing to put in `group`.
+	ID      string
 	Name    string
 	Members int
 	// Role is "coordinator" or "member" — this session's own role, not the group's.

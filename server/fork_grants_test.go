@@ -175,7 +175,7 @@ func TestForkDoesNotInheritGroups(t *testing.T) {
 	}
 
 	// And the parent is still the only coordinator.
-	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Name: "g"})
+	got, err := c.GetGroup(ctx, &agentv1.GetGroupRequest{Id: groupIDByName(t, c, "g")})
 	if err != nil {
 		t.Fatal(err)
 	}

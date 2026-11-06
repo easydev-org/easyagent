@@ -63,14 +63,17 @@ func (c *chainStub) CoordinatedGroupOrMembership(_, session string) string {
 	return ""
 }
 
-func (c *chainStub) CreateGroupForSession(_, group, coordinator string) error {
+func (c *chainStub) CreateGroupForSession(_, group, coordinator string) (string, error) {
 	if c.failed {
-		return errGroupExistsStub
+		return "", errGroupExistsStub
 	}
+	// THE STUB KEEPS NAME AND ID SEPARATE, like the real store: the tools pass a NAME and every later call needs
+	// the ID, so a stub that returned the name would let a bug where the two are confused pass unnoticed.
+	id := "gid-" + group
 	c.creates = append(c.creates, group)
-	c.coordinated[coordinator] = group
-	c.membership[group] = []string{coordinator}
-	return nil
+	c.coordinated[coordinator] = id
+	c.membership[id] = []string{coordinator}
+	return id, nil
 }
 
 func (c *chainStub) ForkSession(_, _, name string, exclude []string) (string, error) {
@@ -227,7 +230,7 @@ func TestSpawnMasksGroupCreateOnTheWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "alice", "task": "count the files"})
+	out, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "gid-alice", "task": "count the files"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +264,8 @@ func TestSpawnMasksGroupCreateOnTheWorker(t *testing.T) {
 	}
 
 	// And it was added to alice's group as a plain member.
-	if len(c.added) != 1 || c.added[0] != [2]string{"alice", worker} {
+	// THE GROUP IS IDENTIFIED BY ID, so the assertion names the id the stub minted for alice's group.
+	if len(c.added) != 1 || c.added[0] != [2]string{"gid-alice", worker} {
 		t.Errorf("added = %v, want the worker in alice's group", c.added)
 	}
 
@@ -269,7 +273,7 @@ func TestSpawnMasksGroupCreateOnTheWorker(t *testing.T) {
 	if len(c.published) != 1 {
 		t.Fatalf("published = %v, want one task message", c.published)
 	}
-	if c.published[0][0] != "alice" || c.published[0][1] != worker {
+	if c.published[0][0] != "gid-alice" || c.published[0][1] != worker {
 		t.Errorf("task published to %v, want group/worker", c.published[0])
 	}
 	if !strings.Contains(c.published[0][2], "count the files") {
@@ -299,7 +303,7 @@ func TestSpawnLeavesNothingBehindWhenTheForkFails(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "alice", "task": "x"}); err == nil {
+	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "gid-alice", "task": "x"}); err == nil {
 		t.Fatal("spawn must fail when the fork cannot be created")
 	}
 	if len(c.added) != 0 || len(c.published) != 0 {
@@ -342,21 +346,21 @@ func TestGroupSendAllowsBothDirections(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "alice", "task": "work"}); err != nil {
+	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "gid-alice", "task": "work"}); err != nil {
 		t.Fatal(err)
 	}
 	worker := c.forked[0]
 
 	// Downward: coordinator → member.
 	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{worker}, "text": "keep going",
+		"group": "gid-alice", "to": []any{worker}, "text": "keep going",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Upward: member → coordinator. THIS IS THE ONE THAT USED TO FAIL.
 	out, err := e.groupSend(ctx, "t", worker, map[string]any{
-		"group": "alice", "to": []any{"alice"}, "text": "done",
+		"group": "gid-alice", "to": []any{"alice"}, "text": "done",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -377,10 +381,10 @@ func TestGroupSendRefusesMemberToMember(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1", "w2"}
+	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
 	out, err := e.groupSend(ctx, "t", "w1", map[string]any{
-		"group": "alice", "to": []any{"w2"}, "text": "hello",
+		"group": "gid-alice", "to": []any{"w2"}, "text": "hello",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +408,7 @@ func TestGroupSendRefusesOutsiders(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := e.groupSend(ctx, "t", "mallory", map[string]any{
-		"group": "alice", "to": []any{"alice"}, "text": "let me in",
+		"group": "gid-alice", "to": []any{"alice"}, "text": "let me in",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -425,7 +429,7 @@ func TestGroupSendRefusesSelfAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"alice"}, "text": "note to self",
+		"group": "gid-alice", "to": []any{"alice"}, "text": "note to self",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -494,10 +498,10 @@ func TestGroupSendToSeveralMembers(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1", "w2", "w3"}
+	c.membership["gid-alice"] = []string{"alice", "w1", "w2", "w3"}
 
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"w1", "w2"}, "text": "same instruction",
+		"group": "gid-alice", "to": []any{"w1", "w2"}, "text": "same instruction",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -546,10 +550,10 @@ func TestGroupSendRejectsTheWholeListOnOneBadName(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"w1", "not-a-member"}, "text": "x",
+		"group": "gid-alice", "to": []any{"w1", "not-a-member"}, "text": "x",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -573,10 +577,10 @@ func TestGroupSendRequiresAnArray(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": "w1", "text": "x",
+		"group": "gid-alice", "to": "w1", "text": "x",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -600,10 +604,10 @@ func TestGroupSendCollapsesDuplicates(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"w1", "w1", "", "  "}, "text": "x",
+		"group": "gid-alice", "to": []any{"w1", "w1", "", "  "}, "text": "x",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -627,11 +631,11 @@ func TestGroupSendMemberCanOnlyAddressTheCoordinator(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1", "w2"}
+	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
 	// w1 → coordinator: allowed.
 	if _, err := e.groupSend(ctx, "t", "w1", map[string]any{
-		"group": "alice", "to": []any{"alice"}, "text": "done",
+		"group": "gid-alice", "to": []any{"alice"}, "text": "done",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +646,7 @@ func TestGroupSendMemberCanOnlyAddressTheCoordinator(t *testing.T) {
 	// w1 → [coordinator, w2]: refused whole.
 	c.published = nil
 	out, err := e.groupSend(ctx, "t", "w1", map[string]any{
-		"group": "alice", "to": []any{"alice", "w2"}, "text": "done",
+		"group": "gid-alice", "to": []any{"alice", "w2"}, "text": "done",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -674,10 +678,10 @@ func TestGroupSendWithoutToIsAReply(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1", "w2"}
+	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "text": "收到，我来汇总",
+		"group": "gid-alice", "text": "收到，我来汇总",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -709,10 +713,10 @@ func TestGroupSendWithToIsAnInstruction(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1", "w2"}
+	c.membership["gid-alice"] = []string{"alice", "w1", "w2"}
 
 	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"w1"}, "text": "you do it",
+		"group": "gid-alice", "to": []any{"w1"}, "text": "you do it",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -750,10 +754,10 @@ func TestGroupSendCarriesAttachments(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"w1"},
+		"group": "gid-alice", "to": []any{"w1"},
 		"text": "here is the chart", "attachments": []any{"file-1", "file-2"},
 	}); err != nil {
 		t.Fatal(err)
@@ -784,11 +788,11 @@ func TestGroupSendAllowsAnAttachmentWithoutText(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	// Attachment only: accepted.
 	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "attachments": []any{"file-1"},
+		"group": "gid-alice", "attachments": []any{"file-1"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -798,7 +802,7 @@ func TestGroupSendAllowsAnAttachmentWithoutText(t *testing.T) {
 
 	// Neither: refused, and nothing was posted.
 	before := len(c.posted)
-	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"group": "alice"})
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{"group": "gid-alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -818,9 +822,9 @@ func TestGroupSendRejectsNonArrayAttachments(t *testing.T) {
 	if _, err := e.groupCreate(context.Background(), "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice"}
+	c.membership["gid-alice"] = []string{"alice"}
 	out, err := e.groupSend(context.Background(), "t", "alice", map[string]any{
-		"group": "alice", "text": "x", "attachments": "file-1",
+		"group": "gid-alice", "text": "x", "attachments": "file-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -852,10 +856,10 @@ func TestGroupSendRefusesARecipientOutsideTheGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The group holds alice and w1; mallory exists as a session but is NOT a member.
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"mallory"}, "text": "you are not in this group",
+		"group": "gid-alice", "to": []any{"mallory"}, "text": "you are not in this group",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -886,10 +890,10 @@ func TestGroupSendWithOneOutsiderDeliversToNobody(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	c.membership["alice"] = []string{"alice", "w1"}
+	c.membership["gid-alice"] = []string{"alice", "w1"}
 
 	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
-		"group": "alice", "to": []any{"w1", "mallory"}, "text": "half of you can do this",
+		"group": "gid-alice", "to": []any{"w1", "mallory"}, "text": "half of you can do this",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -928,7 +932,7 @@ func TestSpawnRequiresAGroupEvenWithOne(t *testing.T) {
 	}
 
 	// WITH THE GROUP it works.
-	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "only-one", "task": "do it"}); err != nil {
+	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "gid-only-one", "task": "do it"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.forked) != 1 {

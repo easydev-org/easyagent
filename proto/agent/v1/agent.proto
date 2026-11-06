@@ -689,6 +689,14 @@ message ListChannelsResponse { repeated ChannelDecl channels = 1; }
 // NO ANNOUNCEMENT FIELD, no description, no topic: every field a group carries is one more thing a
 // member reads before finding the member list. Name, picture, members.
 message Group {
+  /**
+   * THE GROUP'S IDENTITY: random, immutable, and what every RPC below takes.
+   *
+   * NAME IS A LABEL. While the two were one column, renaming a group meant abandoning its transcript, its members
+   * and its subscriptions, because all of them were keyed by the string that changed.
+   */
+  string id = 9;
+  // The display label. Unique per tenant so a person can tell two groups apart; nothing routes by it.
   string name = 1;
   // `file:<code>` from the blob store. EMPTY MEANS "DERIVE ONE": the console seeds the same
   // honeycomb identicon from the name, so a group with no picture still has a stable face.
@@ -769,7 +777,9 @@ message ListGroupsRequest {
 message ListGroupsResponse { repeated Group groups = 1; }
 
 message GetGroupRequest {
-  string name = 1;
+  // THE GROUP'S ID. `name` was the identity here, which is why this field is renamed rather than reused: a caller
+  // that still sends a name gets a clear not-found instead of a group it did not mean.
+  string id = 1;
   // The asking session. Empty means "a user is asking" (console, admin) and skips the membership
   // check. A session that names itself must be a member, and a non-member gets NOT_FOUND — the same
   // answer as a group that does not exist, because distinguishing them would let any session
@@ -782,7 +792,14 @@ message GetGroupResponse {
 }
 
 message UpdateGroupRequest {
-  string name = 1;
+  string id = 1;
+  /**
+   * A NEW DISPLAY NAME, or absent to keep the current one.
+   *
+   * `optional` because '' is not a legal name but "leave it alone" must be expressible — and because before the
+   * identity split a rename could not be offered at all.
+   */
+  optional string name = 4;
   // `optional`, like a session's own avatar: absent = leave alone, present-but-empty = clear.
   optional string avatar_file = 2;
   // Same rule: absent = leave it alone, present-but-empty = clear it.
@@ -790,18 +807,18 @@ message UpdateGroupRequest {
 }
 message UpdateGroupResponse { Group group = 1; }
 
-message DeleteGroupRequest { string name = 1; }
+message DeleteGroupRequest { string id = 1; }
 message DeleteGroupResponse {}
 
 message AddGroupMemberRequest {
-  string group = 1;
+  string group_id = 1;
   repeated string members = 2;
   string added_by = 3;
 }
 
 // SetGroupCoordinator moves the role to another existing member.
 message SetGroupCoordinatorRequest {
-  string group = 1;
+  string group_id = 1;
   // Must already be a member: promoting a stranger would add it to the group as a side effect of
   // naming it, which is the opposite of what an explicit member list is for.
   string session = 2;
@@ -816,7 +833,7 @@ message AddGroupMemberResponse {
 }
 
 message RemoveGroupMemberRequest {
-  string group = 1;
+  string group_id = 1;
   string member = 2;
 }
 message RemoveGroupMemberResponse {
@@ -833,7 +850,10 @@ message RemoveGroupMemberResponse {
  */
 message GroupMessage {
   string id = 1;
-  string group = 2;
+  // The group's id (its identity). The display name is on the Group itself.
+  string group_id = 2;
+  // The group's name AT THE TIME OF SENDING would be wrong to freeze; this is the current one, for display.
+  string group_name = 9;
   // The sending session's ID, or EMPTY when a user posted it through the console.
   string sender = 3;
   // The sender's display name at the time of sending; survives a later rename so the transcript reads as
@@ -853,7 +873,7 @@ message GroupMessage {
 }
 
 message SendGroupMessageRequest {
-  string group = 1;
+  string group_id = 1;
   /**
    * The message body. MAY BE EMPTY WHEN `attachments` IS NOT: a photo with no caption is a message, and
    * requiring text for it would make the user invent words to send a picture.
@@ -887,7 +907,7 @@ message SendGroupMessageResponse {
 }
 
 message ListGroupMessagesRequest {
-  string group = 1;
+  string group_id = 1;
   // EXCLUSIVE cursor: return messages with seq GREATER than this. 0 starts from the beginning.
   int64 after_seq = 2;
   // Page size; 0 means the server default.
@@ -909,7 +929,7 @@ message ListGroupMessagesResponse {
  * "everything after N" is a query and the live part is a notification.
  */
 message WatchGroupRequest {
-  string group = 1;
+  string group_id = 1;
   // Send messages with seq GREATER than this first, then follow live. 0 = from the beginning.
   int64 since_seq = 2;
   // The asking session. When set, it must be a member.

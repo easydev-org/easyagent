@@ -31,7 +31,7 @@ import (
 func groupMessageToMsg(m store.GroupMessage) *agentv1.GroupMessage {
 	return &agentv1.GroupMessage{
 		Id:          m.ID,
-		Group:       m.Group,
+		GroupId:     m.GroupID,
 		Sender:      m.Sender,
 		SenderName:  m.SenderName,
 		Body:        m.Body,
@@ -132,10 +132,10 @@ func (s *Server) groupAttachmentsFromRefs(tenant string, refs []*agentv1.FileRef
  * That rule lives here rather than in the channel layer because it needs the membership table, and the
  * channel layer deliberately knows nothing about groups.
  */
-func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, text string, attachments []*agentv1.FileRef) (*agentv1.GroupMessage, []string, error) {
-	name := strings.TrimSpace(group)
-	if name == "" {
-		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
+func (s *Server) sendGroupMessage(ctx context.Context, tenant, groupID, sender, text string, attachments []*agentv1.FileRef) (*agentv1.GroupMessage, []string, error) {
+	id := strings.TrimSpace(groupID)
+	if id == "" {
+		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "group id is required")
 	}
 	text = strings.TrimSpace(text)
 	attachmentsJSON := s.groupAttachmentsFromRefs(tenant, attachments)
@@ -149,24 +149,26 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 	if text == "" && attachmentsJSON == "" {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, "a message needs text or an attachment")
 	}
-	if _, ok, err := s.db.GetGroup(tenant, name); err != nil {
+	g, ok, err := s.db.GetGroup(tenant, id)
+	if err != nil {
 		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
-	} else if !ok {
+	}
+	if !ok {
 		return nil, nil, connect.NewError(connect.CodeNotFound, store.ErrGroupNotFound.Error())
 	}
 
-	coordinator, err := s.db.GroupCoordinator(tenant, name)
+	coordinator, err := s.db.GroupCoordinator(tenant, id)
 	if err != nil {
 		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 	if coordinator == "" {
 		return nil, nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Sprintf("group %q has no coordinator, so there is nowhere for this message to go", name))
+			fmt.Sprintf("group %q has no coordinator, so there is nowhere for this message to go", g.Name))
 	}
 
 	senderName := ""
 	if sender != "" {
-		isMember, err := s.db.IsGroupMember(tenant, name, sender)
+		isMember, err := s.db.IsGroupMember(tenant, id, sender)
 		if err != nil {
 			return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
 		}
@@ -185,7 +187,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 	msg, err := s.db.AppendGroupMessage(store.GroupMessage{
 		ID:          newUUID(),
 		Tenant:      tenant,
-		Group:       name,
+		GroupID:     id,
 		Sender:      sender,
 		SenderName:  senderName,
 		Body:        text,
@@ -195,7 +197,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 		return nil, nil, connect.NewError(connect.CodeInternal, err.Error())
 	}
 
-	s.publishGroupMessage(ctx, tenant, name, sender, delivered, msg)
+	s.publishGroupMessage(ctx, tenant, id, sender, delivered, msg)
 	/**
 	 * THE GROUP'S LIST ROW CHANGED: a new message means a new preview and a new timestamp.
 	 *
@@ -203,7 +205,7 @@ func (s *Server) sendGroupMessage(ctx context.Context, tenant, group, sender, te
 	 * row that has not been written yet would read the old preview and keep it until the next change.
 	 */
 	s.notifyListChange(tenant, agentbus.SessionListChange{
-		Kind: agentbus.ListKindGroup, Name: name,
+		Kind: agentbus.ListKindGroup, Name: id,
 	})
 	return groupMessageToMsg(msg), delivered, nil
 }
@@ -280,7 +282,7 @@ func (s *Server) publishGroupMessage(ctx context.Context, tenant, group, sender 
 // SendGroupMessage posts a message into a group.
 func (s *Server) SendGroupMessage(ctx context.Context, req *agentv1.SendGroupMessageRequest) (*agentv1.SendGroupMessageResponse, error) {
 	msg, delivered, err := s.sendGroupMessage(ctx, tenantOf(ctx),
-		req.GetGroup(), req.GetSender(), req.GetText(), req.GetAttachments())
+		req.GetGroupId(), req.GetSender(), req.GetText(), req.GetAttachments())
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +297,7 @@ func (s *Server) SendGroupMessage(ctx context.Context, req *agentv1.SendGroupMes
  */
 func (s *Server) ListGroupMessages(ctx context.Context, req *agentv1.ListGroupMessagesRequest) (*agentv1.ListGroupMessagesResponse, error) {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetGroup())
+	name := strings.TrimSpace(req.GetGroupId())
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "group name is required")
 	}
@@ -343,7 +345,7 @@ func (s *Server) ListGroupMessages(ctx context.Context, req *agentv1.ListGroupMe
  */
 func (s *Server) WatchGroup(ctx context.Context, req *agentv1.WatchGroupRequest, stream agentv1connect.AgentServiceWatchGroupServerStream) error {
 	tenant := tenantOf(ctx)
-	name := strings.TrimSpace(req.GetGroup())
+	name := strings.TrimSpace(req.GetGroupId())
 	if name == "" {
 		return connect.NewError(connect.CodeInvalidArgument, "group name is required")
 	}

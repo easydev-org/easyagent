@@ -137,9 +137,24 @@ func run(a, b replica) error {
 // BOTH HALVES MATTER. Storing on A and reading on B proves the transcript is shared; the preview proves the LIST
 // row is derived from that shared store rather than from a per-replica cache.
 func crossReplicaGroup(ctx context.Context, a, b replica, coord string) error {
-	const name = "cross-replica-group"
-	if err := a.createGroup(ctx, name, coord, "shared transcript check"); err != nil && !isAlreadyExists(err) {
+	/**
+	 * A GROUP IS ADDRESSED BY ID NOW, so the id has to come back from the create call.
+	 *
+	 * The memory of "the group I made" is the id, exactly as a console keeps it: the name is a label a person may
+	 * change, and every later call — post, read, preview — must survive that.
+	 */
+	id, err := a.createGroup(ctx, "cross-replica-group", coord, "shared transcript check")
+	if err != nil && !isAlreadyExists(err) {
 		return fmt.Errorf("create group on A: %w", err)
+	}
+	if id == "" {
+		// AN EARLIER RUN LEFT IT BEHIND, so the id comes from the list. This is the one place the binary resolves a
+		// name to an id, and it is at the same edge a console does it.
+		got, lerr := a.findGroupID(ctx, "cross-replica-group")
+		if lerr != nil {
+			return fmt.Errorf("resolve the existing group: %w", lerr)
+		}
+		id = got
 	}
 
 	/**
@@ -151,14 +166,14 @@ func crossReplicaGroup(ctx context.Context, a, b replica, coord string) error {
 	 * row from an earlier run that would pass the assertion no matter what.
 	 */
 	body := fmt.Sprintf("posted on A at %d, must be visible on B", time.Now().UnixNano())
-	if err := a.sendGroupMessage(ctx, name, body); err != nil {
+	if err := a.sendGroupMessage(ctx, id, body); err != nil {
 		return fmt.Errorf("post to the group on A: %w", err)
 	}
 
-	if err := b.waitGroupMessage(ctx, name, body); err != nil {
+	if err := b.waitGroupMessage(ctx, id, body); err != nil {
 		return fmt.Errorf("a group message posted on A is not readable on B: %w", err)
 	}
-	if err := b.waitGroupPreview(ctx, name, body); err != nil {
+	if err := b.waitGroupPreview(ctx, id, body); err != nil {
 		return fmt.Errorf("B's group list does not show the message's preview: %w", err)
 	}
 	fmt.Println("ok: a group message posted on A is readable on B, preview included")
@@ -214,16 +229,34 @@ func (r replica) createSession(ctx context.Context, name string) (string, error)
 	return res.SessionId, nil
 }
 
-func (r replica) createGroup(ctx context.Context, name, coordinator, intro string) error {
-	_, err := r.cli.CreateGroup(ctx, &agentv1.CreateGroupRequest{
+// createGroup makes a group and returns its ID — which is what every later call needs.
+func (r replica) createGroup(ctx context.Context, name, coordinator, intro string) (string, error) {
+	res, err := r.cli.CreateGroup(ctx, &agentv1.CreateGroupRequest{
 		Name: name, Coordinator: coordinator, Intro: intro, CreatedBy: "user",
 	})
-	return err
+	if err != nil {
+		return "", err
+	}
+	return res.Group.GetId(), nil
 }
 
-func (r replica) sendGroupMessage(ctx context.Context, group, text string) error {
+// findGroupID resolves a display name to an id, the way a console does once at the edge.
+func (r replica) findGroupID(ctx context.Context, name string) (string, error) {
+	res, err := r.cli.ListGroups(ctx, &agentv1.ListGroupsRequest{})
+	if err != nil {
+		return "", err
+	}
+	for _, g := range res.Groups {
+		if g.Name == name {
+			return g.Id, nil
+		}
+	}
+	return "", fmt.Errorf("no group named %q", name)
+}
+
+func (r replica) sendGroupMessage(ctx context.Context, groupID, text string) error {
 	_, err := r.cli.SendGroupMessage(ctx, &agentv1.SendGroupMessageRequest{
-		Group: group, Text: text,
+		GroupId: groupID, Text: text,
 	})
 	return err
 }
@@ -247,13 +280,13 @@ func (r replica) waitSessionVisible(ctx context.Context, id string) error {
 	return fmt.Errorf("timed out")
 }
 
-func (r replica) waitGroupMessage(ctx context.Context, group, body string) error {
+func (r replica) waitGroupMessage(ctx context.Context, groupID, body string) error {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		res, err := r.cli.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{Group: group})
+		res, err := r.cli.ListGroupMessages(ctx, &agentv1.ListGroupMessagesRequest{GroupId: groupID})
 		if err == nil {
 			for _, m := range res.Messages {
 				if m.Body == body {
@@ -266,7 +299,7 @@ func (r replica) waitGroupMessage(ctx context.Context, group, body string) error
 	return fmt.Errorf("timed out")
 }
 
-func (r replica) waitGroupPreview(ctx context.Context, group, want string) error {
+func (r replica) waitGroupPreview(ctx context.Context, groupID, want string) error {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
@@ -275,7 +308,7 @@ func (r replica) waitGroupPreview(ctx context.Context, group, want string) error
 		res, err := r.cli.ListGroups(ctx, &agentv1.ListGroupsRequest{})
 		if err == nil {
 			for _, g := range res.Groups {
-				if g.Name == group && g.LastMessagePreview == want {
+				if g.Id == groupID && g.LastMessagePreview == want {
 					return nil
 				}
 			}

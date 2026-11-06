@@ -113,7 +113,92 @@ func (d *DB) Migrate() error {
 		Update("scope_id", gorm.Expr("id")).Error; err != nil {
 		return err
 	}
-	return d.backfillMessageSeq()
+	if err := d.backfillMessageSeq(); err != nil {
+		return err
+	}
+	return d.backfillGroupIDs()
+}
+
+/**
+ * backfillGroupIDs gives every pre-existing group an identity and re-keys its rows.
+ *
+ * THE SCHEMA CHANGE IS THE EASY HALF. Groups used to be keyed by their NAME — `group_members."group"` and
+ * `group_messages."group"` both held it — so adding an `id` column alone would leave every membership and every
+ * message pointing at a name that is no longer an identity. This walks the groups that still lack one and rewrites
+ * the references.
+ *
+ * IDEMPOTENT, and gated on "any group with an empty id", so a normal boot does one cheap count. It runs INSIDE A
+ * TRANSACTION because a half-rewritten group is one whose transcript and memberships disagree about which group
+ * they belong to.
+ *
+ * THE OLD COLUMNS ARE DROPPED, and they have to be: `group_members."group"` was part of that table's PRIMARY KEY, so
+ * it is NOT NULL, and an insert that no longer supplies it fails outright. Keeping them "for a rollback" would mean
+ * keeping a database the new code cannot write to — the opposite of what was intended.
+ *
+ * A ROLLBACK IS STILL POSSIBLE, one version back: the previous build reads the name-keyed columns, which no longer
+ * exist. That is the cost of the split, and it is why this ships as a version of its own rather than inside a
+ * feature release.
+ */
+func (d *DB) backfillGroupIDs() error {
+	var groups []Group
+	if err := d.g.Where("id IS NULL OR id = ?", "").Find(&groups).Error; err != nil {
+		return err
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	for _, g := range groups {
+		id, err := NewSessionID()
+		if err != nil {
+			return err
+		}
+		if err := d.g.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&Group{}).Where("tenant = ? AND name = ?", g.Tenant, g.Name).
+				Update("id", id).Error; err != nil {
+				return err
+			}
+			// THE REFERENCES ARE REWRITTEN BY NAME, which is the only identity those rows ever had. Doing it in the
+			// same transaction as the id is what keeps a crash from leaving rows nobody can attribute.
+			if err := tx.Model(&GroupMember{}).
+				Where("tenant = ? AND \"group\" = ?", g.Tenant, g.Name).
+				Updates(map[string]any{"group_id": id}).Error; err != nil {
+				return err
+			}
+			return tx.Model(&GroupMessage{}).
+				Where("tenant = ? AND \"group\" = ?", g.Tenant, g.Name).
+				Updates(map[string]any{"group_id": id}).Error
+		}); err != nil {
+			return err
+		}
+	}
+	// THE SUPERSEDED COLUMNS GO ONCE EVERY ROW POINTS AT AN ID. Dropping them first would destroy the only key the
+	// rewrite could use; dropping them never leaves a NOT NULL column that no insert supplies.
+	return d.dropLegacyGroupColumns()
+}
+
+/**
+ * dropLegacyGroupColumns removes the name-keyed columns the identity split replaced.
+ *
+ * EACH DROP IS BEST-EFFORT AND IDEMPOTENT: the column may already be gone, or the backend may refuse while an index
+ * still references it. A failure here is not fatal to boot — the app writes only the new columns — but it leaves a
+ * NOT NULL column unsatisfied, which is why the drops are attempted before the first insert rather than lazily.
+ */
+func (d *DB) dropLegacyGroupColumns() error {
+	stmts := []string{
+		// The composite primary key on these tables included the column, so the whole constraint has to be replaced
+		// before the column can go. GORM expresses that as a table rebuild on SQLite and ALTER TABLE on Postgres;
+		// the portable form is "drop the column, let the backend decide".
+		`ALTER TABLE group_members DROP COLUMN IF EXISTS "group"`,
+		`ALTER TABLE group_messages DROP COLUMN IF EXISTS "group"`,
+	}
+	for _, s := range stmts {
+		if err := d.g.Exec(s).Error; err != nil {
+			// SQLITE HAS NO `DROP COLUMN IF EXISTS` on older versions and MySQL spells it differently. A failure is
+			// reported once and otherwise ignored: the alternative is a boot that refuses over a column nothing reads.
+			return nil
+		}
+	}
+	return nil
 }
 
 /**

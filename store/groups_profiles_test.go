@@ -37,12 +37,14 @@ func TestGroupMemberProfilesCarryNameIntroAndRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := d.CreateGroup("t1", Group{Name: "release"}, coord.ID,
+	grp := &Group{Name: "release"}
+	if err := d.CreateGroup("t1", grp, coord.ID,
 		[]string{member.ID, bare.ID}, "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := d.GroupMemberProfiles("t1", "release")
+	// THE PROFILES ARE READ BY GROUP ID, which is what CreateGroup wrote back into `grp`.
+	got, err := d.GroupMemberProfiles("t1", grp.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

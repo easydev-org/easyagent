@@ -28,9 +28,22 @@ import (
  */
 type Group struct {
 	Tenant string `gorm:"column:tenant;primaryKey;size:64"`
-	// Name is the group's identity AND its address segment: messages to the group use it, so it is
-	// constrained to a subject segment exactly like a session name.
-	Name string `gorm:"column:name;primaryKey;size:128"`
+	/**
+	 * ID is the group's identity AND its address segment: the channel subject, the membership rows and every
+	 * reference from elsewhere name it.
+	 *
+	 * RANDOM AND IMMUTABLE, exactly like a session's, and for the same reason — it is what lets Name be a label the
+	 * user may edit. While the two were the same column, renaming a group meant abandoning its transcript, its
+	 * memberships and its subscriptions, because every one of them was keyed by the string that changed.
+	 */
+	ID string `gorm:"column:id;primaryKey;size:64"`
+	/**
+	 * Name is what a person calls this group — shown in lists, in the chat header, in member lists.
+	 *
+	 * NOT the identity. It is unique per tenant so that a person can tell two groups apart by sight, but nothing
+	 * ROUTES by it, which is what makes renaming a supported operation rather than a migration.
+	 */
+	Name string `gorm:"column:name;size:128;uniqueIndex:uq_groups_tenant_name,priority:2"`
 
 	/**
 	 * AvatarFile is the group's picture, in the same `file:<code>` form a session uses.
@@ -82,8 +95,10 @@ func (Group) TableName() string { return "groups" }
  * and be an ordinary member of another, and a column on `sessions` could only express one of them.
  */
 type GroupMember struct {
-	Tenant  string `gorm:"column:tenant;primaryKey;size:64"`
-	Group   string `gorm:"column:group;primaryKey;size:128"`
+	Tenant string `gorm:"column:tenant;primaryKey;size:64"`
+	// GroupID is the group's immutable identity. It used to be the group's NAME, which made a rename a
+	// different group.
+	GroupID string `gorm:"column:group_id;primaryKey;size:64"`
 	Session string `gorm:"column:session;primaryKey;size:128"`
 
 	// Role is GroupRoleCoordinator or GroupRoleMember.
@@ -140,14 +155,32 @@ var ErrNotGroupMember = errors.New("session is not a member of this group")
 //
 // THE MEMBERS ARE INSIDE THE SAME TRANSACTION as the group. A group whose membership write failed
 // would exist and be visible to nobody — unreachable, with nothing in the API that could repair it.
-func (d *DB) CreateGroup(tenant string, g Group, coordinator string, members []string, now string) error {
+func (d *DB) CreateGroup(tenant string, g *Group, coordinator string, members []string, now string) error {
 	// EXACTLY ONE COORDINATOR. None means a group whose messages reach nobody; two means both answer
 	// the same user message. Refusing here is better than either failure, which would only show up
 	// when someone tried to use the group.
 	if coordinator == "" {
 		return ErrNoCoordinator
 	}
+	/**
+	 * THE ID IS MINTED HERE, like a session's, and it is what every reference will use.
+	 *
+	 * THE CALLER MAY PASS ONE (a migration or a test), which is why it is not overwritten unconditionally — but a
+	 * normal creation leaves it empty and gets a random one.
+	 */
+	if g.ID == "" {
+		id, err := NewSessionID()
+		if err != nil {
+			return err
+		}
+		// THE GENERATED ID GOES BACK TO THE CALLER through g, because there is nothing else to read it from: the
+		// caller has no handle on the row it just created, and a second SELECT to learn its own identity would be
+		// both slower and racy. It is a POINTER parameter for exactly this reason.
+		g.ID = id
+	}
 	return d.g.Transaction(func(tx *gorm.DB) error {
+		// THE NAME IS UNIQUE PER TENANT so a person can tell two groups apart by sight. It is not the identity and
+		// nothing routes by it, which is what makes renaming an edit rather than a migration.
 		var n int64
 		if err := tx.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, g.Name).
 			Count(&n).Error; err != nil {
@@ -157,12 +190,12 @@ func (d *DB) CreateGroup(tenant string, g Group, coordinator string, members []s
 			return ErrGroupExists
 		}
 		g.Tenant = tenant
-		if err := tx.Create(&g).Error; err != nil {
+		if err := tx.Create(g).Error; err != nil {
 			return err
 		}
 		seen := map[string]bool{coordinator: true}
 		if err := tx.Create(&GroupMember{
-			Tenant: tenant, Group: g.Name, Session: coordinator,
+			Tenant: tenant, GroupID: g.ID, Session: coordinator,
 			Role: GroupRoleCoordinator, JoinedAt: now, JoinedBy: g.CreatedBy,
 		}).Error; err != nil {
 			return err
@@ -173,7 +206,7 @@ func (d *DB) CreateGroup(tenant string, g Group, coordinator string, members []s
 			}
 			seen[m] = true
 			if err := tx.Create(&GroupMember{
-				Tenant: tenant, Group: g.Name, Session: m,
+				Tenant: tenant, GroupID: g.ID, Session: m,
 				Role: GroupRoleMember, JoinedAt: now, JoinedBy: g.CreatedBy,
 			}).Error; err != nil {
 				return err
@@ -183,8 +216,24 @@ func (d *DB) CreateGroup(tenant string, g Group, coordinator string, members []s
 	})
 }
 
-// GetGroup returns (group, true) or (nil, false).
-func (d *DB) GetGroup(tenant, name string) (*Group, bool, error) {
+/**
+ * GroupByID resolves a group's identity to its row.
+ *
+ * EMPTY MEANS "NO SUCH GROUP", never "no name": the id is the identity, and a caller holding one is addressing the
+ * group rather than searching for it.
+ */
+func (d *DB) GroupByID(tenant, id string) (*Group, bool, error) {
+	return d.GetGroup(tenant, id)
+}
+
+/**
+ * GroupByName resolves a display name to its row.
+ *
+ * FOR THE EDGE OF THE SYSTEM, not its middle. A person types a name and the console has to turn it into an id once;
+ * every layer below that point addresses the group by id. An internal caller that resolves by name is re-deriving
+ * an identity from a label, which is exactly what the split exists to stop.
+ */
+func (d *DB) GroupByName(tenant, name string) (*Group, bool, error) {
 	var g Group
 	err := d.g.Where("tenant = ? AND name = ?", tenant, name).First(&g).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -196,9 +245,42 @@ func (d *DB) GetGroup(tenant, name string) (*Group, bool, error) {
 	return &g, true, nil
 }
 
+/**
+ * RenameGroup changes the display label.
+ *
+ * IT TOUCHES NOTHING ELSE — not the memberships, not the transcript, not the subscriptions — because none of them
+ * are keyed by the name. That is the whole point of the identity split: while the name WAS the identity, this
+ * operation was a migration, and nobody had written it.
+ */
+func (d *DB) RenameGroup(tenant, id, name, now string) error {
+	var n int64
+	if err := d.g.Model(&Group{}).Where("tenant = ? AND name = ? AND id <> ?", tenant, name, id).
+		Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrGroupExists
+	}
+	return d.g.Model(&Group{}).Where("tenant = ? AND id = ?", tenant, id).
+		Updates(map[string]any{"name": name, "updated_at": now}).Error
+}
+
+// GetGroup returns (group, true) or (nil, false).
+func (d *DB) GetGroup(tenant, id string) (*Group, bool, error) {
+	var g Group
+	err := d.g.Where("tenant = ? AND id = ?", tenant, id).First(&g).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &g, true, nil
+}
+
 // UpdateGroupAvatar sets (or clears, with "") the group's picture.
-func (d *DB) UpdateGroupAvatar(tenant, name, avatarFile, now string) error {
-	return d.g.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, name).
+func (d *DB) UpdateGroupAvatar(tenant, id, avatarFile, now string) error {
+	return d.g.Model(&Group{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{"avatar_file": avatarFile, "updated_at": now}).Error
 }
 
@@ -210,21 +292,21 @@ func (d *DB) UpdateGroupAvatar(tenant, name, avatarFile, now string) error {
  * once, at the wire, where an `optional` field can express it. Converting that to two nullable arguments here
  * would duplicate the rule in a second place.
  */
-func (d *DB) UpdateGroupProfile(tenant, name, avatarFile, intro, now string) error {
-	return d.g.Model(&Group{}).Where("tenant = ? AND name = ?", tenant, name).
+func (d *DB) UpdateGroupProfile(tenant, id, avatarFile, intro, now string) error {
+	return d.g.Model(&Group{}).Where("tenant = ? AND id = ?", tenant, id).
 		Updates(map[string]any{
 			"avatar_file": avatarFile, "intro": intro, "updated_at": now,
 		}).Error
 }
 
 // DeleteGroup removes a group and its memberships.
-func (d *DB) DeleteGroup(tenant, name string) error {
+func (d *DB) DeleteGroup(tenant, id string) error {
 	return d.g.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("tenant = ? AND \"group\" = ?", tenant, name).
+		if err := tx.Where("tenant = ? AND group_id = ?", tenant, id).
 			Delete(&GroupMember{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("tenant = ? AND name = ?", tenant, name).Delete(&Group{}).Error
+		return tx.Where("tenant = ? AND id = ?", tenant, id).Delete(&Group{}).Error
 	})
 }
 
@@ -239,10 +321,10 @@ func (d *DB) DeleteGroup(tenant, name string) error {
  * would answer "who receives the group's messages" differently depending on the order rows were
  * written, which is not an answer a user can predict. `SetGroupCoordinator` is the only way to choose.
  */
-func (d *DB) AddGroupMembers(tenant, group string, sessions []string, now, addedBy string) error {
+func (d *DB) AddGroupMembers(tenant, groupID string, sessions []string, now, addedBy string) error {
 	return d.g.Transaction(func(tx *gorm.DB) error {
 		var existing []GroupMember
-		if err := tx.Where("tenant = ? AND \"group\" = ?", tenant, group).
+		if err := tx.Where("tenant = ? AND group_id = ?", tenant, groupID).
 			Find(&existing).Error; err != nil {
 			return err
 		}
@@ -256,7 +338,7 @@ func (d *DB) AddGroupMembers(tenant, group string, sessions []string, now, added
 			}
 			have[s] = true
 			if err := tx.Create(&GroupMember{
-				Tenant: tenant, Group: group, Session: s,
+				Tenant: tenant, GroupID: groupID, Session: s,
 				Role: GroupRoleMember, JoinedAt: now, JoinedBy: addedBy,
 			}).Error; err != nil {
 				return err
@@ -288,7 +370,7 @@ func (d *DB) CoordinatedGroups(tenant, session string) ([]string, error) {
 	}
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, r.Group)
+		out = append(out, r.GroupID)
 	}
 	sort.Strings(out)
 	return out, nil
@@ -307,9 +389,9 @@ func (d *DB) CoordinatedGroups(tenant, session string) ([]string, error) {
  * one, and removing one is refused) but which a direct database edit can still create. The caller treats
  * it as "this group routes nowhere" rather than guessing a recipient.
  */
-func (d *DB) GroupCoordinator(tenant, group string) (string, error) {
+func (d *DB) GroupCoordinator(tenant, groupID string) (string, error) {
 	var m GroupMember
-	err := d.g.Where("tenant = ? AND \"group\" = ? AND role = ?", tenant, group, GroupRoleCoordinator).
+	err := d.g.Where("tenant = ? AND group_id = ? AND role = ?", tenant, groupID, GroupRoleCoordinator).
 		First(&m).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", nil
@@ -330,11 +412,11 @@ func (d *DB) GroupCoordinator(tenant, group string) (string, error) {
  * THE NEW COORDINATOR MUST ALREADY BE A MEMBER. Promoting a stranger would add a session to the group
  * as a side effect of naming it, which is the opposite of what an explicit member list is for.
  */
-func (d *DB) SetGroupCoordinator(tenant, group, session string) error {
+func (d *DB) SetGroupCoordinator(tenant, groupID, session string) error {
 	return d.g.Transaction(func(tx *gorm.DB) error {
 		var n int64
 		if err := tx.Model(&GroupMember{}).
-			Where("tenant = ? AND \"group\" = ? AND session = ?", tenant, group, session).
+			Where("tenant = ? AND group_id = ? AND session = ?", tenant, groupID, session).
 			Count(&n).Error; err != nil {
 			return err
 		}
@@ -342,12 +424,12 @@ func (d *DB) SetGroupCoordinator(tenant, group, session string) error {
 			return ErrNotGroupMember
 		}
 		if err := tx.Model(&GroupMember{}).
-			Where("tenant = ? AND \"group\" = ? AND role = ?", tenant, group, GroupRoleCoordinator).
+			Where("tenant = ? AND group_id = ? AND role = ?", tenant, groupID, GroupRoleCoordinator).
 			Update("role", GroupRoleMember).Error; err != nil {
 			return err
 		}
 		return tx.Model(&GroupMember{}).
-			Where("tenant = ? AND \"group\" = ? AND session = ?", tenant, group, session).
+			Where("tenant = ? AND group_id = ? AND session = ?", tenant, groupID, session).
 			Update("role", GroupRoleCoordinator).Error
 	})
 }
@@ -359,10 +441,10 @@ func (d *DB) SetGroupCoordinator(tenant, group, session string) error {
  * user's messages nowhere and nothing in the API would say so. The caller either nominates someone
  * else first or sees this refusal — the dead end is reported at the moment it would be created.
  */
-func (d *DB) RemoveGroupMember(tenant, group, session string) error {
+func (d *DB) RemoveGroupMember(tenant, groupID, session string) error {
 	return d.g.Transaction(func(tx *gorm.DB) error {
 		var m GroupMember
-		err := tx.Where("tenant = ? AND \"group\" = ? AND session = ?", tenant, group, session).
+		err := tx.Where("tenant = ? AND group_id = ? AND session = ?", tenant, groupID, session).
 			First(&m).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrNotGroupMember
@@ -373,7 +455,7 @@ func (d *DB) RemoveGroupMember(tenant, group, session string) error {
 		if m.Role == GroupRoleCoordinator {
 			return ErrCoordinatorRequired
 		}
-		return tx.Where("tenant = ? AND \"group\" = ? AND session = ?", tenant, group, session).
+		return tx.Where("tenant = ? AND group_id = ? AND session = ?", tenant, groupID, session).
 			Delete(&GroupMember{}).Error
 	})
 }
@@ -382,19 +464,19 @@ func (d *DB) RemoveGroupMember(tenant, group, session string) error {
 var ErrCoordinatorRequired = errors.New("the coordinator cannot be removed; move the role first")
 
 // ListGroupMembers returns a group's members, oldest join first.
-func (d *DB) ListGroupMembers(tenant, group string) ([]GroupMember, error) {
+func (d *DB) ListGroupMembers(tenant, groupID string) ([]GroupMember, error) {
 	var out []GroupMember
-	err := d.g.Where("tenant = ? AND \"group\" = ?", tenant, group).
+	err := d.g.Where("tenant = ? AND group_id = ?", tenant, groupID).
 		Order("CASE WHEN role = 'coordinator' THEN 0 ELSE 1 END, joined_at, session").
 		Find(&out).Error
 	return out, err
 }
 
 // IsGroupMember reports whether a session belongs to a group.
-func (d *DB) IsGroupMember(tenant, group, session string) (bool, error) {
+func (d *DB) IsGroupMember(tenant, groupID, session string) (bool, error) {
 	var n int64
 	err := d.g.Model(&GroupMember{}).
-		Where("tenant = ? AND \"group\" = ? AND session = ?", tenant, group, session).
+		Where("tenant = ? AND group_id = ? AND session = ?", tenant, groupID, session).
 		Count(&n).Error
 	return n > 0, err
 }
@@ -408,18 +490,18 @@ func (d *DB) IsGroupMember(tenant, group, session string) (bool, error) {
 func (d *DB) GroupsOfSession(tenant, session string) ([]Group, error) {
 	var memberships []GroupMember
 	if err := d.g.Where("tenant = ? AND session = ?", tenant, session).
-		Order("\"group\"").Find(&memberships).Error; err != nil {
+		Find(&memberships).Error; err != nil {
 		return nil, err
 	}
 	if len(memberships) == 0 {
 		return nil, nil
 	}
-	names := make([]string, 0, len(memberships))
+	ids := make([]string, 0, len(memberships))
 	for _, m := range memberships {
-		names = append(names, m.Group)
+		ids = append(ids, m.GroupID)
 	}
 	var groups []Group
-	if err := d.g.Where("tenant = ? AND name IN ?", tenant, names).
+	if err := d.g.Where("tenant = ? AND id IN ?", tenant, ids).
 		Order("name").Find(&groups).Error; err != nil {
 		return nil, err
 	}
@@ -427,11 +509,11 @@ func (d *DB) GroupsOfSession(tenant, session string) ([]Group, error) {
 	// the database again for a value already in hand is how a list gets slower every time someone adds a field.
 	role := make(map[string]string, len(memberships))
 	for _, m := range memberships {
-		role[m.Group] = m.Role
+		role[m.GroupID] = m.Role
 	}
 	out := make([]Group, 0, len(groups))
 	for _, g := range groups {
-		g.MyRole = role[g.Name]
+		g.MyRole = role[g.ID]
 		out = append(out, g)
 	}
 	return out, nil
@@ -444,28 +526,28 @@ func (d *DB) ListGroups(tenant string) ([]Group, error) {
 	return out, err
 }
 
-// GroupMemberCounts returns member counts for the given group names.
+// GroupMemberCounts returns member counts for the given group IDS.
 //
 // ONE QUERY FOR THE WHOLE LIST, not one per group: a list of twenty groups would otherwise cost
 // twenty round trips to render a number nobody would wait for.
-func (d *DB) GroupMemberCounts(tenant string, groups []string) (map[string]int, error) {
-	out := make(map[string]int, len(groups))
-	if len(groups) == 0 {
+func (d *DB) GroupMemberCounts(tenant string, groupIDs []string) (map[string]int, error) {
+	out := make(map[string]int, len(groupIDs))
+	if len(groupIDs) == 0 {
 		return out, nil
 	}
 	type row struct {
-		Group string
-		N     int
+		GroupID string
+		N       int
 	}
 	var rows []row
 	if err := d.g.Model(&GroupMember{}).
-		Select("\"group\" as group, count(*) as n").
-		Where("tenant = ? AND \"group\" IN ?", tenant, groups).
-		Group("\"group\"").Scan(&rows).Error; err != nil {
+		Select("group_id, count(*) as n").
+		Where("tenant = ? AND group_id IN ?", tenant, groupIDs).
+		Group("group_id").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, r := range rows {
-		out[r.Group] = r.N
+		out[r.GroupID] = r.N
 	}
 	return out, nil
 }
@@ -496,8 +578,8 @@ type GroupMemberProfile struct {
  * so in practice this does not arise; when it does — a partially applied delete — the member still appears,
  * by id, rather than silently vanishing from a list that other sessions rely on to know who is present.
  */
-func (d *DB) GroupMemberProfiles(tenant, group string) ([]GroupMemberProfile, error) {
-	rows, err := d.ListGroupMembers(tenant, group)
+func (d *DB) GroupMemberProfiles(tenant, groupID string) ([]GroupMemberProfile, error) {
+	rows, err := d.ListGroupMembers(tenant, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -534,8 +616,8 @@ func (d *DB) GroupMemberProfiles(tenant, group string) ([]GroupMemberProfile, er
 // same predicate, and a duplicate query is a second place for the membership rule to drift. The
 // exclusion exists because "who else is here" is the question, and a caller that receives itself in the
 // list has to remember to filter it out — which every caller then does differently, and one forgets.
-func (d *DB) SessionsInGroupIDs(tenant, group, exclude string) ([]string, error) {
-	rows, err := d.ListGroupMembers(tenant, group)
+func (d *DB) SessionsInGroupIDs(tenant, groupID, exclude string) ([]string, error) {
+	rows, err := d.ListGroupMembers(tenant, groupID)
 	if err != nil {
 		return nil, err
 	}
