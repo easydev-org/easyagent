@@ -973,3 +973,95 @@ func emitBg(e Emitter, name string, params map[string]any) error {
 	}
 	return e.Emit(context.Background(), Event{Name: name, Params: params})
 }
+
+/**
+ * AskOnce answers one question from a session's PERSISTED history, without running a turn.
+ *
+ * IT TOUCHES NOTHING THAT BELONGS TO THE SESSION. No message is inserted, no tip is advanced, no lease is taken, no
+ * usage is recorded against it. A session mid-turn is completely unaffected: this reads the chain and calls the model
+ * on the caller's own goroutine.
+ *
+ * THE CHAIN IS THE TRUTH, AND IT IS THE WRITTEN ONE. `SessionTip` + `Chain` read what the previous steps persisted; a
+ * step still in flight lives in the sink's memory and is invisible here. That boundary is deliberate — half a tool call
+ * is not context, and a question about in-progress work would otherwise race the work.
+ *
+ * ONE STEP, NO TOOLS. `MaxTurns: 1` makes the loop drop the tool list on its only step, so the model can answer in
+ * prose and nothing else. It is the same mechanism a final step already uses, not a second code path.
+ *
+ * THE EMITTER IS DISCARDED, so nothing reaches a client's stream: this is not part of the session's transcript and a
+ * reader watching it would see text appear that is not in the conversation.
+ */
+func (r *Runtime) AskOnce(ctx context.Context, tenant string, s store.Session, question string) (string, error) {
+	if r.deps.DB == nil {
+		return "", errors.New("agent: no store")
+	}
+	client := r.deps.Client
+	if client == nil {
+		if r.deps.Resolver == nil {
+			return "", errors.New("agent: no client or resolver")
+		}
+		var err error
+		client, err = r.deps.Resolver.Resolve(ctx, tenant, s.ModelRef())
+		if err != nil {
+			return "", err
+		}
+	}
+
+	tip, err := r.deps.DB.SessionTip(tenant, s.ID)
+	if err != nil {
+		return "", err
+	}
+	msgs, err := r.deps.DB.Chain(tenant, tip, 0, "")
+	if err != nil {
+		return "", err
+	}
+	ids := make([]string, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.ID
+	}
+	parts, err := r.deps.DB.PartsByMessages(tenant, ids)
+	if err != nil {
+		return "", err
+	}
+	history := rebuildHistory(msgs, parts)
+
+	/**
+	 * THE SESSION'S OWN PROMPT, WITHOUT THE ENV BLOCK.
+	 *
+	 * The env block lists what the session MAY DO — its groups, its grants, the current time. Answering a reader's
+	 * question needs the voice, not the capabilities, and an answer that opens with "I have not been granted
+	 * group.spawn" would be answering a different question than the one asked.
+	 */
+	plan, err := Plan(ctx, r.deps, PlanInput{
+		Tenant: tenant, SessionPreset: s.Preset, SessionLocale: s.Locale,
+		SessionSystem: s.SystemPrompt, SessionMax: 1,
+		SessionIntro: s.Intro,
+		Now:          r.deps.Now(),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var extra map[string]any
+	if body, ok := ResolveVariant(s.Variant); ok {
+		extra = body
+	}
+	res, err := RunTurn(ctx, Deps{
+		Client: client,
+		Retry:  r.deps.Retry,
+		// NO TOOLS. The loop would drop them on the final step anyway; declaring it here states the intent.
+		MaxTurns: 1,
+		Locale:   plan.Locale,
+	}, Input{
+		Tenant: tenant, Session: s.ID, RunID: newID(),
+		Model: ModelOf(s.ModelRef()), System: plan.System,
+		PrevID: tip, History: history,
+		Tools: nil,
+		Extra: extra,
+	})
+	if err != nil {
+		return "", err
+	}
+	// THE TURN'S TEXT IS THE ANSWER: with one step and no tools there is nothing else it could be.
+	return res.Text, nil
+}

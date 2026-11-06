@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"strings"
 
+	"connectrpc.com/connect/v2"
+
 	"github.com/easydev-org/easyagent/agentbus"
+	agentv1 "github.com/easydev-org/easyagent/gen/agent/v1"
 	"github.com/easydev-org/easyagent/store"
 )
 
@@ -175,4 +178,25 @@ func replyReminderText(locale, groupName, fromID, fromName string, attempt int) 
 // ObligationsForGroup exposes a group's outstanding debts to the RPC layer.
 func (s *Server) ObligationsForGroup(ctx context.Context, tenant, groupID string) ([]store.GroupReplyObligation, error) {
 	return s.db.ObligationsForGroup(tenant, groupID)
+}
+
+// ListReplyObligations is the RPC behind the group's "who still owes an answer" panel.
+func (s *Server) ListReplyObligations(ctx context.Context, req *agentv1.ListReplyObligationsRequest) (*agentv1.ListReplyObligationsResponse, error) {
+	groupID := strings.TrimSpace(req.GetGroupId())
+	if groupID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "group_id is required")
+	}
+	rows, err := s.db.ObligationsForGroup(tenantOf(ctx), groupID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error())
+	}
+	out := make([]*agentv1.ReplyObligation, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, &agentv1.ReplyObligation{
+			Id: r.ID, Session: r.Session, From: r.From, Seq: r.Seq,
+			MessageId: r.MessageID, CreatedAt: r.CreatedAt,
+			RemindCount: int32(r.RemindCount), RemindedAt: r.RemindedAt,
+		})
+	}
+	return &agentv1.ListReplyObligationsResponse{Obligations: out}, nil
 }

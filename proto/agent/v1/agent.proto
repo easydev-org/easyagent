@@ -959,6 +959,49 @@ message SendGroupMessageRequest {
    */
   repeated FileRef attachments = 6;
 }
+message ReplyObligation {
+  string id = 1;
+  // The session that OWES the answer.
+  string session = 2;
+  // The session it owes, and that a reply must be addressed to.
+  string from = 3;
+  // The group message that created the debt.
+  int64 seq = 4;
+  string message_id = 5;
+  string created_at = 6;
+  // How many times it has been chased, and when it last was.
+  int32 remind_count = 7;
+  string reminded_at = 8;
+}
+message ListReplyObligationsRequest { string group_id = 1; }
+message ListReplyObligationsResponse {
+  repeated ReplyObligation obligations = 1;
+}
+
+message AskRequest {
+  // The session whose context answers. It is NOT woken and nothing is written to it.
+  string id = 1;
+  string question = 2;
+}
+message AskResponse {
+  string session_id = 1;
+  string session_name = 2;
+  string answer = 3;
+}
+
+message AskInGroupRequest {
+  // The group the answer is posted into.
+  string group_id = 1;
+  // The session to ask. Must be a member, so a group's page cannot interrogate a stranger.
+  string session_id = 2;
+  string question = 3;
+}
+message AskInGroupResponse {
+  // The message written into the group.
+  GroupMessage message = 1;
+  string answer = 2;
+}
+
 message SendGroupMessageResponse {
   // The message as stored, including the sequence it was assigned.
   GroupMessage message = 1;
@@ -1414,6 +1457,29 @@ service AgentService {
   // decides how to split the work and addresses members itself with `group-send`. "@" in this design
   // means "the coordinator writes to that session's mailbox", not a string this layer parses.
   rpc SendGroupMessage(SendGroupMessageRequest) returns (SendGroupMessageResponse);
+  /**
+   * Ask sends ONE question to a session's context and returns the answer.
+   *
+   * A SIDE CHANNEL, NOT A TURN. Nothing is written to the session — no message, no step, no read watermark — and a
+   * session mid-turn is unaffected. The model runs once, with NO TOOLS, over the history that is already persisted.
+   *
+   * `AskInGroup` is the same call with the answer posted into a group; this one returns it to the caller.
+   */
+  rpc Ask(AskRequest) returns (AskResponse);
+  /**
+   * AskInGroup asks and posts the answer into a group as a SYSTEM message.
+   *
+   * The answer is relayed, not sent by the session: attributing it to the session would put words in the transcript it
+   * never wrote, and a reader scrolling back would believe it had volunteered them.
+   */
+  rpc AskInGroup(AskInGroupRequest) returns (AskInGroupResponse);
+  /**
+   * ListReplyObligations says who still owes whom an answer in a group.
+   *
+   * OUTSTANDING ONLY. A reader asking "who has not answered" is not asking for the history of settled ones, and a list
+   * that mixed the two would be longer than the transcript it describes.
+   */
+  rpc ListReplyObligations(ListReplyObligationsRequest) returns (ListReplyObligationsResponse);
   // A group's transcript, oldest first, paged by `after_seq`.
   rpc ListGroupMessages(ListGroupMessagesRequest) returns (ListGroupMessagesResponse);
   // Live transcript: retained messages after `since_seq`, then everything new.

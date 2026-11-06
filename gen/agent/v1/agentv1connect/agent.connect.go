@@ -107,6 +107,13 @@ const (
 	// AgentServiceSendGroupMessageProcedure is the procedure name of the AgentService's
 	// SendGroupMessage RPC.
 	AgentServiceSendGroupMessageProcedure = "/agent.v1.AgentService/SendGroupMessage"
+	// AgentServiceAskProcedure is the procedure name of the AgentService's Ask RPC.
+	AgentServiceAskProcedure = "/agent.v1.AgentService/Ask"
+	// AgentServiceAskInGroupProcedure is the procedure name of the AgentService's AskInGroup RPC.
+	AgentServiceAskInGroupProcedure = "/agent.v1.AgentService/AskInGroup"
+	// AgentServiceListReplyObligationsProcedure is the procedure name of the AgentService's
+	// ListReplyObligations RPC.
+	AgentServiceListReplyObligationsProcedure = "/agent.v1.AgentService/ListReplyObligations"
 	// AgentServiceListGroupMessagesProcedure is the procedure name of the AgentService's
 	// ListGroupMessages RPC.
 	AgentServiceListGroupMessagesProcedure = "/agent.v1.AgentService/ListGroupMessages"
@@ -453,6 +460,27 @@ var (
 			Procedure:  AgentServiceSendGroupMessageProcedure,
 		}
 	})
+	agentServiceAskSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("Ask"),
+			Procedure:  AgentServiceAskProcedure,
+		}
+	})
+	agentServiceAskInGroupSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("AskInGroup"),
+			Procedure:  AgentServiceAskInGroupProcedure,
+		}
+	})
+	agentServiceListReplyObligationsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_agent_v1_agent_proto.Services().ByName("AgentService").Methods().ByName("ListReplyObligations"),
+			Procedure:  AgentServiceListReplyObligationsProcedure,
+		}
+	})
 	agentServiceListGroupMessagesSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -761,6 +789,26 @@ type AgentServiceClient interface {
 	// decides how to split the work and addresses members itself with `group-send`. "@" in this design
 	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
 	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
+	//*
+	// Ask sends ONE question to a session's context and returns the answer.
+	//
+	// A SIDE CHANNEL, NOT A TURN. Nothing is written to the session — no message, no step, no read watermark — and a
+	// session mid-turn is unaffected. The model runs once, with NO TOOLS, over the history that is already persisted.
+	//
+	// `AskInGroup` is the same call with the answer posted into a group; this one returns it to the caller.
+	Ask(context.Context, *v1.AskRequest) (*v1.AskResponse, error)
+	//*
+	// AskInGroup asks and posts the answer into a group as a SYSTEM message.
+	//
+	// The answer is relayed, not sent by the session: attributing it to the session would put words in the transcript it
+	// never wrote, and a reader scrolling back would believe it had volunteered them.
+	AskInGroup(context.Context, *v1.AskInGroupRequest) (*v1.AskInGroupResponse, error)
+	//*
+	// ListReplyObligations says who still owes whom an answer in a group.
+	//
+	// OUTSTANDING ONLY. A reader asking "who has not answered" is not asking for the history of settled ones, and a list
+	// that mixed the two would be longer than the transcript it describes.
+	ListReplyObligations(context.Context, *v1.ListReplyObligationsRequest) (*v1.ListReplyObligationsResponse, error)
 	// A group's transcript, oldest first, paged by `after_seq`.
 	ListGroupMessages(context.Context, *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error)
 	// Live transcript: retained messages after `since_seq`, then everything new.
@@ -994,6 +1042,26 @@ type AgentServiceHandler interface {
 	// decides how to split the work and addresses members itself with `group-send`. "@" in this design
 	// means "the coordinator writes to that session's mailbox", not a string this layer parses.
 	SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error)
+	//*
+	// Ask sends ONE question to a session's context and returns the answer.
+	//
+	// A SIDE CHANNEL, NOT A TURN. Nothing is written to the session — no message, no step, no read watermark — and a
+	// session mid-turn is unaffected. The model runs once, with NO TOOLS, over the history that is already persisted.
+	//
+	// `AskInGroup` is the same call with the answer posted into a group; this one returns it to the caller.
+	Ask(context.Context, *v1.AskRequest) (*v1.AskResponse, error)
+	//*
+	// AskInGroup asks and posts the answer into a group as a SYSTEM message.
+	//
+	// The answer is relayed, not sent by the session: attributing it to the session would put words in the transcript it
+	// never wrote, and a reader scrolling back would believe it had volunteered them.
+	AskInGroup(context.Context, *v1.AskInGroupRequest) (*v1.AskInGroupResponse, error)
+	//*
+	// ListReplyObligations says who still owes whom an answer in a group.
+	//
+	// OUTSTANDING ONLY. A reader asking "who has not answered" is not asking for the history of settled ones, and a list
+	// that mixed the two would be longer than the transcript it describes.
+	ListReplyObligations(context.Context, *v1.ListReplyObligationsRequest) (*v1.ListReplyObligationsResponse, error)
 	// A group's transcript, oldest first, paged by `after_seq`.
 	ListGroupMessages(context.Context, *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error)
 	// Live transcript: retained messages after `since_seq`, then everything new.
@@ -1067,6 +1135,9 @@ func RegisterAgentServiceHandler(server *connect.Server, svc AgentServiceHandler
 		connect.Method{Spec: agentServiceRemoveGroupMemberSpec(), Handler: adapter.removeGroupMember},
 		connect.Method{Spec: agentServiceSetGroupCoordinatorSpec(), Handler: adapter.setGroupCoordinator},
 		connect.Method{Spec: agentServiceSendGroupMessageSpec(), Handler: adapter.sendGroupMessage},
+		connect.Method{Spec: agentServiceAskSpec(), Handler: adapter.ask},
+		connect.Method{Spec: agentServiceAskInGroupSpec(), Handler: adapter.askInGroup},
+		connect.Method{Spec: agentServiceListReplyObligationsSpec(), Handler: adapter.listReplyObligations},
 		connect.Method{Spec: agentServiceListGroupMessagesSpec(), Handler: adapter.listGroupMessages},
 		connect.Method{Spec: agentServiceWatchGroupSpec(), Handler: adapter.watchGroup},
 		connect.Method{Spec: agentServiceStateSpec(), Handler: adapter.state},
@@ -1316,6 +1387,18 @@ func (UnimplementedAgentServiceHandler) SetGroupCoordinator(context.Context, *v1
 
 func (UnimplementedAgentServiceHandler) SendGroupMessage(context.Context, *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.SendGroupMessage is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) Ask(context.Context, *v1.AskRequest) (*v1.AskResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.Ask is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) AskInGroup(context.Context, *v1.AskInGroupRequest) (*v1.AskInGroupResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.AskInGroup is not implemented")
+}
+
+func (UnimplementedAgentServiceHandler) ListReplyObligations(context.Context, *v1.ListReplyObligationsRequest) (*v1.ListReplyObligationsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "agent.v1.AgentService.ListReplyObligations is not implemented")
 }
 
 func (UnimplementedAgentServiceHandler) ListGroupMessages(context.Context, *v1.ListGroupMessagesRequest) (*v1.ListGroupMessagesResponse, error) {
@@ -1713,6 +1796,30 @@ func (c *agentServiceClient) SetGroupCoordinator(ctx context.Context, req *v1.Se
 func (c *agentServiceClient) SendGroupMessage(ctx context.Context, req *v1.SendGroupMessageRequest) (*v1.SendGroupMessageResponse, error) {
 	var res v1.SendGroupMessageResponse
 	if err := c.client.CallUnary(ctx, agentServiceSendGroupMessageSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) Ask(ctx context.Context, req *v1.AskRequest) (*v1.AskResponse, error) {
+	var res v1.AskResponse
+	if err := c.client.CallUnary(ctx, agentServiceAskSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) AskInGroup(ctx context.Context, req *v1.AskInGroupRequest) (*v1.AskInGroupResponse, error) {
+	var res v1.AskInGroupResponse
+	if err := c.client.CallUnary(ctx, agentServiceAskInGroupSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *agentServiceClient) ListReplyObligations(ctx context.Context, req *v1.ListReplyObligationsRequest) (*v1.ListReplyObligationsResponse, error) {
+	var res v1.ListReplyObligationsResponse
+	if err := c.client.CallUnary(ctx, agentServiceListReplyObligationsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -2358,6 +2465,42 @@ func (h agentServiceHandler) sendGroupMessage(ctx context.Context, _ connect.Spe
 		return err
 	}
 	res, err := h.svc.SendGroupMessage(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) ask(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.AskRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Ask(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) askInGroup(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.AskInGroupRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.AskInGroup(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h agentServiceHandler) listReplyObligations(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListReplyObligationsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListReplyObligations(ctx, &req)
 	if err != nil {
 		return err
 	}
