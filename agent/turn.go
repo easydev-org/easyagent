@@ -118,6 +118,17 @@ type Input struct {
 	History []llm.Message
 	Tools   []llm.ToolDef
 	Extra   map[string]any
+
+	/**
+	 * NoWrapUp suppresses the "maximum steps reached" prompt on the final step.
+	 *
+	 * THAT PROMPT EXISTS FOR A BUDGET THAT RAN OUT: it tells the model to stop trying and summarise what it has. A
+	 * ONE-STEP CALL HAS NO BUDGET TO RUN OUT OF — it was asked a question and given exactly one step to answer in — so
+	 * the prompt is not merely unnecessary, it is wrong: the model reads "maximum steps reached, tools disabled" and
+	 * apologises for having hit a limit that was never imposed. Observed on the first live ask, whose answer opened
+	 * with "已达到本次任务的最大步数上限".
+	 */
+	NoWrapUp bool
 }
 
 // Result summarises a completed turn.
@@ -160,7 +171,9 @@ func RunTurn(ctx context.Context, deps Deps, in Input) (Result, error) {
 		tools := in.Tools
 		if isLast {
 			tools = nil
-			messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: maxStepsPrompt})
+			if !in.NoWrapUp {
+				messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: maxStepsPrompt})
+			}
 		}
 
 		// PROACTIVE compaction (Go-only): if the estimated context is already at

@@ -1058,6 +1058,8 @@ func (r *Runtime) AskOnce(ctx context.Context, tenant string, s store.Session, q
 		PrevID: tip, History: history,
 		Tools: nil,
 		Extra: extra,
+		// NO "maximum steps" WRAP-UP: this call was given one step on purpose, not a budget that ran out.
+		NoWrapUp: true,
 	})
 	if err != nil {
 		return "", err
