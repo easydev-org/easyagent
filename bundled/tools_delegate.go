@@ -117,14 +117,18 @@ func (e *Extension) spawn(_ context.Context, tenant, session string, args map[st
 	if len(coordinated) == 0 {
 		return agent.ToolOutcome{Content: s.errNoCoordinatedGroup}, nil
 	}
+	/**
+	 * THE GROUP IS ALWAYS NAMED, even when there is only one.
+	 *
+	 * A DEFAULT IS A DECISION THE CALLER DID NOT MAKE. "The only one I have" happens to be unambiguous today, but
+	 * the tool is what a model reads when it composes the call — and a parameter that is sometimes optional teaches
+	 * a habit that breaks the first time there are two. Requiring it means the model always says which group it is
+	 * filing work under, and the refusal when it names a group it does not coordinate is a real check rather than a
+	 * fallback nobody exercised.
+	 */
 	group := strings.TrimSpace(strArg(args, "group"))
 	if group == "" {
-		// ONE GROUP IS THE COMMON CASE, so naming it is not required when there is only one to mean.
-		if len(coordinated) == 1 {
-			group = coordinated[0]
-		} else {
-			return agent.ToolOutcome{Content: s.errSpawnNeedsGroup(coordinated)}, nil
-		}
+		return agent.ToolOutcome{Content: s.errSpawnNeedsGroup(coordinated)}, nil
 	}
 	if !slices.Contains(coordinated, group) {
 		return agent.ToolOutcome{Content: s.errNotCoordinatorOf(group)}, nil
@@ -371,8 +375,8 @@ func groupStringsFor(locale string) groupStrings {
 			errMissingGroup:  `group-send: 缺少 "group"。`,
 			errMissingName:   `group-create: 缺少 "name"。一个会话可以创建多个群，所以必须给群起名字。`,
 			errSpawnNeedsGroup: func(groups []string) string {
-				return fmt.Sprintf("spawn: 你协调多个群（%s），请用 \"group\" 指定要派生到哪个群。",
-					strings.Join(groups, "、"))
+				return fmt.Sprintf("spawn: 缺少 \"group\"。你协调的群：%s。请指定要把工作会话放进哪个群——"+
+					"即使只有一个群也必须写明。", strings.Join(groups, "、"))
 			},
 			errNotCoordinatorOf: func(g string) string {
 				return fmt.Sprintf("spawn: 你不是群 %q 的协调者，不能往那个群派生工作会话。", g)
@@ -432,8 +436,8 @@ func groupStringsFor(locale string) groupStrings {
 		errMissingGroup:  `group-send: "group" is required.`,
 		errMissingName:   `group-create: "name" is required. A session may create several groups, so each one needs a name.`,
 		errSpawnNeedsGroup: func(groups []string) string {
-			return fmt.Sprintf("spawn: you coordinate several groups (%s); name the one to spawn into with "+
-				`"group".`, strings.Join(groups, ", "))
+			return fmt.Sprintf(`spawn: "group" is required. You coordinate: %s. Name the one to put the `+
+				"worker in — even when there is only one.", strings.Join(groups, ", "))
 		},
 		errNotCoordinatorOf: func(g string) string {
 			return fmt.Sprintf("spawn: you do not coordinate group %q, so you cannot put a worker in it.", g)

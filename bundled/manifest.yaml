@@ -652,8 +652,9 @@ tools:
       sessions would be a second way in, past the person who owns the group. If you coordinate none,
       create your own with group-create first.
 
-      `group` IS REQUIRED WHEN YOU COORDINATE MORE THAN ONE. With a single group it may be omitted. Naming a
-      group you do not coordinate is refused — guessing would file the worker under someone else's work.
+      `group` IS ALWAYS REQUIRED, even when you coordinate only one. A default is a decision the caller did not
+      make, and the parameter would then read as optional in the tool list — the habit that breaks the first time
+      there are two groups. Naming a group you do not coordinate is refused.
 
       THE WORKER INHERITS YOUR PERMISSIONS MINUS BOTH GROUP GRANTS. `group.create` and `group.spawn`
       are removed, so it cannot assemble a group or put other sessions to work — each level would cost a
@@ -669,8 +670,8 @@ tools:
       zh: >-
         把本会话 fork 出一个工作会话，放进**你作为协调者**的某个群，然后给它布置任务。
 
-        **当你协调多个群时，必须用 `group` 指定这一个。** 只有一个群时可以省略。填写一个你不是协调者的
-        群会被拒绝——靠猜会把工作会话塞进别人负责的工作里。
+        **`group` 始终必填**，即使你只有一个群。默认值是一个调用方没有做出的决定，而且它会让这个参数在工具
+        清单里看起来是可选的——这个习惯在出现第二个群时就会出错。填写一个你不是协调者的群会被拒绝。
 
         结果里会给出工作会话的 **id**——之后用 group-send 点名它时请填这个 id，而不是你请求的名称，
         因为显示名称不唯一。
@@ -690,11 +691,11 @@ tools:
         group:
           type: string
           description: >-
-            Which of your groups to put the worker in. REQUIRED when you coordinate more than one;
-            optional when you coordinate exactly one. Must be a group you coordinate.
+            Which of your groups to put the worker in. ALWAYS REQUIRED, even when you coordinate only one.
+            Must be a group you coordinate.
           descriptions:
             zh: >-
-              把工作会话放进你的哪个群。**协调多个群时必填**；只有一个群时可省略。必须是你作为协调者的群。
+              把工作会话放进你的哪个群。**始终必填**，即使你只有一个群。必须是你作为协调者的群。
         task:
           type: string
           description: The complete, self-contained task for the worker.
@@ -710,7 +711,7 @@ tools:
           description: Optional short (3-5 words) label for the task.
           descriptions:
             zh: 可选的任务短标签（3-5 个词）。
-      required: [task]
+      required: [group, task]
     # A SEPARATE GRANT FROM group.create, because they answer different questions: "may this session
     # assemble a group" and "may it put other sessions to work". A session can legitimately have either
     # without the other — a coordinator that hands work to people rather than to agents needs no spawn.

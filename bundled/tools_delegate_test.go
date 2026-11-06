@@ -227,7 +227,7 @@ func TestSpawnMasksGroupCreateOnTheWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := e.spawn(ctx, "t", "alice", map[string]any{"task": "count the files"})
+	out, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "alice", "task": "count the files"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestSpawnLeavesNothingBehindWhenTheForkFails(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"task": "x"}); err == nil {
+	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "alice", "task": "x"}); err == nil {
 		t.Fatal("spawn must fail when the fork cannot be created")
 	}
 	if len(c.added) != 0 || len(c.published) != 0 {
@@ -342,7 +342,7 @@ func TestGroupSendAllowsBothDirections(t *testing.T) {
 	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"task": "work"}); err != nil {
+	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "alice", "task": "work"}); err != nil {
 		t.Fatal(err)
 	}
 	worker := c.forked[0]
@@ -895,5 +895,65 @@ func TestGroupSendWithOneOutsiderDeliversToNobody(t *testing.T) {
 	}
 	if len(c.published) != 0 {
 		t.Errorf("a partially valid list delivered to %v; the list is refused whole", c.published)
+	}
+}
+
+/**
+ * `spawn` REQUIRES `group`, EVEN WHEN THERE IS ONLY ONE.
+ *
+ * A DEFAULT IS A DECISION THE CALLER DID NOT MAKE. "The only group I have" is unambiguous today, but the tool
+ * description is what a model reads when it composes the call — a parameter that is sometimes optional teaches a
+ * habit that breaks the first time there are two groups, and the failure would be a worker filed under the wrong
+ * work with nobody noticing.
+ */
+func TestSpawnRequiresAGroupEvenWithOne(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "only-one"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := e.spawn(ctx, "t", "alice", map[string]any{"task": "do it"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.forked) != 0 {
+		t.Errorf("a spawn with no group forked %v; nothing should have been created", c.forked)
+	}
+	if !strings.Contains(out.Content, "only-one") {
+		t.Errorf("the refusal should name the groups available:\n%s", out.Content)
+	}
+
+	// WITH THE GROUP it works.
+	if _, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "only-one", "task": "do it"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.forked) != 1 {
+		t.Errorf("forked = %v, want exactly one worker", c.forked)
+	}
+}
+
+// A group the session does not coordinate is refused: guessing would file the worker under someone else's work.
+func TestSpawnRefusesAGroupItDoesNotCoordinate(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{"name": "mine"}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := e.spawn(ctx, "t", "alice", map[string]any{"group": "someone-elses", "task": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.forked) != 0 {
+		t.Errorf("a spawn into a group it does not coordinate forked %v", c.forked)
+	}
+	if !strings.Contains(out.Content, "someone-elses") {
+		t.Errorf("the refusal should name the group:\n%s", out.Content)
 	}
 }
