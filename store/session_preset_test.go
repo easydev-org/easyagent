@@ -17,7 +17,7 @@ func TestCreateSessionAlwaysHasPreset(t *testing.T) {
 		{"explicit", "reviewer"},
 	}
 	for _, c := range cases {
-		in := &SessionInput{Name: c.name, Preset: c.preset}
+		in := &SessionInput{Name: c.name, Model: "p/m", Preset: c.preset}
 		if err := d.CreateSession("t", in); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}

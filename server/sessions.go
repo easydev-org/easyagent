@@ -55,11 +55,15 @@ func (s *Server) ListSessions(ctx context.Context, _ *agentv1.ListSessionsReques
  */
 func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRequest) (*agentv1.CreateSessionResponse, error) {
 	tenant := tenantOf(ctx)
-	model := req.Model
-	if model == "" && s.config != nil {
-		if v, ok := s.config.Get(tenant, "default_model"); ok {
-			model = v
-		}
+	/**
+	 * A SESSION ALWAYS GETS A MODEL. The chain lives in resolveModel: what the caller asked for, then the tenant's
+	 * default knob, then the first text model a provider advertises. It refuses only when the tenant has no text
+	 * provider at all — which is the one case where a session genuinely cannot answer, and the moment it is worth
+	 * saying so rather than surfacing later as a turn failure.
+	 */
+	model, err := s.resolveModel(tenant, req.Model)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error())
 	}
 	preset := req.Preset
 	if preset == "" && s.config != nil {
@@ -335,10 +339,21 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	if preset == "" {
 		preset = DefaultPreset
 	}
+	/**
+	 * A FORK INHERITS ITS PARENT'S MODEL — unless the parent has none.
+	 *
+	 * A row created before the model was required can carry `model = ''`, and forking it would copy that hole into
+	 * a brand-new session. The same fallback chain applies, so a fork of a legacy row is usable rather than
+	 * immediately broken.
+	 */
+	model, err := s.resolveModel(tenant, parent.Model)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error())
+	}
 	// THE ID IS SERVER-ASSIGNED, and `in.ID` comes back filled — the fork is addressed by it from here
 	// on, never by the label the caller passed.
 	in := &store.SessionInput{
-		Name: req.Name, Model: parent.Model, Variant: parent.Variant, Preset: preset,
+		Name: req.Name, Model: model, Variant: parent.Variant, Preset: preset,
 		TipID: forkTip, SystemPrompt: parent.SystemPrompt, MaxTurns: parent.MaxTurns,
 		Locale: parent.Locale,
 	}

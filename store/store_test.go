@@ -213,7 +213,7 @@ func TestTenantsAndTokens(t *testing.T) {
 
 func TestKnownTenants(t *testing.T) {
 	d := newTestDB(t)
-	_ = d.CreateSession("a", &SessionInput{Name: "s"})
+	_ = d.CreateSession("a", &SessionInput{Name: "s", Model: "p/m"})
 	_ = d.CreateTenant("b", "")
 	_ = d.UpsertProvider(Provider{Tenant: "c", ProviderID: "p"})
 	got, err := d.KnownTenants()

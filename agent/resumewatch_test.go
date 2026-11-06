@@ -88,16 +88,27 @@ func TestResumeWatchResumesOnlyResumable(t *testing.T) {
 	}
 }
 
-// A resumable session with no model is skipped (nothing to run).
+/**
+ * A RESUMABLE SESSION WITH NO MODEL IS SKIPPED (there is nothing to run).
+ *
+ * THE ROW IS INSERTED DIRECTLY, because `CreateSession` now REFUSES a session without a model. That refusal is
+ * the fix; this test covers the state a LEGACY row can still be in — written before the requirement existed, and
+ * still in a deployed database. The runtime must not try to resume it, and must not fail loudly either: a sweep
+ * that crashed on one bad row would stop resuming every healthy session behind it.
+ */
 func TestResumeWatchSkipsNoModel(t *testing.T) {
 	w, d, q := newResumeWatch(t)
-	in := &store.SessionInput{Name: "s"} // no model
-	if err := d.CreateSession("t", in); err != nil {
+	in := &store.SessionInput{Name: "s"}
+	if err := d.G().Create(&store.Session{
+		Tenant: "t", ID: "legacy-no-model", Name: "s", Preset: "default",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	_ = d.SetTurnEnd("t", in.ID, "length")
+	_ = in
+	_ = d.SetTurnEnd("t", "legacy-no-model", "length")
 	w.Sweep(context.Background())
-	if pendingTrigger(t, q, in.ID) {
+	if pendingTrigger(t, q, "legacy-no-model") {
 		t.Fatal("a model-less session should not be resumed")
 	}
 }

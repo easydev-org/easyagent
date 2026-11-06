@@ -16,11 +16,11 @@ import "testing"
 func TestGroupMemberProfilesCarryNameIntroAndRole(t *testing.T) {
 	d := newTestDB(t)
 
-	coord := &SessionInput{Name: "发布协调", Locale: "zh", MaxTurns: 10}
+	coord := &SessionInput{Name: "发布协调", Model: "p/m", Locale: "zh", MaxTurns: 10}
 	if err := d.CreateSession("t1", coord); err != nil {
 		t.Fatal(err)
 	}
-	member := &SessionInput{Name: "CI 巡检", MaxTurns: 10}
+	member := &SessionInput{Name: "CI 巡检", Model: "p/m", MaxTurns: 10}
 	if err := d.CreateSession("t1", member); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestGroupMemberProfilesCarryNameIntroAndRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A session with neither a name nor an intro: it must still appear, by id.
-	bare := &SessionInput{MaxTurns: 10}
+	bare := &SessionInput{Model: "p/m", MaxTurns: 10}
 	if err := d.CreateSession("t1", bare); err != nil {
 		t.Fatal(err)
 	}

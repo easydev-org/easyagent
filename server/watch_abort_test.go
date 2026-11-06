@@ -45,7 +45,11 @@ func TestWatchSessionsReturnsOnClientAbort(t *testing.T) {
 	ts, db := newTestServer(t)
 	tok := seedTenant(t, db, "acme")
 	c := clientFor(t, ts, tok)
-	if _, err := c.CreateSession(context.Background(), &agentv1.CreateSessionRequest{Name: "s1"}); err != nil {
+	// A MODEL IS REQUIRED NOW — the server refuses to create a session that cannot run a turn, rather than
+	// storing a row whose first turn fails with "no model configured".
+	if _, err := c.CreateSession(context.Background(), &agentv1.CreateSessionRequest{
+		Name: "s1", Model: "gw/m",
+	}); err != nil {
 		t.Fatal(err)
 	}
 

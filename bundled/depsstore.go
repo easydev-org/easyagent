@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -185,8 +186,25 @@ func (d *StoreDeps) ForkSession(tenant, parent, name string, exclude []string) (
 	}
 	// THE ROW FIRST, THEN THE GRANTS: a grant on a session that does not exist is a dangling row, and
 	// every reader of grants (the gate, the console) assumes the session is there.
+	/**
+	 * A FORK MUST CARRY A MODEL. The parent's is inherited; a parent that predates the requirement can have none,
+	 * and the store now refuses to write a row without one. Rather than let a `spawn` fail on a legacy session,
+	 * the model is filled the same way a new session's would be.
+	 *
+	 * THE FALLBACK IS READ FROM THE PARENT'S TENANT, not from a config the extension owns: the extension has no
+	 * view of the tenant's default knob, and the model belongs to the session being created.
+	 */
+	model := p.Model
+	if model == "" {
+		if m, err := d.firstTextModel(tenant); err == nil {
+			model = m
+		}
+	}
+	if model == "" {
+		return "", fmt.Errorf("fork %q: the parent has no model and this tenant has none to fall back to", parent)
+	}
 	in := &store.SessionInput{
-		Name: name, Model: p.Model, Variant: p.Variant, Preset: p.Preset,
+		Name: name, Model: model, Variant: p.Variant, Preset: p.Preset,
 		TipID: p.TipID, SystemPrompt: p.SystemPrompt, MaxTurns: p.MaxTurns,
 		Locale: p.Locale,
 	}
@@ -402,6 +420,40 @@ func (d *StoreDeps) attachmentPayload(tenant string, codes []string) []map[strin
 		})
 	}
 	return out
+}
+
+/**
+ * firstTextModel returns a `provider/model` reference for a text model, or "" when the tenant has none.
+ *
+ * THE SAME RULE THE SERVER's resolver applies, in the form this package can use: providers sorted by id, models
+ * in declared order, so two replicas forking at the same moment agree on the answer.
+ */
+func (d *StoreDeps) firstTextModel(tenant string) (string, error) {
+	providers, err := d.DB.ListProviders(tenant)
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(providers, func(i, j int) bool { return providers[i].ProviderID < providers[j].ProviderID })
+	for _, p := range providers {
+		if p.Capability != "" && p.Capability != "text" {
+			continue
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal([]byte(p.Models), &rows); err != nil {
+			continue
+		}
+		for _, m := range rows {
+			id, _ := m["id"].(string)
+			if id == "" {
+				continue
+			}
+			if t, _ := m["model_type"].(string); t != "" && t != "text" {
+				continue
+			}
+			return p.ProviderID + "/" + id, nil
+		}
+	}
+	return "", nil
 }
 
 // sessionName returns a session's display label, or "" when it cannot be read. The label is cosmetic in a

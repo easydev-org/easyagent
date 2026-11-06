@@ -24,8 +24,26 @@ type SessionInput struct {
 	Locale       string
 }
 
+// ErrModelRequired is returned when a session would be stored without a model.
+//
+// A SESSION WITH NO MODEL IS A ROW THAT CANNOT ANSWER: it lists, it opens, and its first turn fails with "no model
+// configured". Refusing at the store turns that late, misleading failure into an immediate one that names the
+// missing field.
+var ErrModelRequired = errors.New("a session requires a model")
+
 // CreateSession inserts a session row.
 func (d *DB) CreateSession(tenant string, in *SessionInput) error {
+	/**
+	 * A SESSION WITHOUT A MODEL CANNOT RUN, so the store refuses to write one.
+	 *
+	 * THE SERVER RESOLVES THE MODEL; THIS IS THE LAST LINE. Two layers on purpose: the store is the choke point
+	 * every creator passes through — create, fork, a migration, a future RPC — and an invariant enforced by one
+	 * caller is a convention. A row written with `model = ''` looks healthy in a list and fails on its first
+	 * turn, which is the worst shape a configuration error can take.
+	 */
+	if in.Model == "" {
+		return ErrModelRequired
+	}
 	// EVERY session carries a preset: the UI resolves the system prompt from it,
 	// so an empty preset means "no system prompt". This is the single choke
 	// point for session creation (create / fork), so
