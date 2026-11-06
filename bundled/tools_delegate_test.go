@@ -808,3 +808,71 @@ func TestGroupSendRejectsNonArrayAttachments(t *testing.T) {
 		t.Errorf("want a complaint about attachments, got %q", out.Content)
 	}
 }
+
+/**
+ * ADDRESSING SOMEONE WHO IS NOT IN THE GROUP IS REFUSED, AND NOTHING IS SENT.
+ *
+ * THE FAILURE THIS PREVENTS IS SILENT AND EXPENSIVE: a message delivered to a session that is not a member would
+ * put group traffic in a private conversation, where the recipient has no context for it and no way to answer into
+ * the group. The transcript would also record a delivery that the group never really made.
+ *
+ * IT IS REFUSED IN THE TOOL, not by the channel layer. The channel routes by membership patterns, so an outsider
+ * simply matches nothing — the message would be stored and reach nobody, and the coordinator would believe it had
+ * been delivered. Checking here is what turns "silently unheard" into a message the model can act on.
+ */
+func TestGroupSendRefusesARecipientOutsideTheGroup(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	c.existing["mallory"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	// The group holds alice and w1; mallory exists as a session but is NOT a member.
+	c.membership["alice"] = []string{"alice", "w1"}
+
+	out, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"group": "alice", "to": []any{"mallory"}, "text": "you are not in this group",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "mallory") {
+		t.Errorf("the refusal must name the recipient, got %q", out.Content)
+	}
+	// NOTHING REACHED THE TRANSCRIPT: a refusal that still posted would be worse than no check at all.
+	if len(c.posted) != 0 || len(c.published) != 0 {
+		t.Errorf("a refused message was posted: posted=%v published=%v", c.posted, c.published)
+	}
+}
+
+/**
+ * A REFUSED LIST IS REFUSED WHOLE.
+ *
+ * Half-delivering an instruction is worse than refusing it: some workers would start on a task the others never
+ * received, and nothing in the transcript says which. The valid name must not slip through because it was checked
+ * before the invalid one.
+ */
+func TestGroupSendWithOneOutsiderDeliversToNobody(t *testing.T) {
+	c := newChainStub()
+	e := newChainExt(t, c)
+	ctx := context.Background()
+
+	c.existing["alice"] = true
+	c.existing["mallory"] = true
+	if _, err := e.groupCreate(ctx, "t", "alice", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	c.membership["alice"] = []string{"alice", "w1"}
+
+	if _, err := e.groupSend(ctx, "t", "alice", map[string]any{
+		"group": "alice", "to": []any{"w1", "mallory"}, "text": "half of you can do this",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.published) != 0 {
+		t.Errorf("a partially valid list delivered to %v; the list is refused whole", c.published)
+	}
+}

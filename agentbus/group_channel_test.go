@@ -1,6 +1,8 @@
 package agentbus
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -297,4 +299,119 @@ func TestGroupEventTextSkipsABadAttachment(t *testing.T) {
 	if strings.Contains(got, "no-code.png") {
 		t.Errorf("a reference with no code was rendered:\n%s", got)
 	}
+}
+
+/**
+ * ADDING AND REMOVING A MEMBER MOVES THE SUBSCRIPTION WITH IT.
+ *
+ * THE MEMBER LIST AND THE ROUTING HAVE TO AGREE, and they are two different stores: membership is a table row, the
+ * subscription is a KV entry the distributor matches against. A writer that only did one left the other wrong, and
+ * both failures are silent —
+ *
+ *   · a member ADDED without a subscription never hears the group, and nothing says so;
+ *   · a member REMOVED without dropping it keeps receiving traffic for a group it is no longer in.
+ *
+ * `RewriteGroupSubscriptions` is a full rewrite precisely so this cannot drift: the member map is the truth, and
+ * `previous` exists only to find the departures.
+ */
+func TestRewriteGroupSubscriptionsFollowsTheMemberList(t *testing.T) {
+	kv := newRecordingKV()
+	ctx := context.Background()
+
+	// Two members join.
+	if err := RewriteGroupSubscriptions(ctx, kv, "t1", "release",
+		map[string]bool{"alice": true, "bob": false}, []string{"alice", "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(kv.live()) != 2 {
+		t.Fatalf("subscriptions = %v, want one per member", kv.live())
+	}
+
+	// ONE LEAVES, ONE JOINS: the departure is dropped and the arrival is added, in one call.
+	if err := RewriteGroupSubscriptions(ctx, kv, "t1", "release",
+		map[string]bool{"alice": true, "carol": false}, []string{"alice", "bob", "carol"}); err != nil {
+		t.Fatal(err)
+	}
+	live := kv.live()
+	if len(live) != 2 {
+		t.Fatalf("subscriptions = %v, want alice and carol only", live)
+	}
+	for _, s := range live {
+		if s != "alice" && s != "carol" {
+			t.Errorf("a departed member still has a subscription: %v", live)
+		}
+	}
+}
+
+/**
+ * A MEMBER WHO STAYS KEEPS ITS SUBSCRIPTION — including its ROLE.
+ *
+ * THE COORDINATOR'S PATTERN IS DIFFERENT (`<group>.>` rather than `<group>.to.<session>`), because it must receive
+ * every member's report as well as the user's message. A rewrite that re-ensured everyone as a plain member would
+ * quietly stop the coordinator from hearing replies — the group would appear to work and answers would vanish.
+ */
+func TestRewriteGroupSubscriptionsPreservesTheCoordinatorPattern(t *testing.T) {
+	kv := newRecordingKV()
+	ctx := context.Background()
+
+	if err := RewriteGroupSubscriptions(ctx, kv, "t1", "release",
+		map[string]bool{"alice": true, "bob": false}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var coordPattern, memberPattern string
+	for key, val := range kv.entries {
+		var v subscriptionValue
+		if err := json.Unmarshal([]byte(val), &v); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(key, "alice") {
+			coordPattern = v.Pattern
+		} else {
+			memberPattern = v.Pattern
+		}
+	}
+	if coordPattern != GroupPattern("release", "alice", true) {
+		t.Errorf("coordinator pattern = %q, want the broad one", coordPattern)
+	}
+	if memberPattern != GroupPattern("release", "bob", false) {
+		t.Errorf("member pattern = %q, want the addressed one", memberPattern)
+	}
+}
+
+/**
+ * recordingKV is an in-memory subscription store.
+ *
+ * A MAP KEYED BY KV KEY, so a Put to an existing key replaces rather than appends — the same idempotence a real KV
+ * has, and the property the rewrite relies on when a member stays.
+ */
+type recordingKV struct {
+	entries map[string]string
+}
+
+func newRecordingKV() *recordingKV {
+	return &recordingKV{entries: map[string]string{}}
+}
+
+func (r *recordingKV) KVPut(_ context.Context, _, key, value string, _ int64) error {
+	r.entries[key] = value
+	return nil
+}
+
+func (r *recordingKV) KVDelete(_ context.Context, _, key string) error {
+	delete(r.entries, key)
+	return nil
+}
+
+// live returns the session ids that currently hold a subscription to the group.
+func (r *recordingKV) live() []string {
+	out := make([]string, 0, len(r.entries))
+	for key := range r.entries {
+		// THE KEY IS `t.<tenant>.s.<session>.<subscription>` — see protocol.SubscriptionKVKey. The session is
+		// element 3, and reading it wrong would make every assertion pass or fail for the wrong reason.
+		parts := strings.Split(key, ".")
+		if len(parts) >= 4 {
+			out = append(out, parts[3])
+		}
+	}
+	return out
 }
