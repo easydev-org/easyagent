@@ -37,7 +37,7 @@ func (r *Runtime) compactBudgets(tenant, session string) (int, int) {
 	limit := 0
 	if r.deps.DB != nil {
 		if s, ok, _ := r.deps.DB.GetSession(tenant, session); ok {
-			limit = r.contextLimit(tenant, s.Model)
+			limit = r.contextLimit(tenant, s.ModelRef())
 		}
 	}
 	if limit <= 0 {

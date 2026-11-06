@@ -91,7 +91,7 @@ func (w *ResumeWatch) Sweep(ctx context.Context) {
 		return
 	}
 	for _, s := range sessions {
-		if w.rt.IsActive(w.tenant, s.ID) || s.Model == "" {
+		if w.rt.IsActive(w.tenant, s.ID) || s.ModelRef() == "" {
 			continue
 		}
 		if !resumableReasons[s.LastTurnReason] {

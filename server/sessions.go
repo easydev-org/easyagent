@@ -56,14 +56,18 @@ func (s *Server) ListSessions(ctx context.Context, _ *agentv1.ListSessionsReques
 func (s *Server) CreateSession(ctx context.Context, req *agentv1.CreateSessionRequest) (*agentv1.CreateSessionResponse, error) {
 	tenant := tenantOf(ctx)
 	/**
-	 * A SESSION ALWAYS GETS A MODEL. The chain lives in resolveModel: what the caller asked for, then the tenant's
-	 * default knob, then the first text model a provider advertises. It refuses only when the tenant has no text
-	 * provider at all — which is the one case where a session genuinely cannot answer, and the moment it is worth
-	 * saying so rather than surfacing later as a turn failure.
+	 * A SESSION MAY HAVE NO MODEL. It is stored as NULL, which means "not chosen yet" — a real state, distinct from
+	 * a model id, and one the console shows honestly. Creating a session is not the moment to force a choice: the
+	 * user may be setting one up to configure later, and a turn on a model-less session fails with a message that
+	 * names the missing setting.
+	 *
+	 * THE TENANT DEFAULT IS STILL APPLIED when one is configured; it just is not invented when it is not.
 	 */
-	model, err := s.resolveModel(tenant, req.Model)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error())
+	model := req.Model
+	if model == "" && s.config != nil {
+		if v, ok := s.config.Get(tenant, "default_model"); ok {
+			model = v
+		}
 	}
 	preset := req.Preset
 	if preset == "" && s.config != nil {
@@ -207,7 +211,18 @@ func (s *Server) Rename(ctx context.Context, req *agentv1.RenameRequest) (*agent
 // SetModel updates the session's model (+ variant).
 func (s *Server) SetModel(ctx context.Context, req *agentv1.SetModelRequest) (*agentv1.SetModelResponse, error) {
 	tenant := tenantOf(ctx)
-	patch := map[string]any{"model": req.Model}
+	/**
+	 * AN EMPTY MODEL CLEARS IT, and the column stores NULL.
+	 *
+	 * `SetModel` is how the console's model picker writes; choosing nothing is a legitimate state (the session
+	 * exists, its model is undecided), and writing '' would put a value in a column whose absence is NULL. The
+	 * handler converts, so every reader compares against nil instead of remembering which field spells absence
+	 * differently.
+	 */
+	patch := map[string]any{"model": nil}
+	if req.Model != "" {
+		patch["model"] = req.Model
+	}
 	if req.Variant != "" {
 		patch["variant"] = req.Variant
 	}
@@ -226,8 +241,18 @@ func (s *Server) SetModel(ctx context.Context, req *agentv1.SetModelRequest) (*a
 func (s *Server) UpdateSettings(ctx context.Context, req *agentv1.UpdateSettingsRequest) (*agentv1.UpdateSettingsResponse, error) {
 	tenant := tenantOf(ctx)
 	patch := map[string]any{}
-	if req.Model != "" {
-		patch["model"] = req.Model
+	/**
+	 * `model` IS `optional` NOW: absent = leave it alone, present-but-empty = NO MODEL. The same rule the
+	 * avatar, intro and name follow, and for the same reason — an empty string cannot express both "not this
+	 * field" and "no model", and SQLite round-trips '' faithfully enough that the distinction has to be made
+	 * before it reaches the column.
+	 */
+	if req.Model != nil {
+		if req.GetModel() == "" {
+			patch["model"] = nil
+		} else {
+			patch["model"] = req.GetModel()
+		}
 	}
 	if req.Preset != "" {
 		patch["preset"] = req.Preset
@@ -339,21 +364,10 @@ func (s *Server) Fork(ctx context.Context, req *agentv1.ForkRequest) (*agentv1.F
 	if preset == "" {
 		preset = DefaultPreset
 	}
-	/**
-	 * A FORK INHERITS ITS PARENT'S MODEL — unless the parent has none.
-	 *
-	 * A row created before the model was required can carry `model = ''`, and forking it would copy that hole into
-	 * a brand-new session. The same fallback chain applies, so a fork of a legacy row is usable rather than
-	 * immediately broken.
-	 */
-	model, err := s.resolveModel(tenant, parent.Model)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error())
-	}
 	// THE ID IS SERVER-ASSIGNED, and `in.ID` comes back filled — the fork is addressed by it from here
 	// on, never by the label the caller passed.
 	in := &store.SessionInput{
-		Name: req.Name, Model: model, Variant: parent.Variant, Preset: preset,
+		Name: req.Name, Model: parent.ModelRef(), Variant: parent.Variant, Preset: preset,
 		TipID: forkTip, SystemPrompt: parent.SystemPrompt, MaxTurns: parent.MaxTurns,
 		Locale: parent.Locale,
 	}

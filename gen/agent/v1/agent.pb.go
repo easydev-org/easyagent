@@ -6285,11 +6285,15 @@ func (x *MailboxResponse) GetHasMore() bool {
 }
 
 type UpdateSettingsRequest struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Model  string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
-	Preset string                 `protobuf:"bytes,3,opt,name=preset,proto3" json:"preset,omitempty"`
-	Locale string                 `protobuf:"bytes,4,opt,name=locale,proto3" json:"locale,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	//*
+	// The session's model. `optional` so "no model" is expressible: absent = leave it alone, present-but-empty =
+	// clear it. The column stores NULL for "absent", because a session may exist before its model is chosen and ''
+	// would make "not chosen" indistinguishable from "chosen, with a blank id".
+	Model  *string `protobuf:"bytes,2,opt,name=model,proto3,oneof" json:"model,omitempty"`
+	Preset string  `protobuf:"bytes,3,opt,name=preset,proto3" json:"preset,omitempty"`
+	Locale string  `protobuf:"bytes,4,opt,name=locale,proto3" json:"locale,omitempty"`
 	//*
 	// Selected reasoning variant id. `optional` so "clear it" is expressible: absent = leave it alone,
 	// present-but-empty = go back to the default. Without that, choosing "default" after choosing "high" was a
@@ -6350,8 +6354,8 @@ func (x *UpdateSettingsRequest) GetId() string {
 }
 
 func (x *UpdateSettingsRequest) GetModel() string {
-	if x != nil {
-		return x.Model
+	if x != nil && x.Model != nil {
+		return *x.Model
 	}
 	return ""
 }
@@ -11701,17 +11705,18 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x0fMailboxResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x120\n" +
 	"\amailbox\x18\x02 \x03(\v2\x16.agent.v1.MailboxEntryR\amailbox\x12\x19\n" +
-	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\x95\x02\n" +
+	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\xa4\x02\n" +
 	"\x15UpdateSettingsRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05model\x18\x02 \x01(\tR\x05model\x12\x16\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\x05model\x18\x02 \x01(\tH\x00R\x05model\x88\x01\x01\x12\x16\n" +
 	"\x06preset\x18\x03 \x01(\tR\x06preset\x12\x16\n" +
 	"\x06locale\x18\x04 \x01(\tR\x06locale\x12\x1d\n" +
-	"\avariant\x18\x05 \x01(\tH\x00R\avariant\x88\x01\x01\x12$\n" +
-	"\vavatar_file\x18\x06 \x01(\tH\x01R\n" +
+	"\avariant\x18\x05 \x01(\tH\x01R\avariant\x88\x01\x01\x12$\n" +
+	"\vavatar_file\x18\x06 \x01(\tH\x02R\n" +
 	"avatarFile\x88\x01\x01\x12\x19\n" +
-	"\x05intro\x18\a \x01(\tH\x02R\x05intro\x88\x01\x01\x12\x17\n" +
-	"\x04name\x18\b \x01(\tH\x03R\x04name\x88\x01\x01B\n" +
+	"\x05intro\x18\a \x01(\tH\x03R\x05intro\x88\x01\x01\x12\x17\n" +
+	"\x04name\x18\b \x01(\tH\x04R\x04name\x88\x01\x01B\b\n" +
+	"\x06_modelB\n" +
 	"\n" +
 	"\b_variantB\x0e\n" +
 	"\f_avatar_fileB\b\n" +

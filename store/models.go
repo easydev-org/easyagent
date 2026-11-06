@@ -31,8 +31,20 @@ type Session struct {
 	 * the work, and forcing a suffix would make the label serve the database. Nothing routes by it, so
 	 * nothing breaks when it repeats.
 	 */
-	Name         string  `gorm:"column:name;size:128"`
-	Model        string  `gorm:"column:model"`
+	Name string `gorm:"column:name;size:128"`
+	/**
+	 * Model is the canonical `provider/model` reference, or NULL when the session has none yet.
+	 *
+	 * NULL IS NOT AN EMPTY STRING, and the distinction is the point: "" is a value (a model whose id happens to be
+	 * empty, which cannot exist) while NULL is the ABSENCE of a choice. A session may legitimately be created
+	 * before its model is decided — the console opens it, the user picks one later — and storing '' would make
+	 * "not chosen" indistinguishable from "chosen, and the id is blank", which every reader would have to
+	 * special-case.
+	 *
+	 * A TURN ON A NULL MODEL REFUSES with a message naming the missing setting. That is a better failure than
+	 * inventing a model nobody asked for.
+	 */
+	Model        *string `gorm:"column:model"`
 	Variant      string  `gorm:"column:variant"`
 	Preset       string  `gorm:"column:preset"`
 	TipID        *string `gorm:"column:tip_id;size:64"`
@@ -94,6 +106,20 @@ type Session struct {
 }
 
 func (Session) TableName() string { return "sessions" }
+
+/**
+ * ModelRef returns the session's model reference, or "" when none is set.
+ *
+ * THE READER'S ACCESSOR, so a nil check is not repeated at every call site. A caller that needs to DISTINGUISH
+ * "no model" from "a model" reads the field itself; a caller that just wants the string gets "" and its existing
+ * empty-string handling keeps working.
+ */
+func (s *Session) ModelRef() string {
+	if s.Model == nil {
+		return ""
+	}
+	return *s.Model
+}
 
 // Message is one node of a session's chain. `PrevID` is the immutable back-link
 // (append-only; forks share ancestors by pointing at the same row).

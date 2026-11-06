@@ -947,7 +947,12 @@ message MailboxResponse {
 
 message UpdateSettingsRequest {
   string id = 1;
-  string model = 2;
+  /**
+   * The session's model. `optional` so "no model" is expressible: absent = leave it alone, present-but-empty =
+   * clear it. The column stores NULL for "absent", because a session may exist before its model is chosen and ''
+   * would make "not chosen" indistinguishable from "chosen, with a blank id".
+   */
+  optional string model = 2;
   string preset = 3;
   string locale = 4;
   /**

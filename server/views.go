@@ -18,7 +18,7 @@ func sessionToMsg(s store.Session, status string) *agentv1.Session {
 	msg := &agentv1.Session{
 		Id:               s.ID,
 		Name:             s.Name,
-		Model:            s.Model,
+		Model:            s.ModelRef(),
 		Preset:           preset,
 		MaxTurns:         int32(s.MaxTurns),
 		SystemPrompt:     s.SystemPrompt,

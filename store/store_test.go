@@ -28,8 +28,8 @@ func TestSessionCRUDAndCounters(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get: %v %v", ok, err)
 	}
-	if s.Model != "p/m" {
-		t.Errorf("model = %q", s.Model)
+	if s.ModelRef() != "p/m" {
+		t.Errorf("model = %q", s.ModelRef())
 	}
 	// AppendMessageTip reports the CHAIN LENGTH at the new tip — the number the
 	// unread badge is computed from, so it must match what the reader sees.

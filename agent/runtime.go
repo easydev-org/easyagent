@@ -585,7 +585,7 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 	if !ok {
 		return Result{}, fmt.Errorf("agent: session not found: %s", session)
 	}
-	if s.Model == "" {
+	if s.ModelRef() == "" {
 		return Result{}, fmt.Errorf("agent: no model configured for session %s", session)
 	}
 	client := r.deps.Client
@@ -593,7 +593,7 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		if r.deps.Resolver == nil {
 			return Result{}, errors.New("agent: no client or resolver")
 		}
-		client, err = r.deps.Resolver.Resolve(ctx, tenant, s.Model)
+		client, err = r.deps.Resolver.Resolve(ctx, tenant, s.ModelRef())
 		if err != nil {
 			return Result{}, err
 		}
@@ -652,7 +652,7 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		// follows the same locale the tools and the env block already use.
 		Locale:             plan.Locale,
 		SystemTokens:       EstimateTokens(plan.System),
-		ContextLimit:       r.contextLimit(tenant, s.Model),
+		ContextLimit:       r.contextLimit(tenant, s.ModelRef()),
 		CompactAtFraction:  r.deps.CompactAtFraction,
 		ForceCompactTokens: r.deps.ForceCompactTokens,
 		Compact: func(ctx context.Context, reason string) ([]llm.Message, string, bool, error) {
@@ -683,7 +683,7 @@ func (r *Runtime) runTurn(ctx context.Context, tenant, session string) (Result, 
 		},
 	}, Input{
 		Tenant: tenant, Session: session, RunID: newID(),
-		Model: ModelOf(s.Model), System: plan.System,
+		Model: ModelOf(s.ModelRef()), System: plan.System,
 		PrevID: tip, History: history,
 		Tools: TurnPlanToLLMTools(plan.Tools, plan.Locale),
 		Extra: extra,
