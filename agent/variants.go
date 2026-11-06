@@ -29,9 +29,10 @@ type VariantDef struct {
 // VariantsFor returns the variants a model offers. A model that does not
 // support reasoning offers none (the client shows no picker).
 func VariantsFor(supportsReasoning bool) []ModelVariant {
-	if !supportsReasoning {
-		return nil
-	}
+	// THE FLAG NO LONGER DECIDES ANYTHING, and that is deliberate — see the note above ReasoningLevels. It is kept
+	// in the signature so callers compile, and the unused parameter is what tells the next reader to look here
+	// rather than to wonder why a model silently has no picker.
+	_ = supportsReasoning
 	out := make([]ModelVariant, 0, len(ReasoningLevels))
 	for _, lvl := range ReasoningLevels {
 		out = append(out, ModelVariant{ID: lvl, Name: lvl, Description: "reasoning effort: " + lvl})

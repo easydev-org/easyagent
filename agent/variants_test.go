@@ -3,8 +3,16 @@ package agent
 import "testing"
 
 func TestReasoningVariants(t *testing.T) {
-	if VariantsFor(false) != nil {
-		t.Error("a non-reasoning model must offer no variants")
+	/**
+	 * EVERY MODEL OFFERS THE SAME LEVELS, including one that does not reason.
+	 *
+	 * The picker used to be conditional on a per-model flag, which made the FIELD conditional — the profile page
+	 * had to fetch a catalogue before it knew whether to draw a control, and the page grew a row when the answer
+	 * arrived. A variant is a value merged into the request body; whether the provider acts on it is neither
+	 * knowable here nor this layer's business.
+	 */
+	if got := VariantsFor(false); len(got) != len(ReasoningLevels) {
+		t.Errorf("a non-reasoning model offered %d variants, want %d", len(got), len(ReasoningLevels))
 	}
 	vs := VariantsFor(true)
 	if len(vs) != len(ReasoningLevels) {
