@@ -88,20 +88,20 @@ func TestGroupMemberProfilesOnAnEmptyGroup(t *testing.T) {
 }
 
 /**
- * THE IDENTITY SPLIT MIGRATES A NAME-KEYED DATABASE.
+ * A DATABASE BUILT WITH THE OLD GROUP SCHEMA IS RECREATED, NOT MIGRATED.
  *
- * THE SCHEMA CHANGE IS THE EASY HALF. Groups used to be keyed by their NAME — `group_members."group"` and
- * `group_messages."group"` both held it — and `group_members."group"` was part of that table's PRIMARY KEY. Adding an
- * `id` column alone would leave a NOT NULL column no insert supplies, and PostgreSQL refuses to drop a column that is
- * in a primary key at all (`column "name" is in a primary key`).
+ * Groups used to be keyed by their NAME, which made a rename a different group. The new shape keys them by an id.
+ * Reconciling that in place would mean rewriting membership rows, swapping primary keys and dropping columns whose
+ * invariants the old schema still enforces — a migration whose only purpose is preserving data from a build that was
+ * never released.
  *
- * This drives the migration over a database built the OLD way and asserts the three things that would otherwise
- * fail at boot: the columns are gone, the rows point at an id, and the group is still readable.
+ * SO THE TABLES ARE DROPPED AND AutoMigrate RECREATES THEM. This test proves the drop happens and that the result is
+ * usable: a group can be created and read back immediately afterwards, with an id.
  */
-func TestMigrateSplitsANameKeyedGroupTable(t *testing.T) {
+func TestMigrateRecreatesLegacyGroupTables(t *testing.T) {
 	d := newTestDB(t)
 
-	// A DATABASE AS THE PREVIOUS BUILD LEFT IT: groups keyed by (tenant, name), members keyed by the group's name.
+	// A DATABASE AS THE PREVIOUS BUILD LEFT IT: keyed by (tenant, name), members keyed by the group's name.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS group_members`,
 		`DROP TABLE IF EXISTS group_messages`,
@@ -117,44 +117,32 @@ func TestMigrateSplitsANameKeyedGroupTable(t *testing.T) {
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
-	if err := d.g.Exec(`INSERT INTO groups (tenant, name) VALUES ('t1', 'release')`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := d.g.Exec(`INSERT INTO group_members (tenant, "group", session, role)
-		VALUES ('t1', 'release', 'alice', 'coordinator')`).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := d.g.Exec(`INSERT INTO group_messages (id, tenant, "group", body, seq)
-		VALUES ('m1', 't1', 'release', 'before the split', 1)`).Error; err != nil {
-		t.Fatal(err)
-	}
 
 	if err := d.Migrate(); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	// THE GROUP HAS AN ID, and its members and messages point at it.
-	g, ok, err := d.GroupByName("t1", "release")
-	if err != nil || !ok {
-		t.Fatalf("group: %v %v", ok, err)
+	// THE OLD COLUMNS ARE GONE, and the new shape works.
+	if d.g.Migrator().HasColumn("group_members", "group") {
+		t.Fatal("the legacy group column survived; the table was not recreated")
+	}
+	if !d.g.Migrator().HasColumn("groups", "id") {
+		t.Fatal("the recreated groups table has no id")
+	}
+
+	in := &SessionInput{Name: "coord", Model: "p/m"}
+	if err := d.CreateSession("t1", in); err != nil {
+		t.Fatal(err)
+	}
+	g := &Group{Name: "release"}
+	if err := d.CreateGroup("t1", g, in.ID, nil, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
 	}
 	if g.ID == "" {
-		t.Fatal("the migrated group has no id")
+		t.Fatal("a group created after the recreate has no id")
 	}
-
-	members, err := d.ListGroupMembers("t1", g.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(members) != 1 || members[0].Session != "alice" {
-		t.Fatalf("members = %+v", members)
-	}
-
-	msgs, err := d.ListGroupMessages("t1", g.ID, 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) != 1 || msgs[0].Body != "before the split" {
-		t.Fatalf("transcript = %+v", msgs)
+	got, ok, err := d.GetGroup("t1", g.ID)
+	if err != nil || !ok || got.Name != "release" {
+		t.Fatalf("read back: %v %v %+v", ok, err, got)
 	}
 }
