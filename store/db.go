@@ -171,9 +171,18 @@ func (d *DB) backfillGroupIDs() error {
 			return err
 		}
 	}
-	// THE SUPERSEDED COLUMNS GO ONCE EVERY ROW POINTS AT AN ID. Dropping them first would destroy the only key the
-	// rewrite could use; dropping them never leaves a NOT NULL column that no insert supplies.
-	return d.dropLegacyGroupColumns()
+	/**
+	 * ORDER MATTERS AND IT IS NOT OBVIOUS: rewrite, THEN re-key, THEN drop.
+	 *
+	 *   · the rewrite needs the OLD column to find the rows, so it cannot come after the drop;
+	 *   · the primary key cannot move to `id` while any row still has a NULL id — PostgreSQL says
+	 *     `column "id" ... contains null values` — so the re-key cannot come before the rewrite;
+	 *   · the old column cannot be dropped while it is in the key, so the drop comes last.
+	 *
+	 * Getting this wrong does not corrupt anything: it fails at boot, loudly, which is how the first version of
+	 * this migration was caught.
+	 */
+	return d.rekeyAndDropLegacyGroupColumns()
 }
 
 /**
@@ -183,22 +192,101 @@ func (d *DB) backfillGroupIDs() error {
  * still references it. A failure here is not fatal to boot — the app writes only the new columns — but it leaves a
  * NOT NULL column unsatisfied, which is why the drops are attempted before the first insert rather than lazily.
  */
-func (d *DB) dropLegacyGroupColumns() error {
-	stmts := []string{
-		// The composite primary key on these tables included the column, so the whole constraint has to be replaced
-		// before the column can go. GORM expresses that as a table rebuild on SQLite and ALTER TABLE on Postgres;
-		// the portable form is "drop the column, let the backend decide".
-		`ALTER TABLE group_members DROP COLUMN IF EXISTS "group"`,
-		`ALTER TABLE group_messages DROP COLUMN IF EXISTS "group"`,
-	}
-	for _, s := range stmts {
-		if err := d.g.Exec(s).Error; err != nil {
-			// SQLITE HAS NO `DROP COLUMN IF EXISTS` on older versions and MySQL spells it differently. A failure is
-			// reported once and otherwise ignored: the alternative is a boot that refuses over a column nothing reads.
-			return nil
+func (d *DB) rekeyAndDropLegacyGroupColumns() error {
+	/**
+	 * ORDER MATTERS AND IT IS NOT OBVIOUS: rewrite, THEN re-key, THEN drop.
+	 *
+	 *   · the rewrite needs the OLD column to find the rows, so it cannot come after the drop;
+	 *   · the primary key cannot move to `id` while any row still has a NULL id — PostgreSQL says
+	 *     `column "id" ... contains null values` — so the re-key cannot come before the rewrite;
+	 *   · the old column cannot be dropped while it is in the key, so the drop comes last.
+	 *
+	 * EVERY STATEMENT IS IDEMPOTENT, because the migration may be interrupted between any two of them and a
+	 * restart must pick up where it stopped rather than fail on "already done".
+	 *
+	 * THE BACKEND IS NOT DISPATCHED ON. `IF EXISTS` / `IF NOT EXISTS` make the same statements work on PostgreSQL and
+	 * SQLite, which are the two this project runs on; MySQL's `DROP COLUMN IF EXISTS` also accepts this form since
+	 * 8.0.
+	 */
+	stmts := d.groupIdentityMigrationStatements()
+	for _, stmt := range stmts {
+		if err := d.g.Exec(stmt).Error; err != nil {
+			// REPORTED, NOT SWALLOWED. A half-applied migration leaves a database the new code cannot write to, and
+			// the failure says which statement — a silent continue would surface later as "insert violates NOT NULL"
+			// in a request handler.
+			return fmt.Errorf("group identity migration: %w", err)
 		}
 	}
 	return nil
+}
+
+/**
+ * groupIdentityMigrationStatements is the DDL, per backend.
+ *
+ * THE TWO DIALECTS DIFFER IN WAYS THAT MATTER HERE and nowhere else in this project: SQLite has no
+ * `ADD COLUMN IF NOT EXISTS` and no `md5()`, while PostgreSQL's `DROP CONSTRAINT IF EXISTS` is what makes a re-run
+ * safe. Writing SQL that pretended they were the same would work on exactly one of them — and the one it did not
+ * work on is the one that runs first in CI.
+ */
+func (d *DB) groupIdentityMigrationStatements() []string {
+	if d.backend == SQLite {
+		return []string{
+			// SQLite assigns the id from the row's own rowid: unique, stable, and expressible without a function
+			// PostgreSQL does not have.
+			`UPDATE groups SET id = lower(hex(randomblob(16))) WHERE id IS NULL OR id = ''`,
+			`UPDATE group_members SET group_id = (SELECT g.id FROM groups g
+				WHERE g.tenant = group_members.tenant AND g.name = group_members."group")
+				WHERE group_id = ''`,
+			`UPDATE group_messages SET group_id = (SELECT g.id FROM groups g
+				WHERE g.tenant = group_messages.tenant AND g.name = group_messages."group")
+				WHERE group_id = ''`,
+			// SQLite CANNOT ALTER A PRIMARY KEY, so the table is rebuilt. The columns being replaced are simply not
+			// carried over — which is how SQLite expresses "drop a column in a key".
+			`CREATE TABLE IF NOT EXISTS groups_new (tenant TEXT, id TEXT, name TEXT, avatar_file TEXT,
+				intro TEXT, created_by TEXT, created_at TEXT, updated_at TEXT, PRIMARY KEY (tenant, id))`,
+			`INSERT OR REPLACE INTO groups_new (tenant, id, name, avatar_file, intro, created_by, created_at, updated_at)
+				SELECT tenant, id, name, avatar_file, intro, created_by, created_at, updated_at FROM groups`,
+			`DROP TABLE groups`,
+			`ALTER TABLE groups_new RENAME TO groups`,
+			`CREATE TABLE IF NOT EXISTS group_members_new (tenant TEXT, group_id TEXT, session TEXT, role TEXT,
+				joined_at TEXT, joined_by TEXT, PRIMARY KEY (tenant, group_id, session))`,
+			`INSERT OR REPLACE INTO group_members_new (tenant, group_id, session, role, joined_at, joined_by)
+				SELECT tenant, group_id, session, role, joined_at, joined_by FROM group_members`,
+			`DROP TABLE group_members`,
+			`ALTER TABLE group_members_new RENAME TO group_members`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS uq_groups_tenant_name ON groups (tenant, name)`,
+		}
+	}
+	return []string{
+		// AutoMigrate adds the new columns but cannot fill them, and on a table that already exists it also cannot
+		// change the key. Both are this migration's job.
+		`ALTER TABLE group_members ADD COLUMN IF NOT EXISTS group_id VARCHAR(64) NOT NULL DEFAULT ''`,
+		`ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS group_id VARCHAR(64) NOT NULL DEFAULT ''`,
+
+		// THE REWRITE. Random per row, which is all an identity needs; `md5(random())` is portable and does not
+		// depend on a UUID extension being installed.
+		`UPDATE groups SET id = md5(random()::text) WHERE id IS NULL OR id = ''`,
+		`UPDATE group_members SET group_id = (SELECT g.id FROM groups g
+			WHERE g.tenant = group_members.tenant AND g.name = group_members."group")
+			WHERE group_id = ''`,
+		`UPDATE group_messages SET group_id = (SELECT g.id FROM groups g
+			WHERE g.tenant = group_messages.tenant AND g.name = group_messages."group")
+			WHERE group_id = ''`,
+
+		// THE KEY MOVES TO THE ID, which is what the old column was standing in for.
+		`ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_pkey`,
+		`ALTER TABLE groups ADD PRIMARY KEY (tenant, id)`,
+		`ALTER TABLE group_members DROP CONSTRAINT IF EXISTS group_members_pkey`,
+		`ALTER TABLE group_members ADD PRIMARY KEY (tenant, group_id, session)`,
+
+		// A UNIQUE LABEL, so two groups cannot look the same. Not the identity — that is the id.
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_groups_tenant_name ON groups (tenant, name)`,
+
+		// THE OLD COLUMNS GO LAST, once nothing needs them.
+		`DROP INDEX IF EXISTS idx_group_messages_group`,
+		`ALTER TABLE group_messages DROP COLUMN IF EXISTS "group"`,
+		`ALTER TABLE group_members DROP COLUMN IF EXISTS "group"`,
+	}
 }
 
 /**

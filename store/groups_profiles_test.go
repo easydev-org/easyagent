@@ -86,3 +86,75 @@ func TestGroupMemberProfilesOnAnEmptyGroup(t *testing.T) {
 		t.Errorf("got %d members of a group that does not exist: %+v", len(got), got)
 	}
 }
+
+/**
+ * THE IDENTITY SPLIT MIGRATES A NAME-KEYED DATABASE.
+ *
+ * THE SCHEMA CHANGE IS THE EASY HALF. Groups used to be keyed by their NAME — `group_members."group"` and
+ * `group_messages."group"` both held it — and `group_members."group"` was part of that table's PRIMARY KEY. Adding an
+ * `id` column alone would leave a NOT NULL column no insert supplies, and PostgreSQL refuses to drop a column that is
+ * in a primary key at all (`column "name" is in a primary key`).
+ *
+ * This drives the migration over a database built the OLD way and asserts the three things that would otherwise
+ * fail at boot: the columns are gone, the rows point at an id, and the group is still readable.
+ */
+func TestMigrateSplitsANameKeyedGroupTable(t *testing.T) {
+	d := newTestDB(t)
+
+	// A DATABASE AS THE PREVIOUS BUILD LEFT IT: groups keyed by (tenant, name), members keyed by the group's name.
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS group_members`,
+		`DROP TABLE IF EXISTS group_messages`,
+		`DROP TABLE IF EXISTS groups`,
+		`CREATE TABLE groups (tenant TEXT, name TEXT, avatar_file TEXT, intro TEXT,
+			created_by TEXT, created_at TEXT, updated_at TEXT, PRIMARY KEY (tenant, name))`,
+		`CREATE TABLE group_members (tenant TEXT, "group" TEXT, session TEXT, role TEXT,
+			joined_at TEXT, joined_by TEXT, PRIMARY KEY (tenant, "group", session))`,
+		`CREATE TABLE group_messages (id TEXT PRIMARY KEY, tenant TEXT, "group" TEXT, sender TEXT,
+			sender_name TEXT, body TEXT, seq INTEGER, created_at TEXT, attachments TEXT)`,
+	} {
+		if err := d.g.Exec(stmt).Error; err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := d.g.Exec(`INSERT INTO groups (tenant, name) VALUES ('t1', 'release')`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := d.g.Exec(`INSERT INTO group_members (tenant, "group", session, role)
+		VALUES ('t1', 'release', 'alice', 'coordinator')`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := d.g.Exec(`INSERT INTO group_messages (id, tenant, "group", body, seq)
+		VALUES ('m1', 't1', 'release', 'before the split', 1)`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// THE GROUP HAS AN ID, and its members and messages point at it.
+	g, ok, err := d.GroupByName("t1", "release")
+	if err != nil || !ok {
+		t.Fatalf("group: %v %v", ok, err)
+	}
+	if g.ID == "" {
+		t.Fatal("the migrated group has no id")
+	}
+
+	members, err := d.ListGroupMembers("t1", g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].Session != "alice" {
+		t.Fatalf("members = %+v", members)
+	}
+
+	msgs, err := d.ListGroupMessages("t1", g.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Body != "before the split" {
+		t.Fatalf("transcript = %+v", msgs)
+	}
+}
